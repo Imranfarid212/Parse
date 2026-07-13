@@ -1,16 +1,21 @@
 {
   "expo": {
-    "name": "parse-app-tmp",
-    "slug": "parse-app-tmp",
+    "name": "Parse",
+    "slug": "parse-receipt-scanner",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "parseapptmp",
+    "scheme": "parse",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.imranfarid.parse",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.imranfarid.parse",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -32,11 +37,37 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
+      ],
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Parse uses your camera to scan receipts."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Parse accesses your photo library so you can pick a receipt image."
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d92357c1-51da-441e-bd5d-5a2e19464ed7"
+      }
+    },
+    "owner": "imranfarid212",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/d92357c1-51da-441e-bd5d-5a2e19464ed7"
     }
   }
 }
