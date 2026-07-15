@@ -18,6 +18,9 @@ export function CreateAccountCard({ onProceed }: { onProceed: () => void }) {
     // Outer wrapper carries the shadow (BlurView needs overflow:hidden, which clips shadows).
     <View style={styles.shadow}>
       <BlurView intensity={15} tint="light" style={styles.blur}>
+        {/* Cool-grey tint over the frost (instead of pure white). */}
+        <View style={styles.tintFill} pointerEvents="none" />
+
         <Text style={styles.title}>Your search ends here</Text>
 
         <Pressable style={({ pressed }) => [styles.btn, styles.dark, pressed && styles.pressed]} onPress={onProceed}>
@@ -30,8 +33,8 @@ export function CreateAccountCard({ onProceed }: { onProceed: () => void }) {
           <Text style={styles.labelDark}>Sign in with Apple</Text>
         </Pressable>
 
-        <Pressable style={({ pressed }) => [styles.btn, styles.white, pressed && styles.pressed]} onPress={onProceed}>
-          <Text style={styles.labelDark}>Sign in with email</Text>
+        <Pressable style={({ pressed }) => [styles.btn, styles.ghost, pressed && styles.pressed]} onPress={onProceed}>
+          <Text style={styles.labelGhost}>Sign in with email</Text>
         </Pressable>
       </BlurView>
     </View>
@@ -50,10 +53,18 @@ const styles = StyleSheet.create({
   shadow: {
     alignSelf: 'stretch',
     shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 10,
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 8,
+  },
+  tintFill: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(244,245,247,0.1)',
   },
   blur: {
     borderRadius: radius.lg,
@@ -83,9 +94,11 @@ const styles = StyleSheet.create({
     ...btnShadow,
   },
   dark: { backgroundColor: BTN },
-  white: { backgroundColor: '#fff', borderWidth: 1, borderColor: 'rgba(0,0,0,0.08)' },
+  white: { backgroundColor: '#fff', borderWidth: 1, borderColor: 'rgba(0,0,0,0.07)' },
+  ghost: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)', shadowOpacity: 0, elevation: 0 },
   labelLight: { fontFamily: typography.button.fontFamily, fontSize: 15, color: '#fff' },
   labelDark: { fontFamily: typography.button.fontFamily, fontSize: 15, color: '#111' },
+  labelGhost: { fontFamily: typography.subtitle.fontFamily, fontSize: 14, color: '#41454D' },
 
   pressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
 });
