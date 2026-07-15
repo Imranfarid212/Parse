@@ -1,0 +1,91 @@
+/**
+ * CreateAccountCard — placeholder auth drawer: a floating frosted-glass sheet
+ * holding just the three sign-up buttons. Every button calls onProceed
+ * (→ onboarding). No real auth wired.
+ */
+import React from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
+
+import { GoogleLogo } from '@/components/ui/GoogleLogo';
+import { colors, radius, spacing, typography } from '@/theme/tokens';
+
+const BTN = '#2b2a2a';
+
+export function CreateAccountCard({ onProceed }: { onProceed: () => void }) {
+  return (
+    // Outer wrapper carries the shadow (BlurView needs overflow:hidden, which clips shadows).
+    <View style={styles.shadow}>
+      <BlurView intensity={15} tint="light" style={styles.blur}>
+        <Text style={styles.title}>Your search ends here</Text>
+
+        <Pressable style={({ pressed }) => [styles.btn, styles.dark, pressed && styles.pressed]} onPress={onProceed}>
+          <GoogleLogo size={18} />
+          <Text style={styles.labelLight}>Sign in with Google</Text>
+        </Pressable>
+
+        <Pressable style={({ pressed }) => [styles.btn, styles.white, pressed && styles.pressed]} onPress={onProceed}>
+          <Ionicons name="logo-apple" size={20} color="#111" />
+          <Text style={styles.labelDark}>Sign in with Apple</Text>
+        </Pressable>
+
+        <Pressable style={({ pressed }) => [styles.btn, styles.white, pressed && styles.pressed]} onPress={onProceed}>
+          <Text style={styles.labelDark}>Sign in with email</Text>
+        </Pressable>
+      </BlurView>
+    </View>
+  );
+}
+
+const btnShadow = {
+  shadowColor: '#000',
+  shadowOpacity: 0.1,
+  shadowRadius: 6,
+  shadowOffset: { width: 0, height: 3 },
+  elevation: 3,
+};
+
+const styles = StyleSheet.create({
+  shadow: {
+    alignSelf: 'stretch',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 10,
+  },
+  blur: {
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.55)',
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.xl + 8,
+    gap: spacing.lg - 6,
+  },
+
+  title: {
+    fontFamily: typography.display.fontFamily,
+    fontSize: 20,
+    color: colors.textPrimary,
+    textAlign: 'center',
+    marginBottom: spacing.xs,
+  },
+  btn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    height: 50,
+    borderRadius: radius.pill,
+    ...btnShadow,
+  },
+  dark: { backgroundColor: BTN },
+  white: { backgroundColor: '#fff', borderWidth: 1, borderColor: 'rgba(0,0,0,0.08)' },
+  labelLight: { fontFamily: typography.button.fontFamily, fontSize: 15, color: '#fff' },
+  labelDark: { fontFamily: typography.button.fontFamily, fontSize: 15, color: '#111' },
+
+  pressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
+});

@@ -39,7 +39,13 @@ function TwinkleSquare({ cell, size, t }: { cell: Cell; size: number; t: SharedV
   return <Rect x={cell.px} y={cell.py} width={size} height={size} color={SQUARE_COLOR} opacity={opacity} />;
 }
 
-export function AnimatedGridBackground({ children }: { children?: ReactNode }) {
+export function AnimatedGridBackground({
+  children,
+  excludeBand,
+}: {
+  children?: ReactNode;
+  excludeBand?: { top: number; bottom: number } | null;
+}) {
   const { width, height } = useWindowDimensions();
 
   // Pad beyond the screen, SNAPPED to whole grid cells so the lines and the
@@ -69,19 +75,32 @@ export function AnimatedGridBackground({ children }: { children?: ReactNode }) {
   // Twinkling squares across the visible screen (they skew with the grid).
   const cols = Math.ceil(width / GRID);
   const rows = Math.ceil(height / GRID);
-  const randomCell = (): Cell => ({
-    px: Math.floor(Math.random() * cols) * GRID + 1,
-    py: Math.floor(Math.random() * rows) * GRID + 1,
-    phase: Math.random(),
-    key: Math.random(),
-  });
+
+  // A square's on-screen Y after the skew transform (origin = screen center).
+  const screenY = (px: number, py: number) => py + SKEW_Y * (px - width / 2);
+  // Keep squares at least one grid cell clear of the hero-text band.
+  const inExcluded = (px: number, py: number) => {
+    if (!excludeBand) return false;
+    const y = screenY(px, py);
+    return y + GRID > excludeBand.top - GRID && y < excludeBand.bottom + GRID;
+  };
+  const randomCell = (): Cell => {
+    let px = 0;
+    let py = 0;
+    for (let tries = 0; tries < 24; tries++) {
+      px = Math.floor(Math.random() * cols) * GRID + 1;
+      py = Math.floor(Math.random() * rows) * GRID + 1;
+      if (!inExcluded(px, py)) break;
+    }
+    return { px, py, phase: Math.random(), key: Math.random() };
+  };
 
   const [squares, setSquares] = useState<Cell[]>(() => Array.from({ length: NUM_SQUARES }, randomCell));
 
   useEffect(() => {
     setSquares(Array.from({ length: NUM_SQUARES }, randomCell));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cols, rows]);
+  }, [cols, rows, excludeBand]);
 
   useEffect(() => {
     const iv = setInterval(() => {
@@ -89,7 +108,7 @@ export function AnimatedGridBackground({ children }: { children?: ReactNode }) {
     }, RELOCATE_MS);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cols, rows]);
+  }, [cols, rows, excludeBand]);
 
   const t = useSharedValue(0);
   useEffect(() => {
@@ -109,7 +128,8 @@ export function AnimatedGridBackground({ children }: { children?: ReactNode }) {
           ))}
         </Group>
 
-        {/* Radial focus — grid crisp at center, fading hard outward to near-white at edges. */}
+        {/* Radial focus — grid crisp at center, fading only partway (never fully
+            white) so it stays visible behind the bottom glass card. */}
         <Rect x={0} y={0} width={width} height={height}>
           <RadialGradient
             c={vec(width / 2, height * 0.45)}
@@ -117,10 +137,9 @@ export function AnimatedGridBackground({ children }: { children?: ReactNode }) {
             colors={[
               `${palette.canvas}00`,
               `${palette.canvas}00`,
-              `${palette.canvas}99`,
-              palette.canvas,
+              `${palette.canvas}33`,
             ]}
-            positions={[0, 0.18, 0.62, 1]}
+            positions={[0, 0.25, 1]}
           />
         </Rect>
       </Canvas>
