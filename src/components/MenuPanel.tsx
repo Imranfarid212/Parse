@@ -1,0 +1,125 @@
+/**
+ * MenuPanel — the menu content that lives to the RIGHT of the camera in a
+ * horizontal strip (CameraScreen slides the strip so this pushes the camera
+ * out of the way). Bottom holds a 4-tab toggle built on REAL native iOS glass
+ * via expo-glass-effect's GlassView (UIGlassEffect / Liquid Glass), with an
+ * expo-blur fallback on platforms without it.
+ */
+import React, { useEffect, useState } from 'react';
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
+import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+
+import { SearchView } from '@/components/search/SearchView';
+import { colors, radius, spacing, typography } from '@/theme/tokens';
+
+const GLASS = isLiquidGlassAvailable();
+const PAD = 5;
+const TAB_H = 46;
+
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
+const TABS: { label: string; icon: IconName }[] = [
+  { label: 'Export', icon: 'download-outline' },
+  { label: 'Search', icon: 'search-outline' },
+  { label: 'Plan', icon: 'sparkles-outline' },
+  { label: 'Settings', icon: 'settings-outline' },
+];
+
+function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: number) => void; width: number }) {
+  const tabW = (width - PAD * 2) / TABS.length;
+  const pos = useSharedValue(active);
+
+  useEffect(() => {
+    pos.value = withSpring(active, { damping: 18, stiffness: 200 });
+  }, [active, pos]);
+
+  const indicator = useAnimatedStyle(() => ({ transform: [{ translateX: PAD + pos.value * tabW }] }));
+
+  return (
+    <View style={[styles.tabsWrap, { width, height: TAB_H + PAD * 2 }]}>
+      {GLASS ? (
+        <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" colorScheme="light" />
+      ) : (
+        <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
+      )}
+
+      <Animated.View style={[styles.indicator, { width: tabW, height: TAB_H, top: PAD }, indicator]}>
+        {GLASS ? (
+          <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="clear" isInteractive colorScheme="light" />
+        ) : (
+          <View style={[StyleSheet.absoluteFill, styles.indicatorSolid]} />
+        )}
+      </Animated.View>
+
+      <View style={[styles.tabsRow, { paddingHorizontal: PAD }]}>
+        {TABS.map((t, i) => {
+          const on = i === active;
+          return (
+            <Pressable key={t.label} onPress={() => onChange(i)} style={{ width: tabW, height: TAB_H, alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+              <Ionicons name={t.icon} size={20} color={on ? '#111' : colors.textSecondary} />
+              <Text style={[styles.tabLabel, on && styles.tabLabelActive]}>{t.label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+export function MenuPanel({ onClose }: { onClose: () => void }) {
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const [active, setActive] = useState(0);
+
+  return (
+    <View style={[styles.panel, { paddingTop: insets.top + spacing.sm }]}>
+      <View style={styles.header}>
+        <Text style={styles.title}>{TABS[active].label}</Text>
+        <Pressable onPress={onClose} hitSlop={12} style={styles.headerBtn}>
+          <Ionicons name="close" size={24} color={colors.textPrimary} />
+        </Pressable>
+      </View>
+
+      <View style={styles.content}>
+        {active === 1 ? (
+          <SearchView />
+        ) : (
+          <View style={styles.placeholderWrap}>
+            <Text style={styles.placeholder}>{TABS[active].label} — coming soon</Text>
+          </View>
+        )}
+      </View>
+
+      <View style={[styles.toggleArea, { paddingBottom: insets.bottom + spacing.md }]}>
+        <GlassTabs active={active} onChange={setActive} width={width - spacing.lg * 2} />
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  panel: { flex: 1, backgroundColor: colors.background },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    height: 52,
+  },
+  headerBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  title: { fontFamily: typography.display.fontFamily, fontSize: 22, color: colors.textPrimary },
+  content: { flex: 1 },
+  placeholderWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  placeholder: { fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: colors.textSecondary },
+
+  toggleArea: { paddingHorizontal: spacing.lg },
+  tabsWrap: { borderRadius: radius.pill, overflow: 'hidden', backgroundColor: 'rgba(120,120,128,0.10)', justifyContent: 'center' },
+  tabsRow: { flexDirection: 'row' },
+  indicator: { position: 'absolute', left: 0, borderRadius: radius.pill, overflow: 'hidden' },
+  indicatorSolid: { backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: radius.pill },
+  tabLabel: { fontFamily: typography.subtitle.fontFamily, fontSize: 11, color: colors.textSecondary },
+  tabLabelActive: { color: '#111', fontFamily: typography.button.fontFamily },
+});

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import Animated, {
   Easing,
@@ -11,12 +11,12 @@ import Animated, {
 
 import { AnimatedGridBackground } from '@/components/ui/AnimatedGridBackground';
 import { OnboardingOverlay } from '@/components/OnboardingOverlay';
-import { colors, radius, spacing, typography } from '@/theme/tokens';
+import { RainbowButton } from '@/components/ui/RainbowButton';
+import { colors, spacing, typography } from '@/theme/tokens';
 
-// Placeholder copy — final wording lands later per PM.
-const HEADLINE = 'Background lights are cool you know.';
-const SUBTITLE = 'And this, is chemical burn.';
-const CTA_LABEL = 'Debug now';
+const HEADLINE = 'Never type an expense again';
+const SUBTITLE = 'One snap. Perfectly structured data';
+const CTA_LABEL = 'Get started';
 
 export default function LandingScreen() {
   const router = useRouter();
@@ -40,13 +40,9 @@ export default function LandingScreen() {
           <Animated.View style={[styles.hero, heroStyle]}>
             <Text style={styles.headline}>{HEADLINE}</Text>
             <Text style={styles.subtitle}>{SUBTITLE}</Text>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setShowOnboarding(true)}
-              style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}
-            >
-              <Text style={styles.ctaLabel}>{CTA_LABEL}</Text>
-            </Pressable>
+            <View style={styles.ctaWrap}>
+              <RainbowButton label={CTA_LABEL} onPress={() => setShowOnboarding(true)} />
+            </View>
           </Animated.View>
         )}
       </AnimatedGridBackground>
@@ -82,19 +78,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: spacing.xs,
   },
-  cta: {
-    marginTop: spacing.lg,
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
-    backgroundColor: colors.ctaBackground,
-    borderRadius: radius.pill,
-  },
-  ctaPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.98 }],
-  },
-  ctaLabel: {
-    ...typography.button,
-    color: colors.ctaText,
+  ctaWrap: {
+    marginTop: spacing.md,
   },
 });
