@@ -6,14 +6,66 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-const ZIG = 16;
-const BARS = 34;
+import { Barcode } from '@/components/ui/Barcode';
 
-export function ReceiptCard({ width, height, total = '45.60' }: { width: number; height: number; total?: string }) {
+const ZIG = 16;
+
+export function ReceiptCard({
+  width,
+  height,
+  total = '45.60',
+  bare = false,
+  children,
+}: {
+  width: number;
+  height: number;
+  total?: string;
+  /** Blank paper: no printed content (grey panel), unless `children` is given. */
+  bare?: boolean;
+  /** Printed face for the `bare` receipt. Receives the card's scale `s`. When
+   *  omitted, the bare card shows just a faint grey panel. */
+  children?: (s: number) => React.ReactNode;
+}) {
   const s = width / 300; // design width is 300
   const toothHalf = width / ZIG / 2;
   const toothH = 12 * s;
   const pad = 22 * s;
+
+  // Torn paper edge along the bottom of the card.
+  const tornEdge = (
+    <View style={styles.zigzag}>
+      {Array.from({ length: ZIG }).map((_, i) => (
+        <View
+          key={i}
+          style={{ width: 0, height: 0, borderLeftWidth: toothHalf, borderRightWidth: toothHalf, borderTopWidth: toothH, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#fff' }}
+        />
+      ))}
+    </View>
+  );
+
+  if (bare) {
+    return (
+      <View style={[styles.card, { width, shadowRadius: 20 * s }]}>
+        <View
+          style={[
+            styles.body,
+            { height: height - toothH, borderTopLeftRadius: 8 * s, borderTopRightRadius: 8 * s },
+            children
+              ? { paddingHorizontal: 18 * s, paddingVertical: 16 * s }
+              : { padding: pad },
+          ]}
+        >
+          {children ? (
+            children(s)
+          ) : (
+            <View style={{ flex: 1, borderRadius: 8 * s, backgroundColor: 'rgba(17,17,17,0.03)' }} />
+          )}
+        </View>
+
+        {tornEdge}
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.card, { width, shadowRadius: 20 * s }]}>
@@ -43,21 +95,12 @@ export function ReceiptCard({ width, height, total = '45.60' }: { width: number;
         <Text style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 13 * s, fontFamily: 'InstrumentSans_400Regular' }}>Total</Text>
         <Text style={{ fontFamily: 'InstrumentSans_700Bold', fontSize: 30 * s, color: '#111', textAlign: 'center', marginTop: 2 * s }}>{total}</Text>
 
-        <View style={[styles.barcode, { marginTop: 18 * s }]}>
-          {Array.from({ length: BARS }).map((_, i) => (
-            <View key={i} style={{ width: Math.max(1, ((i % 3) + 1) * s), height: 42 * s, backgroundColor: '#111', marginRight: 2 * s }} />
-          ))}
+        <View style={{ marginTop: 18 * s }}>
+          <Barcode s={s} />
         </View>
       </View>
 
-      <View style={styles.zigzag}>
-        {Array.from({ length: ZIG }).map((_, i) => (
-          <View
-            key={i}
-            style={{ width: 0, height: 0, borderLeftWidth: toothHalf, borderRightWidth: toothHalf, borderTopWidth: toothH, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#fff' }}
-          />
-        ))}
-      </View>
+      {tornEdge}
     </View>
   );
 }
@@ -68,6 +111,5 @@ const styles = StyleSheet.create({
   rule: { height: 1, backgroundColor: '#E5E7EB' },
   line: { backgroundColor: '#E5E7EB' },
   row: { flexDirection: 'row', justifyContent: 'space-between' },
-  barcode: { flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-end' },
   zigzag: { flexDirection: 'row', backgroundColor: 'transparent' },
 });

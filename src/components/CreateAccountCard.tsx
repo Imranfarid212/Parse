@@ -5,13 +5,13 @@
  */
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 
 import { GoogleLogo } from '@/components/ui/GoogleLogo';
-import { colors, radius, spacing, typography } from '@/theme/tokens';
+import { colors, palette, radius, spacing, typography } from '@/theme/tokens';
 
-const BTN = '#2b2a2a';
+const BTN = palette.buttonDark;
 
 export function CreateAccountCard({ onProceed }: { onProceed: () => void }) {
   return (
@@ -34,7 +34,8 @@ export function CreateAccountCard({ onProceed }: { onProceed: () => void }) {
         </Pressable>
 
         <Pressable style={({ pressed }) => [styles.btn, styles.soft, pressed && styles.pressed]} onPress={onProceed}>
-          <Text style={styles.labelDark}>Sign in/Sign up with email</Text>
+          <Feather name="mail" size={17} color="#111" />
+          <Text style={styles.labelDark}>Use my email</Text>
         </Pressable>
       </BlurView>
     </View>
@@ -72,9 +73,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.55)',
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.xl + 8,
-    gap: spacing.lg - 6,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.lg + 6,
+    gap: spacing.sm + 3,
   },
 
   title: {

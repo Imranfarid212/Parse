@@ -9,6 +9,10 @@ import { type TextStyle } from 'react-native';
 export const palette = {
   ink: '#0C0D10',
   inkSoft: '#5A5F6A',
+  inkFaint: '#9CA3AF',
+  buttonDark: '#2b2a2a',
+  forest: '#047857',
+  hairline: '#EDEEF0',
   canvas: '#FBFBFD',
   surface: '#FFFFFF',
   white: '#FFFFFF',
@@ -26,7 +30,11 @@ export const colors = {
   surface: palette.surface,
   textPrimary: palette.ink,
   textSecondary: palette.inkSoft,
-  ctaBackground: palette.ink,
+  textFaint: palette.inkFaint,
+  border: palette.hairline,
+  /** Deep-green accent for "done"/progress marks. */
+  accent: palette.forest,
+  ctaBackground: palette.buttonDark,
   ctaText: palette.white,
 } as const;
 
