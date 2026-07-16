@@ -1,27 +1,48 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
+import * as Haptics from 'expo-haptics';
+import * as Network from 'expo-network';
 import Animated, {
   Easing,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withSequence,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 
 import { MenuPanel } from '@/components/MenuPanel';
-import { radius, spacing } from '@/theme/tokens';
+import { ReceiptReview } from '@/components/receipt/ReceiptReview';
+import { RecentsFolder } from '@/components/receipt/RecentsFolder';
+import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
+import * as store from '@/lib/receipts/store';
+import type { ReceiptFields } from '@/lib/receipts/types';
+import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
 
 type Mode = 'default' | 'oneclick';
+
+/**
+ * Post-shutter phases.
+ *  idle       — live camera
+ *  review     — Default: frozen frame + card (loading → fields)
+ *  processing — /extract never landed; the image is queued and will retry
+ */
+type Phase =
+  | { k: 'idle' }
+  | { k: 'review'; photoUri: string; rowId: string | null; fields: ReceiptFields | null; loading: boolean }
+  | { k: 'processing' };
 
 // "Emphasized" easing: zero velocity at the start (a deliberate drag through
 // the first third), fast acceleration through the middle, soft settle at the
 // end. Makes the push read as an intentional, noticeable motion.
 const EMPHASIZED = Easing.bezier(0.5, 0, 0.2, 1);
+const FOLDER_W = 96;
 
 function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
   return (
@@ -48,7 +69,24 @@ export default function CameraScreen() {
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<Mode>('default');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [phase, setPhase] = useState<Phase>({ k: 'idle' });
+  const [notice, setNotice] = useState<string | null>(null);
   const menuProgress = useSharedValue(0);
+
+  // One-click's permanent folder: the digest pop when a scan lands.
+  const digest = useSharedValue(1);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Retry queued scans whenever the network comes back — this is what makes
+  // "Your receipt is being processed" true rather than a green check over a
+  // dropped receipt.
+  useEffect(() => {
+    const sub = Network.addNetworkStateListener((s) => {
+      if (s.isInternetReachable) void retryPending();
+    });
+    void retryPending();
+    return () => sub.remove();
+  }, []);
 
   const openMenu = () => {
     setMenuOpen(true);
@@ -62,14 +100,65 @@ export default function CameraScreen() {
 
   // Slide the whole [camera | menu] strip left as the menu opens.
   const stripStyle = useAnimatedStyle(() => ({ transform: [{ translateX: -width * menuProgress.value }] }));
+  const folderStyle = useAnimatedStyle(() => ({ transform: [{ scale: digest.value }] }));
+
+  const flashNotice = useCallback((msg: string) => {
+    setNotice(msg);
+    setTimeout(() => setNotice(null), 2200);
+  }, []);
+
+  /** Shrink, overshoot, settle — the folder "digesting" a scan. */
+  const popFolder = useCallback(() => {
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    digest.value = withSequence(
+      withTiming(0.9, { duration: 110 }),
+      withTiming(1.12, { duration: 170 }),
+      withSpring(1, { damping: 9, stiffness: 220 }),
+    );
+  }, [digest]);
+
+  const showProcessing = useCallback(() => {
+    setPhase({ k: 'processing' });
+    setTimeout(() => setPhase({ k: 'idle' }), 1800);
+  }, []);
 
   const onCapture = async () => {
     if (!cameraRef.current || busy) return;
     try {
       setBusy(true);
       const photo = await cameraRef.current.takePictureAsync({ quality: 1 });
-      console.log('[capture] mode', mode, 'photo at', photo?.uri);
-      // TODO(next): compress → POST to /extract → confirmation screen.
+      if (!photo?.uri) return;
+
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+
+      if (mode === 'default') {
+        // Card appears immediately as a skeleton; fields fill in when they land.
+        setPhase({ k: 'review', photoUri: photo.uri, rowId: null, fields: null, loading: true });
+        const out = await processCapture(photo.uri, ac.signal);
+
+        if (out.kind === 'extracted') {
+          setPhase({ k: 'review', photoUri: photo.uri, rowId: out.row.id, fields: out.fields, loading: false });
+        } else if (out.kind === 'not_a_receipt') {
+          setPhase({ k: 'idle' });
+          flashNotice('Please scan only documents and receipts');
+        } else {
+          showProcessing();
+        }
+      } else {
+        // One-click: no card. The folder digests it and you shoot again.
+        const out = await processCapture(photo.uri, ac.signal);
+
+        if (out.kind === 'extracted') {
+          await confirm(out.row.id, out.fields);
+          popFolder();
+        } else if (out.kind === 'not_a_receipt') {
+          flashNotice('Please scan only documents and receipts');
+        } else {
+          showProcessing();
+        }
+      }
     } catch (e) {
       console.warn('[capture] failed', e);
     } finally {
@@ -79,8 +168,41 @@ export default function CameraScreen() {
 
   const onPickFromGallery = async () => {
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
-    if (!res.canceled) console.log('[gallery] picked', res.assets[0]?.uri);
+    if (res.canceled || !res.assets[0]?.uri) return;
+    const uri = res.assets[0].uri;
+
+    setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true });
+    const out = await processCapture(uri);
+    if (out.kind === 'extracted') {
+      setPhase({ k: 'review', photoUri: uri, rowId: out.row.id, fields: out.fields, loading: false });
+    } else if (out.kind === 'not_a_receipt') {
+      setPhase({ k: 'idle' });
+      flashNotice('Please scan only documents and receipts');
+    } else {
+      showProcessing();
+    }
   };
+
+  /** Swipe-up. Optimistic: the local write lands, the flight already played. */
+  const onConfirmed = useCallback(
+    async (fields: ReceiptFields) => {
+      if (phase.k === 'review' && phase.rowId) await confirm(phase.rowId, fields);
+      setPhase({ k: 'idle' });
+      popFolder();
+    },
+    [phase, popFolder],
+  );
+
+  /** Retake: cancel any in-flight extract and drop the row. */
+  const onRetake = useCallback(async () => {
+    abortRef.current?.abort();
+    if (phase.k === 'review' && phase.rowId) await store.remove(phase.rowId);
+    setPhase({ k: 'idle' });
+  }, [phase]);
+
+  const onFieldsChange = useCallback((fields: ReceiptFields) => {
+    setPhase((prev) => (prev.k === 'review' ? { ...prev, fields } : prev));
+  }, []);
 
   if (!permission) {
     return (
@@ -115,6 +237,13 @@ export default function CameraScreen() {
         <View style={{ width }}>
           <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" flash="auto" />
 
+          {/* One-click's folder is permanent; Default's lives in the review overlay. */}
+          {mode === 'oneclick' && (
+            <Animated.View style={[styles.folder, { left: spacing.lg, top: insets.top + spacing.sm }, folderStyle]}>
+              <RecentsFolder width={FOLDER_W} />
+            </Animated.View>
+          )}
+
           <Pressable style={[styles.menuCard, { top: insets.top + spacing.sm }]} onPress={openMenu}>
             <Ionicons name="menu" size={22} color="#fff" />
             <Text style={styles.menuLabel}>Menu</Text>
@@ -139,11 +268,37 @@ export default function CameraScreen() {
               <View style={styles.sideBtn} />
             </View>
           </View>
+
+          {notice && (
+            <View style={[styles.notice, { bottom: insets.bottom + 150 }]} pointerEvents="none">
+              <Text style={styles.noticeText}>{notice}</Text>
+            </View>
+          )}
         </View>
 
         {/* ── Menu half ── */}
         <View style={{ width }}>{menuOpen && <MenuPanel onClose={closeMenu} />}</View>
       </Animated.View>
+
+      {phase.k === 'review' && (
+        <ReceiptReview
+          photoUri={phase.photoUri}
+          fields={phase.fields}
+          loading={phase.loading}
+          onConfirmed={onConfirmed}
+          onRetake={onRetake}
+          onFieldsChange={onFieldsChange}
+        />
+      )}
+
+      {phase.k === 'processing' && (
+        <View style={styles.processing}>
+          <Text style={styles.processingText}>Your receipt is being processed</Text>
+          <View style={styles.check}>
+            <Feather name="check" size={22} color="#fff" />
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -156,6 +311,8 @@ const styles = StyleSheet.create({
   gateText: { color: '#fff', fontSize: 16, textAlign: 'center' },
   gateBtn: { paddingHorizontal: spacing.xl, paddingVertical: spacing.md, backgroundColor: '#fff', borderRadius: radius.pill },
   gateBtnText: { color: '#000', fontWeight: '600' },
+
+  folder: { position: 'absolute', zIndex: 6 },
 
   menuCard: {
     position: 'absolute',
@@ -199,4 +356,35 @@ const styles = StyleSheet.create({
   toggleSegActive: { backgroundColor: 'rgba(255,255,255,0.95)' },
   toggleText: { color: 'rgba(255,255,255,0.8)', fontSize: 13 },
   toggleTextActive: { color: '#111', fontWeight: '600' },
+
+  notice: {
+    position: 'absolute',
+    alignSelf: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm + 2,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+  },
+  noticeText: { color: '#fff', fontFamily: fontFamily.semibold, fontSize: 13 },
+
+  processing: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.md,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  processingText: { color: '#fff', fontFamily: fontFamily.semibold, fontSize: 17 },
+  check: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
