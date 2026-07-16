@@ -19,6 +19,7 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
+import { BlurView } from 'expo-blur';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -148,8 +149,9 @@ export function ReceiptReview({
 
   return (
     <View style={styles.root}>
-      {/* Frozen frame + scrim (the card is paper; the scrim gives it depth) */}
+      {/* Frozen frame, blurred back so the paper card is the only thing in focus. */}
       <Image source={{ uri: photoUri }} style={styles.fill} contentFit="cover" />
+      <BlurView intensity={60} tint="dark" style={styles.fill} />
       <View style={styles.scrim} />
 
       <Animated.View style={[styles.folder, { left: insets.left + spacing.lg, top: insets.top + spacing.sm }, folderStyle]}>
@@ -209,7 +211,7 @@ export function ReceiptReview({
 const styles = StyleSheet.create({
   root: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' },
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.55)' },
+  scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   folder: { position: 'absolute', zIndex: 5 },
   hints: { position: 'absolute', bottom: 70, flexDirection: 'row', alignItems: 'center', gap: 6 },
