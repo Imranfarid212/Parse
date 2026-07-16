@@ -33,8 +33,8 @@ export function CreateAccountCard({ onProceed }: { onProceed: () => void }) {
           <Text style={styles.labelDark}>Sign in with Apple</Text>
         </Pressable>
 
-        <Pressable style={({ pressed }) => [styles.btn, styles.ghost, pressed && styles.pressed]} onPress={onProceed}>
-          <Text style={styles.labelGhost}>Sign in with email</Text>
+        <Pressable style={({ pressed }) => [styles.btn, styles.soft, pressed && styles.pressed]} onPress={onProceed}>
+          <Text style={styles.labelDark}>Sign in/Sign up with email</Text>
         </Pressable>
       </BlurView>
     </View>
@@ -95,10 +95,9 @@ const styles = StyleSheet.create({
   },
   dark: { backgroundColor: BTN },
   white: { backgroundColor: '#fff', borderWidth: 1, borderColor: 'rgba(0,0,0,0.07)' },
-  ghost: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)', shadowOpacity: 0, elevation: 0 },
+  soft: { backgroundColor: 'rgba(255,255,255,0.75)', borderWidth: 1, borderColor: 'rgba(0,0,0,0.1)' },
   labelLight: { fontFamily: typography.button.fontFamily, fontSize: 15, color: '#fff' },
   labelDark: { fontFamily: typography.button.fontFamily, fontSize: 15, color: '#111' },
-  labelGhost: { fontFamily: typography.subtitle.fontFamily, fontSize: 14, color: '#41454D' },
 
   pressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
 });
