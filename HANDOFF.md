@@ -125,7 +125,6 @@ The front end compresses to ~1024px JPEG (~120 KB) and POSTs the image.
 {
   "date": "purchase date as printed on the receipt",
   "store": "merchant name",
-  "place": "city/location or empty string",
   "items": ["item name and price per line"],
   "total": 0.00,
   "category": "one of the 10 categories",
@@ -141,6 +140,9 @@ or, for a non-receipt image:
 → the app shows "Please scan only documents and receipts" and stays on camera.
 
 - **`date` is returned as printed**; the app normalizes to `YYYY-MM-DD` in code.
+- **These 6 fields are the whole payload** (PM decision 2026-07-16). `place` was
+  dropped — it was never shown or edited. The same 6 are what the review card
+  displays and what the edit sheet writes.
 - **Latency target: p95 < 3s** end-to-end.
 - **The 10 categories:** Travel & Transit · Meals & Entertainment · Office
   Supplies · Software & IT · Vehicle Expenses · Advertising & Marketing ·
