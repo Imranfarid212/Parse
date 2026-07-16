@@ -48,13 +48,23 @@ const CONFIRM_VY = 800;
 const FOLDER_W = 108;
 
 /**
- * Bezier control point, as a fraction of the trip. The paper is pulled right
- * and up before it sweeps left into the folder — that's the swoop. Derived
- * from the real endpoint rather than hardcoded, so the arc holds its shape on
- * any screen size.
+ * Flight shape — a cubic Bezier S-curve. The receipt swings OUT to the right as
+ * it climbs, then reverses and sweeps LEFT into the folder, arriving almost
+ * horizontally. Two control points are what make the S; a quadratic can only
+ * bend one way (which is why the old path just curved left the whole trip).
+ *
+ * Both control points sit out to the right. The second sits near the folder's
+ * height, so the final tangent is nearly horizontal — that's the flat arrival.
+ * All derived from the real endpoint, so the shape holds on any screen.
  */
-const CP_X_RATIO = 0.75; // outward (opposite the folder) …
-const CP_Y_RATIO = 0.53; // … and most of the way up
+const BULGE_RATIO = 0.4; // how far right it swings, against the climb
+const CP1_Y_RATIO = 0.3; // first control point's height
+const CP2_Y_RATIO = 0.92; // second, level with the folder → flat arrival
+
+/** Tumble through the flight, in degrees at t = 1. */
+const PITCH = 70; // rotateX — tips away from the viewer
+const YAW = -45; // rotateY — flips around the vertical axis
+const ROLL = -40; // rotateZ — banks into the turn
 
 export function ReceiptReview({
   photoUri,
@@ -137,24 +147,30 @@ export function ReceiptReview({
     });
 
   /**
-   * Tossed-card physics. The paper holds its shape, arcs through the air on a
-   * quadratic Bezier, and banks into the turn:
-   *   P(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2
-   * where P0 is rest, P1 the invisible magnet that bends the path, P2 the folder.
+   * Tossed-card physics: the paper holds its shape, arcs through the air, and
+   * banks. Cubic Bezier, with P0 the card at rest (0,0 in its own space) and
+   * P3 the folder:
+   *   P(t) = (1-t)³·P0 + 3(1-t)²t·P1 + 3(1-t)t²·P2 + t³·P3
+   * The P0 term drops out since it's the origin.
    */
   const cardStyle = useAnimatedStyle(() => {
     const t = p.value;
     const mt = 1 - t;
 
-    // P0 is the card at rest (0,0 in its own space); P2 is the folder.
     const endX = folderCentre.x - cardCentre.x;
     const endY = folderCentre.y - cardCentre.y;
-    // P1 pulls outward (away from the folder) and up, so the paper sweeps.
-    const cpX = Math.abs(endX) * CP_X_RATIO;
-    const cpY = endY * CP_Y_RATIO;
 
-    const translateX = 2 * mt * t * cpX + t * t * endX;
-    const translateY = 2 * mt * t * cpY + t * t * endY + dragY.value * 0.4;
+    // Both control points sit out to the right: the first throws it outward as
+    // it climbs, the second (level with the folder) reels it back in flat.
+    const bulge = Math.abs(endY) * BULGE_RATIO;
+    const cp1X = bulge;
+    const cp1Y = endY * CP1_Y_RATIO;
+    const cp2X = bulge;
+    const cp2Y = endY * CP2_Y_RATIO;
+
+    const translateX = 3 * mt * mt * t * cp1X + 3 * mt * t * t * cp2X + t * t * t * endX;
+    const translateY =
+      3 * mt * mt * t * cp1Y + 3 * mt * t * t * cp2Y + t * t * t * endY + dragY.value * 0.4;
 
     return {
       // Fades at the very end so it blends into the folder rather than clipping.
@@ -165,9 +181,9 @@ export function ReceiptReview({
         { scale: interpolate(t, [0, 1], [1, 0.15], Extrapolation.CLAMP) },
         // perspective must precede the rotations for them to read as 3D.
         { perspective: 800 },
-        { rotateX: `${interpolate(t, [0, 1], [0, 60])}deg` }, // pitch: tips away
-        { rotateY: `${interpolate(t, [0, 1], [0, -15])}deg` }, // yaw: slight twist
-        { rotateZ: `${interpolate(t, [0, 1], [0, -25])}deg` }, // roll: banks left
+        { rotateX: `${interpolate(t, [0, 1], [0, PITCH])}deg` },
+        { rotateY: `${interpolate(t, [0, 1], [0, YAW])}deg` },
+        { rotateZ: `${interpolate(t, [0, 1], [0, ROLL])}deg` },
       ],
     };
   });
