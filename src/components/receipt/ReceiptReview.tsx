@@ -35,6 +35,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { EditSheet } from '@/components/receipt/EditSheet';
+import { flightScale } from '@/components/receipt/flight';
 import { MetaballTrail } from '@/components/receipt/MetaballTrail';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { ScannedFace } from '@/components/receipt/ScannedFace';
@@ -126,16 +127,15 @@ export function ReceiptReview({
       }
     });
 
-  // The RN card rides the same path, then hands off to the Skia blob at 0.1–0.3.
+  // The card stays a rigid, readable receipt for the whole flight — it never
+  // becomes the blob. The wake behind it reads the same curve (flight.ts).
   const cardStyle = useAnimatedStyle(() => {
     const t = p.value;
-    const scale = t < 0.1 ? interpolate(t, [0, 0.1], [1, 0.9]) : interpolate(t, [0.1, 1], [0.9, 0.06]);
     return {
-      opacity: interpolate(t, [0.1, 0.3], [1, 0], 'clamp'),
       transform: [
         { translateX: interpolate(t, [0, 1], [0, folderCentre.x - cardCentre.x]) },
         { translateY: interpolate(t, [0, 1], [0, folderCentre.y - cardCentre.y]) + dragY.value * 0.4 },
-        { scale },
+        { scale: flightScale(t) },
       ],
     };
   });
@@ -157,6 +157,9 @@ export function ReceiptReview({
       <Animated.View style={[styles.folder, { left: insets.left + spacing.lg, top: insets.top + spacing.sm }, folderStyle]}>
         <RecentsFolder width={FOLDER_W} spread={spread} />
       </Animated.View>
+
+      {/* Behind the card (zIndex 2 < 3): the goo drags out from under the paper. */}
+      <MetaballTrail p={p} from={cardCentre} to={folderCentre} cardWidth={cardW} cardHeight={cardH} />
 
       <View style={styles.centre} pointerEvents="box-none">
         <GestureDetector gesture={pan}>
@@ -191,8 +194,6 @@ export function ReceiptReview({
         )}
       </View>
 
-      <MetaballTrail p={p} from={cardCentre} to={folderCentre} headSize={cardW} />
-
       {editing && fields && (
         <View style={[styles.sheetWrap, { paddingTop: insets.top + spacing.xl }]}>
           <EditSheet
@@ -212,7 +213,9 @@ const styles = StyleSheet.create({
   root: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' },
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
-  centre: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  // Stacking: wake (2) < card (3) < folder (5). The card rides over its own goo
+  // and slides behind the folder's front panel on arrival.
+  centre: { flex: 1, alignItems: 'center', justifyContent: 'center', zIndex: 3 },
   folder: { position: 'absolute', zIndex: 5 },
   hints: { position: 'absolute', bottom: 70, flexDirection: 'row', alignItems: 'center', gap: 6 },
   hintText: { fontFamily: fontFamily.semibold, fontSize: 14, color: 'rgba(255,255,255,0.9)' },

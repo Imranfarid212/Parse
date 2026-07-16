@@ -1,21 +1,28 @@
 /**
- * MetaballTrail — the gooey drag behind the receipt as it shrinks toward the
- * folder.
+ * MetaballTrail — the gooey wake that drags behind the receipt as it flies.
  *
- * Technique: draw the head blob plus a few trailing blobs into one Skia layer,
- * blur that layer, then crush the alpha with a ColorMatrix. Blurred edges that
- * overlap survive the threshold and fuse; edges that don't, snap apart. That is
- * the whole metaball trick, and it only works inside Skia — which is why the
- * flight hands the RN card off to this layer (rule 1: rebuild the effect
- * natively rather than porting a web filter).
+ * IT IS A TRAIL, NOT A TRANSFORMATION. The receipt stays a rigid, readable
+ * card the whole way and is drawn ON TOP of this layer; nothing here ever
+ * replaces it. An earlier version cross-faded the card into a blob, which is
+ * why the receipt turned into clay — a thresholded blob is, by definition, not
+ * a receipt.
  *
- * The trail is positional, not physical: blob i samples the same flight path at
- * `p - lag`, so it is always behind the head by a fixed arc. Cheap, stable, and
- * it stretches exactly when the head accelerates.
+ * Technique: draw the anchor + trailing blobs into ONE Skia layer, blur the
+ * layer, then crush the alpha with a ColorMatrix. Overlapping blurred edges
+ * survive the threshold and fuse into a neck; separated ones snap apart. This
+ * only exists inside Skia — Skia filters cannot apply to RN views, which is why
+ * the wake is its own canvas sitting behind the card (rule 1: rebuild the
+ * effect natively rather than porting a web filter).
+ *
+ * The anchor blob rides exactly under the card at ~0.9 its size, so its
+ * thresholded silhouette hides behind the paper and the goo only shows where
+ * it stretches out behind. Trail blobs sample the same path at `p - lag`.
  */
 import React from 'react';
-import { Blur, Canvas, ColorMatrix, Group, Paint, Circle, RoundedRect, rect, rrect } from '@shopify/react-native-skia';
+import { Blur, Canvas, Circle, ColorMatrix, Group, Paint, RoundedRect, rect, rrect } from '@shopify/react-native-skia';
 import { useDerivedValue, type SharedValue } from 'react-native-reanimated';
+
+import { flightScale, lerp } from '@/components/receipt/flight';
 
 export type Point = { x: number; y: number };
 
@@ -27,22 +34,17 @@ const THRESHOLD = [
   0, 0, 0, 22, -9,
 ];
 
-const TRAIL = [0.055, 0.11, 0.17, 0.24];
+/** How far behind the head each blob sits, as a fraction of the flight. */
+const TRAIL = [0.06, 0.12, 0.19, 0.27];
 const BLOB = '#FFFFFF';
-
-// Runs inside useDerivedValue (UI thread), so it must be a worklet — a plain JS
-// function would be a remote call the UI runtime can't make synchronously.
-const lerp = (a: number, b: number, t: number) => {
-  'worklet';
-  return a + (b - a) * t;
-};
 
 export function MetaballTrail({
   p,
   from,
   to,
-  headSize,
-  blur = 11,
+  cardWidth,
+  cardHeight,
+  blur = 12,
 }: {
   /** Flight progress, 0 → 1. */
   p: SharedValue<number>;
@@ -50,34 +52,34 @@ export function MetaballTrail({
   from: Point;
   /** Folder mouth. */
   to: Point;
-  /** Head blob size at p = 0. */
-  headSize: number;
+  cardWidth: number;
+  cardHeight: number;
   blur?: number;
 }) {
-  // The head is a rounded rect (it *is* the receipt); the trail are circles.
-  const head = useDerivedValue(() => {
+  // Sits under the card, matching its shrink. Invisible except where the goo
+  // stretches out from behind the paper.
+  const anchor = useDerivedValue(() => {
     const t = p.value;
-    // Matches the card's shrink: gentle to 0.10, drastic after.
-    const scale = t < 0.1 ? lerp(1, 0.9, t / 0.1) : lerp(0.9, 0.06, (t - 0.1) / 0.9);
-    const w = headSize * scale;
-    const h = w * 1.35;
+    const s = flightScale(t);
+    const w = cardWidth * s * 0.9;
+    const h = cardHeight * s * 0.9;
     const x = lerp(from.x, to.x, t) - w / 2;
     const y = lerp(from.y, to.y, t) - h / 2;
-    const r = Math.min(w, h) * 0.32;
+    const r = Math.min(w, h) * 0.2;
     return rrect(rect(x, y, w, h), r, r);
   });
 
-  // Fade the whole layer in as the RN card fades out, and out again on arrival.
+  // On as soon as it starts moving; off as it enters the folder.
   const opacity = useDerivedValue(() => {
     const t = p.value;
-    if (t < 0.1) return 0;
-    if (t < 0.3) return (t - 0.1) / 0.2;
-    if (t > 0.93) return Math.max(0, (1 - t) / 0.07);
+    if (t <= 0.01) return 0;
+    if (t < 0.12) return (t - 0.01) / 0.11;
+    if (t > 0.88) return Math.max(0, (1 - t) / 0.12);
     return 1;
   });
 
   return (
-    <Canvas style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} pointerEvents="none">
+    <Canvas style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2 }} pointerEvents="none">
       <Group
         opacity={opacity}
         layer={
@@ -87,9 +89,9 @@ export function MetaballTrail({
           </Paint>
         }
       >
-        <RoundedRect rect={head} color={BLOB} />
+        <RoundedRect rect={anchor} color={BLOB} />
         {TRAIL.map((lag, i) => (
-          <TrailBlob key={i} p={p} lag={lag} from={from} to={to} headSize={headSize} index={i} />
+          <TrailBlob key={i} p={p} lag={lag} from={from} to={to} cardWidth={cardWidth} index={i} />
         ))}
       </Group>
     </Canvas>
@@ -101,23 +103,22 @@ function TrailBlob({
   lag,
   from,
   to,
-  headSize,
+  cardWidth,
   index,
 }: {
   p: SharedValue<number>;
   lag: number;
   from: Point;
   to: Point;
-  headSize: number;
+  cardWidth: number;
   index: number;
 }) {
   const cx = useDerivedValue(() => lerp(from.x, to.x, Math.max(0, p.value - lag)));
   const cy = useDerivedValue(() => lerp(from.y, to.y, Math.max(0, p.value - lag)));
   const r = useDerivedValue(() => {
     const t = Math.max(0, p.value - lag);
-    const scale = t < 0.1 ? lerp(1, 0.9, t / 0.1) : lerp(0.9, 0.06, (t - 0.1) / 0.9);
-    // Each blob is smaller than the one ahead of it, so the neck tapers.
-    return (headSize * scale * 0.42) / (1 + index * 0.35);
+    // Sized off the card at that point in its shrink, tapering down the tail.
+    return (cardWidth * flightScale(t) * 0.3) / (1 + index * 0.4);
   });
 
   return <Circle cx={cx} cy={cy} r={r} color={BLOB} />;
