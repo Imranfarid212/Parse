@@ -30,7 +30,12 @@ const THRESHOLD = [
 const TRAIL = [0.055, 0.11, 0.17, 0.24];
 const BLOB = '#FFFFFF';
 
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+// Runs inside useDerivedValue (UI thread), so it must be a worklet — a plain JS
+// function would be a remote call the UI runtime can't make synchronously.
+const lerp = (a: number, b: number, t: number) => {
+  'worklet';
+  return a + (b - a) * t;
+};
 
 export function MetaballTrail({
   p,
