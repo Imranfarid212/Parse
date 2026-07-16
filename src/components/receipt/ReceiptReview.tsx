@@ -4,14 +4,17 @@
  * The frame is frozen (the captured photo, not the live preview): cheaper, and
  * it makes the moment read as the app having caught the receipt.
  *
- * Drag up = confirm. `p` (flight progress) tracks the finger 1:1 along the real
- * path to the folder, so the shrink and the folder's arrival happen live under
- * your thumb rather than after release:
- *   p 0 → 0.10   gentle shrink, readable receipt
- *   p 0.10       drastic shrink starts; RN card cross-fades into the Skia blob
- *   p 0.20       folder appears
- *   p 0.30 → 1   pure Skia gooey into the folder
+ * Drag up = confirm. `p` (flight progress) tracks the finger, and the receipt
+ * flies like a tossed playing card, not a melting blob: it holds its shape,
+ * arcs on a quadratic Bezier, and banks into the turn.
+ *   p 0.20   the folder appears
+ *   p 0.80→1 the card fades as it drops into the folder
  * Release past threshold completes it; below, it springs back.
+ *
+ * (An earlier build ran a Skia metaball wake here. Metaballs are for liquid —
+ * water drops merging, gooey tab bars — and applying one to rigid editorial
+ * paper read as melting clay. Deleted in favour of pure Reanimated transforms:
+ * hardware-accelerated, crisp, and no shader needed for aerodynamics.)
  *
  * Drag down = edit. Axis is direction-locked on first movement.
  */
@@ -25,18 +28,15 @@ import * as Haptics from 'expo-haptics';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
+  Extrapolation,
   interpolate,
   runOnJS,
   useAnimatedStyle,
-  useDerivedValue,
   useSharedValue,
   withTiming,
-  type SharedValue,
 } from 'react-native-reanimated';
 
 import { EditSheet } from '@/components/receipt/EditSheet';
-import { flightScale } from '@/components/receipt/flight';
-import { MetaballTrail } from '@/components/receipt/MetaballTrail';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { ScannedFace } from '@/components/receipt/ScannedFace';
 import { ReceiptCard } from '@/components/ui/ReceiptCard';
@@ -46,6 +46,15 @@ import { colors, fontFamily, spacing } from '@/theme/tokens';
 const CONFIRM_DY = 80;
 const CONFIRM_VY = 800;
 const FOLDER_W = 108;
+
+/**
+ * Bezier control point, as a fraction of the trip. The paper is pulled right
+ * and up before it sweeps left into the folder — that's the swoop. Derived
+ * from the real endpoint rather than hardcoded, so the arc holds its shape on
+ * any screen size.
+ */
+const CP_X_RATIO = 0.75; // outward (opposite the folder) …
+const CP_Y_RATIO = 0.53; // … and most of the way up
 
 export function ReceiptReview({
   photoUri,
@@ -127,15 +136,38 @@ export function ReceiptReview({
       }
     });
 
-  // The card stays a rigid, readable receipt for the whole flight — it never
-  // becomes the blob. The wake behind it reads the same curve (flight.ts).
+  /**
+   * Tossed-card physics. The paper holds its shape, arcs through the air on a
+   * quadratic Bezier, and banks into the turn:
+   *   P(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2
+   * where P0 is rest, P1 the invisible magnet that bends the path, P2 the folder.
+   */
   const cardStyle = useAnimatedStyle(() => {
     const t = p.value;
+    const mt = 1 - t;
+
+    // P0 is the card at rest (0,0 in its own space); P2 is the folder.
+    const endX = folderCentre.x - cardCentre.x;
+    const endY = folderCentre.y - cardCentre.y;
+    // P1 pulls outward (away from the folder) and up, so the paper sweeps.
+    const cpX = Math.abs(endX) * CP_X_RATIO;
+    const cpY = endY * CP_Y_RATIO;
+
+    const translateX = 2 * mt * t * cpX + t * t * endX;
+    const translateY = 2 * mt * t * cpY + t * t * endY + dragY.value * 0.4;
+
     return {
+      // Fades at the very end so it blends into the folder rather than clipping.
+      opacity: interpolate(t, [0.8, 1], [1, 0], Extrapolation.CLAMP),
       transform: [
-        { translateX: interpolate(t, [0, 1], [0, folderCentre.x - cardCentre.x]) },
-        { translateY: interpolate(t, [0, 1], [0, folderCentre.y - cardCentre.y]) + dragY.value * 0.4 },
-        { scale: flightScale(t) },
+        { translateX },
+        { translateY },
+        { scale: interpolate(t, [0, 1], [1, 0.15], Extrapolation.CLAMP) },
+        // perspective must precede the rotations for them to read as 3D.
+        { perspective: 800 },
+        { rotateX: `${interpolate(t, [0, 1], [0, 60])}deg` }, // pitch: tips away
+        { rotateY: `${interpolate(t, [0, 1], [0, -15])}deg` }, // yaw: slight twist
+        { rotateZ: `${interpolate(t, [0, 1], [0, -25])}deg` }, // roll: banks left
       ],
     };
   });
@@ -157,9 +189,6 @@ export function ReceiptReview({
       <Animated.View style={[styles.folder, { left: insets.left + spacing.lg, top: insets.top + spacing.sm }, folderStyle]}>
         <RecentsFolder width={FOLDER_W} spread={spread} />
       </Animated.View>
-
-      {/* Behind the card (zIndex 2 < 3): the goo drags out from under the paper. */}
-      <MetaballTrail p={p} from={cardCentre} to={folderCentre} cardWidth={cardW} cardHeight={cardH} />
 
       <View style={styles.centre} pointerEvents="box-none">
         <GestureDetector gesture={pan}>
@@ -213,8 +242,7 @@ const styles = StyleSheet.create({
   root: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' },
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.35)' },
-  // Stacking: wake (2) < card (3) < folder (5). The card rides over its own goo
-  // and slides behind the folder's front panel on arrival.
+  // Card (3) under folder (5), so it drops behind the folder's front panel.
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', zIndex: 3 },
   folder: { position: 'absolute', zIndex: 5 },
   hints: { position: 'absolute', bottom: 70, flexDirection: 'row', alignItems: 'center', gap: 6 },
