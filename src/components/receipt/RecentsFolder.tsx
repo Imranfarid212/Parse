@@ -33,13 +33,18 @@ const TAB = ['#0B8A66', '#067053'];
 const RECESS = '#01120D';
 const EDGE = 'rgba(255,255,255,0.22)';
 
-/** Resting fan of the cards already in the folder. */
+/**
+ * Resting fan. `x` is a fraction of card width, `y` of card height.
+ * Deliberately subtle — the web reference's big fan (offset*8°, offset*30px)
+ * is its HOVER state; at rest it only fans offset*3°. A wide fan here also
+ * swings the outer cards clean outside the folder's width.
+ */
 const CARDS = [
-  { rot: -14, x: -0.3, y: 0.06 },
-  { rot: -7, x: -0.15, y: 0.015 },
+  { rot: -7, x: -0.14, y: 0.055 },
+  { rot: -3.5, x: -0.07, y: 0.016 },
   { rot: 0, x: 0, y: 0 },
-  { rot: 7, x: 0.15, y: 0.015 },
-  { rot: 14, x: 0.3, y: 0.06 },
+  { rot: 3.5, x: 0.07, y: 0.016 },
+  { rot: 7, x: 0.14, y: 0.055 },
 ];
 
 /** A panel filled with a vertical gradient (Skia) behind arbitrary children. */
@@ -109,24 +114,35 @@ export function RecentsFolder({
   label?: string;
   spread?: SharedValue<number>;
 }) {
-  // The web reference's front panel is 340px wide; everything derives from that.
+  // The web reference's front panel is 340px wide; panel styling derives from
+  // that. Card SIZE does not — the reference is a 400px hero whose container is
+  // far larger than its folder, so its absolute card size (224x288) here made
+  // the cards 1.6x taller than the folder and hanging out of its sides.
+  // Everything below is sized against the folder itself instead.
   const k = width / 340;
   const s = width / 150;
 
-  const height = 336 * k;
   const frontH = 176 * k;
-  const backW = 320 * k;
-  const backH = 224 * k;
-  const backBottom = 24 * k;
-  const tabW = 128 * k;
+  /** How far the cards rise above the front panel's top edge. */
+  const peek = frontH * 0.6;
+  /** Headroom above the cards so the fan's rotation has somewhere to go. */
+  const pad = 10 * k;
+
+  const height = pad + peek + frontH;
+  const cardW = width * 0.46;
+  // Enough to clear the front panel, plus as much again tucked inside it.
+  const cardH = peek + frontH * 0.6;
+  const cardTop = pad;
+
+  const backW = width * 0.9;
+  const backH = peek * 0.75 + frontH;
+  const backBottom = 4 * k;
+  const tabW = backW * 0.4;
   const tabH = 40 * k;
-  const bodyTop = 32 * k;
-  const cardW = 224 * k;
-  const cardH = 288 * k;
-  const cardBottom = 40 * k;
+  const bodyTop = tabH * 0.8;
 
   const bodyH = backH - bodyTop;
-  const pad = 8 * k;
+  const recessPad = 6 * k;
 
   return (
     <View style={{ width, height }}>
@@ -152,10 +168,10 @@ export function RecentsFolder({
           <View
             style={{
               position: 'absolute',
-              top: pad,
-              left: pad,
-              right: pad,
-              bottom: pad,
+              top: recessPad,
+              left: recessPad,
+              right: recessPad,
+              bottom: recessPad,
               borderRadius: 6 * k,
               backgroundColor: RECESS,
             }}
@@ -173,7 +189,7 @@ export function RecentsFolder({
           h={cardH}
           s={s}
           left={(width - cardW) / 2}
-          top={height - cardBottom - cardH}
+          top={cardTop}
           spread={spread}
         />
       ))}
@@ -225,9 +241,9 @@ function FanCard({
     const p = spread?.value ?? 0;
     return {
       transform: [
-        { translateX: cfg.x * w + dir * interpolate(p, [0, 1], [0, 0.16]) * w },
-        { translateY: cfg.y * h - interpolate(p, [0, 1], [0, 0.05]) * h },
-        { rotate: `${cfg.rot + dir * interpolate(p, [0, 1], [0, 6])}deg` },
+        { translateX: cfg.x * w + dir * interpolate(p, [0, 1], [0, 0.1]) * w },
+        { translateY: cfg.y * h - interpolate(p, [0, 1], [0, 0.04]) * h },
+        { rotate: `${cfg.rot + dir * interpolate(p, [0, 1], [0, 4])}deg` },
       ],
     };
   });
