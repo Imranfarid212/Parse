@@ -39,12 +39,28 @@ export const SHEETS = {
 
 export type SheetVariant = keyof typeof SHEETS;
 
+/**
+ * Premium emerald, translucent so the panels read as frosted glass rather than
+ * paint. The greens are deliberately alpha'd: the flap's frost comes from a
+ * Skia BackdropFilter blurring the sheets beneath it, which only shows through
+ * if the green above it lets light past.
+ */
 export const COLORS = {
-  back: '#E8A80B',
-  front: '#FBCE05',
-  sheetBack: '#E4E4E4',
+  backTop: 'rgba(6,148,105,0.74)',
+  backBottom: 'rgba(4,95,70,0.86)',
+  frontTop: 'rgba(23,199,141,0.60)',
+  frontBottom: 'rgba(5,132,96,0.78)',
+  sheetBack: 'rgba(236,241,239,0.92)',
   sheetFront: '#FFFFFF',
+  /** Hairline along the panel edges — what sells glass as a physical pane. */
+  edge: 'rgba(255,255,255,0.55)',
 } as const;
 
 /** Corner rounding, in viewbox units. */
 export const CORNER_R = 3;
+
+/** Backdrop blur under the flap, in viewbox units. */
+export const FROST_BLUR = 2.2;
+
+/** Edge hairline width, in viewbox units. */
+export const EDGE_W = 0.7;

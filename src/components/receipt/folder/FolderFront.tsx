@@ -2,25 +2,43 @@
  * FolderFront — the folder's front flap. Drawn last, so anything flying in
  * passes behind it.
  *
- * Its own component and its own canvas so it can be animated independently
- * (e.g. tipped open); wrap it in an Animated.View to move it.
+ * `Frost` is a separate export that must be rendered immediately BEFORE the
+ * flap: it blurs whatever is already on the canvas (the back panel and both
+ * sheets), clipped to the flap's outline, which is what makes the translucent
+ * green above it read as frosted glass rather than tinted cellophane.
+ *
+ * Returns Skia nodes rather than its own Canvas — see FolderBack for why.
  */
 import React from 'react';
-import { Canvas, CornerPathEffect, Group, Path } from '@shopify/react-native-skia';
+import {
+  BackdropFilter,
+  Blur,
+  CornerPathEffect,
+  Group,
+  LinearGradient,
+  Path,
+  vec,
+  type Transforms3d,
+} from '@shopify/react-native-skia';
+import type { SharedValue } from 'react-native-reanimated';
 
-import { COLORS, CORNER_R, FRONT_PATH, VIEW_W, folderHeight } from '@/components/receipt/folder/geometry';
+import { COLORS, CORNER_R, EDGE_W, FRONT_PATH, FROST_BLUR } from '@/components/receipt/folder/geometry';
 
-export function FolderFront({ width, color = COLORS.front }: { width: number; color?: string }) {
+/** Blurs the canvas beneath, clipped to the flap. Render just before FolderFront. */
+export function Frost({ blur = FROST_BLUR }: { blur?: number }) {
+  return <BackdropFilter filter={<Blur blur={blur} />} clip={FRONT_PATH} />;
+}
+
+export function FolderFront({ transform }: { transform?: Transforms3d | SharedValue<Transforms3d> }) {
   return (
-    <Canvas
-      style={{ position: 'absolute', left: 0, top: 0, width, height: folderHeight(width) }}
-      pointerEvents="none"
-    >
-      <Group transform={[{ scale: width / VIEW_W }]}>
-        <Path path={FRONT_PATH} color={color}>
-          <CornerPathEffect r={CORNER_R} />
-        </Path>
-      </Group>
-    </Canvas>
+    <Group transform={transform}>
+      <Path path={FRONT_PATH}>
+        <LinearGradient start={vec(0, 23)} end={vec(0, 77)} colors={[COLORS.frontTop, COLORS.frontBottom]} />
+        <CornerPathEffect r={CORNER_R} />
+      </Path>
+      <Path path={FRONT_PATH} style="stroke" strokeWidth={EDGE_W} color={COLORS.edge}>
+        <CornerPathEffect r={CORNER_R} />
+      </Path>
+    </Group>
   );
 }

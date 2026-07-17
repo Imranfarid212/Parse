@@ -1,25 +1,29 @@
 /**
  * FolderBack — the folder's back panel (the tabbed silhouette).
  *
- * Its own component and its own canvas so it can be animated independently of
- * the front flap and the sheets; wrap it in an Animated.View to move it.
+ * Returns Skia nodes rather than its own Canvas: the four parts share one
+ * canvas so the flap's BackdropFilter can frost the sheets beneath it (a
+ * backdrop filter only sees what's drawn below it in the SAME canvas).
+ * Still independently animatable — pass `transform`, which accepts a
+ * Reanimated shared value.
  */
 import React from 'react';
-import { Canvas, CornerPathEffect, Group, Path } from '@shopify/react-native-skia';
+import { CornerPathEffect, Group, LinearGradient, Path, vec, type Transforms3d } from '@shopify/react-native-skia';
+import type { SharedValue } from 'react-native-reanimated';
 
-import { BACK_PATH, COLORS, CORNER_R, VIEW_W, folderHeight } from '@/components/receipt/folder/geometry';
+import { BACK_PATH, COLORS, CORNER_R, EDGE_W } from '@/components/receipt/folder/geometry';
 
-export function FolderBack({ width, color = COLORS.back }: { width: number; color?: string }) {
+export function FolderBack({ transform }: { transform?: Transforms3d | SharedValue<Transforms3d> }) {
   return (
-    <Canvas
-      style={{ position: 'absolute', left: 0, top: 0, width, height: folderHeight(width) }}
-      pointerEvents="none"
-    >
-      <Group transform={[{ scale: width / VIEW_W }]}>
-        <Path path={BACK_PATH} color={color}>
-          <CornerPathEffect r={CORNER_R} />
-        </Path>
-      </Group>
-    </Canvas>
+    <Group transform={transform}>
+      <Path path={BACK_PATH}>
+        <LinearGradient start={vec(0, 6)} end={vec(0, 70)} colors={[COLORS.backTop, COLORS.backBottom]} />
+        <CornerPathEffect r={CORNER_R} />
+      </Path>
+      {/* Edge hairline — reads as the lit rim of a glass pane. */}
+      <Path path={BACK_PATH} style="stroke" strokeWidth={EDGE_W} color={COLORS.edge} opacity={0.5}>
+        <CornerPathEffect r={CORNER_R} />
+      </Path>
+    </Group>
   );
 }
