@@ -7,6 +7,14 @@
  * handwritten notes. With `loading`, the same layout renders as a skeleton so
  * the wait reads as the receipt developing rather than a spinner.
  *
+ * Long receipts don't get their own card. The card is a confirmation surface —
+ * "right store, right total?" — not a document viewer, so it stays one fixed
+ * size and one typography whether you scanned a coffee or a grocery run. The
+ * item area caps at MAX_ROWS: at or under, every item lists; over, the last
+ * row becomes a count. That costs one row, only when it's needed, and the card
+ * never claims to have captured less than it did. The full list is in the edit
+ * sheet, which owns the screen and can scroll without fighting the swipe.
+ *
  * Sizes take the card's scale `s` (= width / 300), like the rest of the card.
  */
 import React from 'react';
@@ -15,7 +23,16 @@ import { StyleSheet, Text, View } from 'react-native';
 import { colors, fontFamily } from '@/theme/tokens';
 import type { ReceiptFields } from '@/lib/receipts/types';
 
+/** Rows the item area can hold. The last is spent on the count only if needed. */
+const MAX_ROWS = 6;
+
 const money = (n: number) => n.toFixed(2);
+
+/** Items to print, plus how many are left over. */
+function visibleItems(items: string[]): { shown: string[]; hidden: number } {
+  if (items.length <= MAX_ROWS) return { shown: items, hidden: 0 };
+  return { shown: items.slice(0, MAX_ROWS - 1), hidden: items.length - (MAX_ROWS - 1) };
+}
 
 /** "2026-07-04" → "4 Jul 2026". Null dates print as a dash for the user to fix. */
 function prettyDate(iso: string | null): string {
@@ -31,6 +48,8 @@ function Bar({ w, s }: { w: number | `${number}%`; s: number }) {
 }
 
 export function ScannedFace({ s, fields, loading = false }: { s: number; fields?: ReceiptFields | null; loading?: boolean }) {
+  const { shown, hidden } = visibleItems(fields?.items ?? []);
+
   return (
     <View style={styles.root}>
       {/* Store + date */}
@@ -57,9 +76,11 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
 
       {/* Items */}
       <View style={[styles.items, { marginTop: 10 * s, gap: 7 * s }]}>
-        {loading || !fields
-          ? [0, 1, 2].map((i) => <Bar key={i} w={i === 2 ? '55%' : '80%'} s={s} />)
-          : fields.items.slice(0, 5).map((line, i) => (
+        {loading || !fields ? (
+          [0, 1, 2].map((i) => <Bar key={i} w={i === 2 ? '55%' : '80%'} s={s} />)
+        ) : (
+          <>
+            {shown.map((line, i) => (
               <Text
                 key={`${line}-${i}`}
                 numberOfLines={1}
@@ -68,6 +89,13 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
                 {line}
               </Text>
             ))}
+            {hidden > 0 && (
+              <Text style={{ fontFamily: fontFamily.semibold, fontSize: 11 * s, color: colors.textFaint }}>
+                +{hidden} more
+              </Text>
+            )}
+          </>
+        )}
       </View>
 
       <View style={styles.spacer} />
