@@ -8,7 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import * as Network from 'expo-network';
 import Animated, {
-  Easing,
+  interpolate,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
@@ -18,11 +18,13 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { MenuPanel } from '@/components/MenuPanel';
+import { folderHeight } from '@/components/receipt/folder/geometry';
 import { ReceiptReview } from '@/components/receipt/ReceiptReview';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
 import type { ReceiptFields } from '@/lib/receipts/types';
+import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
 
 type Mode = 'default' | 'oneclick';
@@ -38,11 +40,7 @@ type Phase =
   | { k: 'review'; photoUri: string; rowId: string | null; fields: ReceiptFields | null; loading: boolean }
   | { k: 'processing' };
 
-// "Emphasized" easing: zero velocity at the start (a deliberate drag through
-// the first third), fast acceleration through the middle, soft settle at the
-// end. Makes the push read as an intentional, noticeable motion.
-const EMPHASIZED = Easing.bezier(0.5, 0, 0.2, 1);
-const FOLDER_W = 96;
+const FOLDER_W = 82;
 
 function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
   return (
@@ -73,9 +71,26 @@ export default function CameraScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const menuProgress = useSharedValue(0);
 
-  // One-click's permanent folder: the digest pop when a scan lands.
+  // One-click's folder: slides in when the mode is chosen and stays; the
+  // digest pop fires each time a scan lands.
   const digest = useSharedValue(1);
+  const folderIn = useSharedValue(0);
   const abortRef = useRef<AbortController | null>(null);
+
+  const folderH = folderHeight(FOLDER_W);
+  const folderTop = insets.top + spacing.sm;
+  // Parked just past the top-left corner, fully out of frame.
+  const folderOffX = -(spacing.lg + FOLDER_W + 12);
+  const folderOffY = -(folderTop + folderH + 12);
+
+  // In on One-click, out on Default — same motion either way.
+  useEffect(() => {
+    const show = mode === 'oneclick';
+    folderIn.value = withTiming(show ? 1 : 0, {
+      duration: show ? FOLDER_IN_MS : FOLDER_OUT_MS,
+      easing: EMPHASIZED,
+    });
+  }, [mode, folderIn]);
 
   // Retry queued scans whenever the network comes back — this is what makes
   // "Your receipt is being processed" true rather than a green check over a
@@ -90,17 +105,23 @@ export default function CameraScreen() {
 
   const openMenu = () => {
     setMenuOpen(true);
-    menuProgress.value = withTiming(1, { duration: 620, easing: EMPHASIZED });
+    menuProgress.value = withTiming(1, { duration: 620, easing: EMPHASIZED_SETTLE });
   };
   const closeMenu = () => {
-    menuProgress.value = withTiming(0, { duration: 560, easing: EMPHASIZED }, (f) => {
+    menuProgress.value = withTiming(0, { duration: 560, easing: EMPHASIZED_SETTLE }, (f) => {
       if (f) runOnJS(setMenuOpen)(false);
     });
   };
 
   // Slide the whole [camera | menu] strip left as the menu opens.
   const stripStyle = useAnimatedStyle(() => ({ transform: [{ translateX: -width * menuProgress.value }] }));
-  const folderStyle = useAnimatedStyle(() => ({ transform: [{ scale: digest.value }] }));
+  const folderStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: interpolate(folderIn.value, [0, 1], [folderOffX, 0]) },
+      { translateY: interpolate(folderIn.value, [0, 1], [folderOffY, 0]) },
+      { scale: digest.value },
+    ],
+  }));
 
   const flashNotice = useCallback((msg: string) => {
     setNotice(msg);
@@ -237,12 +258,12 @@ export default function CameraScreen() {
         <View style={{ width }}>
           <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" flash="auto" />
 
-          {/* One-click's folder is permanent; Default's lives in the review overlay. */}
-          {mode === 'oneclick' && (
-            <Animated.View style={[styles.folder, { left: spacing.lg, top: insets.top + spacing.sm }, folderStyle]}>
-              <RecentsFolder width={FOLDER_W} />
-            </Animated.View>
-          )}
+          {/* One-click's folder. Always mounted — it has to stay around to
+              animate out when you switch to Default; it just parks off-screen.
+              Default's own folder lives in the review overlay. */}
+          <Animated.View style={[styles.folder, { left: spacing.lg, top: folderTop }, folderStyle]} pointerEvents="none">
+            <RecentsFolder width={FOLDER_W} />
+          </Animated.View>
 
           <Pressable style={[styles.menuCard, { top: insets.top + spacing.sm }]} onPress={openMenu}>
             <Ionicons name="menu" size={22} color="#fff" />

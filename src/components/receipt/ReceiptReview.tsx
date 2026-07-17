@@ -31,21 +31,26 @@ import Animated, {
   Extrapolation,
   interpolate,
   runOnJS,
+  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
 
 import { EditSheet } from '@/components/receipt/EditSheet';
+import { folderHeight } from '@/components/receipt/folder/geometry';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { ScannedFace } from '@/components/receipt/ScannedFace';
 import { ReceiptCard } from '@/components/ui/ReceiptCard';
 import type { ReceiptFields } from '@/lib/receipts/types';
+import { EMPHASIZED, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { colors, fontFamily, spacing } from '@/theme/tokens';
 
 const CONFIRM_DY = 80;
 const CONFIRM_VY = 800;
-const FOLDER_W = 108;
+const FOLDER_W = 92;
+/** Flight progress at which the folder comes in to meet the receipt. */
+const FOLDER_CUE = 0.2;
 
 /**
  * Flight shape — a cubic Bezier S-curve. The receipt swings OUT to the right as
@@ -89,17 +94,39 @@ export function ReceiptReview({
   const cardH = Math.min(height * 0.52, 430);
 
   // Folder sits top-left; the flight runs from the card's centre to its mouth.
-  const folderH = FOLDER_W * 0.78;
+  const folderH = folderHeight(FOLDER_W);
+  const folderLeft = insets.left + spacing.lg;
+  const folderTop = insets.top + spacing.sm;
   const folderCentre = {
-    x: insets.left + spacing.lg + FOLDER_W / 2,
-    y: insets.top + spacing.sm + folderH * 0.55,
+    x: folderLeft + FOLDER_W / 2,
+    y: folderTop + folderH * 0.55,
   };
   const cardCentre = { x: width / 2, y: height / 2 };
   const flightDist = Math.hypot(cardCentre.x - folderCentre.x, cardCentre.y - folderCentre.y);
 
+  // Parked just past the top-left corner, fully out of frame.
+  const folderOffX = -(folderLeft + FOLDER_W + 12);
+  const folderOffY = -(folderTop + folderH + 12);
+
   const p = useSharedValue(0);
   const dragY = useSharedValue(0);
   const spread = useSharedValue(0);
+  /** 0 → parked off-screen, 1 → in place. */
+  const folderIn = useSharedValue(0);
+
+  // The folder comes in to meet the receipt, and leaves again if the drag is
+  // abandoned. Watching p rather than deriving from it, so the entry keeps its
+  // own easing instead of being yoked to the finger.
+  useAnimatedReaction(
+    () => p.value >= FOLDER_CUE,
+    (cued, prev) => {
+      if (prev === null || cued === prev) return;
+      folderIn.value = withTiming(cued ? 1 : 0, {
+        duration: cued ? FOLDER_IN_MS : FOLDER_OUT_MS,
+        easing: EMPHASIZED,
+      });
+    },
+  );
 
   const finish = useCallback(() => {
     if (fields) onConfirmed(fields);
@@ -136,7 +163,12 @@ export function ReceiptReview({
         runOnJS(buzz)();
         spread.value = withTiming(1, { duration: 420 });
         p.value = withTiming(1, { duration: 620, easing: Easing.bezier(0.4, 0, 0.2, 1) }, (done) => {
-          if (done) runOnJS(finish)();
+          if (!done) return;
+          // Receipt is in. The folder carries it off-screen, then we close —
+          // p stays at 1, so the reaction above won't fight this.
+          folderIn.value = withTiming(0, { duration: FOLDER_OUT_MS, easing: EMPHASIZED }, (gone) => {
+            if (gone) runOnJS(finish)();
+          });
         });
       } else if (down) {
         runOnJS(openEdit)();
@@ -188,9 +220,12 @@ export function ReceiptReview({
     };
   });
 
+  // Slides in from beyond the top-left corner and back out the same way.
   const folderStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(p.value, [0.2, 0.28], [0, 1], 'clamp'),
-    transform: [{ scale: interpolate(p.value, [0.2, 0.34], [0.7, 1], 'clamp') }],
+    transform: [
+      { translateX: interpolate(folderIn.value, [0, 1], [folderOffX, 0]) },
+      { translateY: interpolate(folderIn.value, [0, 1], [folderOffY, 0]) },
+    ],
   }));
 
   const hintStyle = useAnimatedStyle(() => ({ opacity: interpolate(p.value, [0, 0.08], [1, 0], 'clamp') }));
@@ -202,7 +237,7 @@ export function ReceiptReview({
       <BlurView intensity={60} tint="dark" style={styles.fill} />
       <View style={styles.scrim} />
 
-      <Animated.View style={[styles.folder, { left: insets.left + spacing.lg, top: insets.top + spacing.sm }, folderStyle]}>
+      <Animated.View style={[styles.folder, { left: folderLeft, top: folderTop }, folderStyle]}>
         <RecentsFolder width={FOLDER_W} spread={spread} />
       </Animated.View>
 
