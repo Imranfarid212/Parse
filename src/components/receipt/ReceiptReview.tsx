@@ -104,9 +104,9 @@ export function ReceiptReview({
   const cardCentre = { x: width / 2, y: height / 2 };
   const flightDist = Math.hypot(cardCentre.x - folderCentre.x, cardCentre.y - folderCentre.y);
 
-  // Parked just past the top-left corner, fully out of frame.
+  // Parked just past the left edge, at its resting height — it slides straight
+  // in, left to right.
   const folderOffX = -(folderLeft + FOLDER_W + 12);
-  const folderOffY = -(folderTop + folderH + 12);
 
   const p = useSharedValue(0);
   const dragY = useSharedValue(0);
@@ -220,12 +220,9 @@ export function ReceiptReview({
     };
   });
 
-  // Slides in from beyond the top-left corner and back out the same way.
+  // Slides in from beyond the left edge and back out the same way.
   const folderStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: interpolate(folderIn.value, [0, 1], [folderOffX, 0]) },
-      { translateY: interpolate(folderIn.value, [0, 1], [folderOffY, 0]) },
-    ],
+    transform: [{ translateX: interpolate(folderIn.value, [0, 1], [folderOffX, 0]) }],
   }));
 
   const hintStyle = useAnimatedStyle(() => ({ opacity: interpolate(p.value, [0, 0.08], [1, 0], 'clamp') }));

@@ -18,7 +18,6 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { MenuPanel } from '@/components/MenuPanel';
-import { folderHeight } from '@/components/receipt/folder/geometry';
 import { ReceiptReview } from '@/components/receipt/ReceiptReview';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
@@ -77,11 +76,10 @@ export default function CameraScreen() {
   const folderIn = useSharedValue(0);
   const abortRef = useRef<AbortController | null>(null);
 
-  const folderH = folderHeight(FOLDER_W);
   const folderTop = insets.top + spacing.sm;
-  // Parked just past the top-left corner, fully out of frame.
+  // Parked just past the left edge, at its resting height — it slides straight
+  // in, left to right.
   const folderOffX = -(spacing.lg + FOLDER_W + 12);
-  const folderOffY = -(folderTop + folderH + 12);
 
   // In on One-click, out on Default — same motion either way.
   useEffect(() => {
@@ -118,7 +116,6 @@ export default function CameraScreen() {
   const folderStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: interpolate(folderIn.value, [0, 1], [folderOffX, 0]) },
-      { translateY: interpolate(folderIn.value, [0, 1], [folderOffY, 0]) },
       { scale: digest.value },
     ],
   }));
