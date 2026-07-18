@@ -19,18 +19,55 @@
  */
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { BlurView } from 'expo-blur';
+import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 
 import { HeaderAurora } from '@/components/receipt/HeaderAurora';
 import { colors, fontFamily } from '@/theme/tokens';
 import type { ReceiptFields } from '@/lib/receipts/types';
+
+const GLASS = isLiquidGlassAvailable();
+
+/**
+ * The category chip as an Apple liquid-glass button — the `clear` +
+ * `isInteractive` UIGlassEffect (iOS 26+), which is the real Liquid Glass
+ * material rather than a plain frost; expo-blur is the fallback. A faint tint
+ * keeps it legible on the white card. overflow:hidden clips the glass, so the
+ * shadow lives on an outer wrapper (HANDOFF rule 6).
+ */
+function CategoryPill({ label, s }: { label: string; s: number }) {
+  return (
+    <View style={styles.pillShadow}>
+      <View style={[styles.pill, { paddingHorizontal: 15 * s, paddingVertical: 8 * s, borderRadius: 999 }]}>
+        {GLASS ? (
+          <GlassView
+            style={StyleSheet.absoluteFill}
+            glassEffectStyle="clear"
+            isInteractive
+            tintColor="rgba(255,255,255,0.28)"
+            colorScheme="light"
+          />
+        ) : (
+          <>
+            <BlurView intensity={24} tint="light" style={StyleSheet.absoluteFill} />
+            <View style={[StyleSheet.absoluteFill, styles.pillTint]} pointerEvents="none" />
+          </>
+        )}
+        <Text numberOfLines={1} style={{ fontFamily: fontFamily.semibold, fontSize: 11.5 * s, color: colors.textPrimary }}>
+          {label}
+        </Text>
+      </View>
+    </View>
+  );
+}
 
 // Padding of ReceiptCard's bare-with-children body — the header bleeds by these
 // to reach the card edges (kept in sync with ui/ReceiptCard.tsx).
 const CARD_PAD_X = 18;
 const CARD_PAD_TOP = 16;
 
-/** Rows the item area can hold. The last is spent on the count only if needed. */
-const MAX_ROWS = 6;
+/** Items shown before the rest collapse into a "+N more" row. */
+const MAX_ITEMS = 4;
 
 const money = (n: number) => n.toFixed(2);
 
@@ -45,10 +82,10 @@ function parseItem(line: string): { name: string; price: string } {
   return { name: m[1].trim(), price: m[2] };
 }
 
-/** Items to print, plus how many are left over. */
+/** Items to print (at most MAX_ITEMS), plus how many are left over. */
 function visibleItems(items: string[]): { shown: string[]; hidden: number } {
-  if (items.length <= MAX_ROWS) return { shown: items, hidden: 0 };
-  return { shown: items.slice(0, MAX_ROWS - 1), hidden: items.length - (MAX_ROWS - 1) };
+  if (items.length <= MAX_ITEMS) return { shown: items, hidden: 0 };
+  return { shown: items.slice(0, MAX_ITEMS), hidden: items.length - MAX_ITEMS };
 }
 
 /** "2026-07-04" → "4 Jul 2026". Null dates print as a dash for the user to fix. */
@@ -70,11 +107,14 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
 
   const bleedX = CARD_PAD_X * s;
   const bleedTop = CARD_PAD_TOP * s;
+  // How far the white body card rides up over the gradient header card.
+  const OVERLAP = 16 * s;
 
   return (
     <View style={styles.root}>
-      {/* Header — store + date over the pastel aurora mesh (Figma 22:4).
-          Bleeds by the card's padding so the mesh reaches the paper edges. */}
+      {/* Header card — store + date over the pastel aurora mesh (Figma 22:4).
+          The BACK card: bleeds to the paper edges, and the white body card below
+          overlaps its lower edge to read as one sheet laid over another. */}
       <View
         onLayout={(e) => {
           const { width, height } = e.nativeEvent.layout;
@@ -84,13 +124,12 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
           marginTop: -bleedTop,
           marginHorizontal: -bleedX,
           paddingTop: bleedTop + 14 * s,
-          paddingBottom: 12 * s,
+          // Extra bottom room: the body card overlaps this by OVERLAP.
+          paddingBottom: 14 * s + OVERLAP,
           paddingHorizontal: bleedX,
           borderTopLeftRadius: 8 * s,
           borderTopRightRadius: 8 * s,
           overflow: 'hidden',
-          borderBottomWidth: 1,
-          borderBottomColor: colors.border,
         }}
       >
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -126,9 +165,26 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
         )}
       </View>
 
+      {/* Body card — the FRONT card. Pulled up over the header by OVERLAP with
+          rounded top corners + an upward shadow, so it reads as placed on top;
+          the header's gradient shows through the two corner notches. */}
+      <View
+        style={[
+          styles.bodyCard,
+          {
+            marginTop: -OVERLAP,
+            marginHorizontal: -bleedX,
+            paddingHorizontal: bleedX,
+            paddingTop: 16 * s,
+            // Match the outer receipt card's top corner radius (8 * s).
+            borderTopLeftRadius: 8 * s,
+            borderTopRightRadius: 8 * s,
+          },
+        ]}
+      >
       {/* Items */}
-      <View style={[styles.section, { marginTop: 14 * s, gap: 8 * s }]}>
-        <Text style={[styles.label, { fontSize: 10 * s, letterSpacing: 0.8 * s }]}>ITEMS</Text>
+      <View style={[styles.section, { gap: 8 * s }]}>
+        <Text style={[styles.label, { fontSize: 12 * s, letterSpacing: 0.8 * s }]}>ITEMS</Text>
         <View style={{ gap: 7 * s }}>
           {loading || !fields ? (
             [0, 1, 2].map((i) => (
@@ -143,15 +199,15 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
                 const { name, price } = parseItem(line);
                 return (
                   <View key={`${line}-${i}`} style={styles.itemRow}>
-                    <Text numberOfLines={1} style={[styles.itemName, { fontSize: 13 * s }]}>
+                    <Text numberOfLines={1} style={[styles.itemName, { fontSize: 15 * s }]}>
                       {name}
                     </Text>
-                    {price ? <Text style={[styles.itemPrice, { fontSize: 13 * s }]}>${price}</Text> : null}
+                    {price ? <Text style={[styles.itemPrice, { fontSize: 15 * s }]}>${price}</Text> : null}
                   </View>
                 );
               })}
               {hidden > 0 && (
-                <Text style={{ fontFamily: fontFamily.semibold, fontSize: 12 * s, color: colors.textFaint }}>
+                <Text style={{ fontFamily: fontFamily.semibold, fontSize: 14 * s, color: colors.textFaint }}>
                   +{hidden} more
                 </Text>
               )}
@@ -167,7 +223,7 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
         {loading || !fields ? (
           <Bar w={80 * s} s={s} />
         ) : (
-          <Text style={{ fontFamily: fontFamily.display, fontSize: 24 * s, color: colors.textPrimary }}>
+          <Text style={{ fontFamily: fontFamily.display, fontSize: 20.4 * s, color: colors.textPrimary }}>
             ${money(fields.total)}
           </Text>
         )}
@@ -176,8 +232,8 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
       {/* Notes */}
       {!loading && fields?.handwritten_notes ? (
         <View style={[styles.section, { marginTop: 14 * s, gap: 8 * s }]}>
-          <Text style={[styles.label, { fontSize: 10 * s, letterSpacing: 0.8 * s }]}>NOTES</Text>
-          <Text style={{ fontFamily: fontFamily.regular, fontSize: 12 * s, color: colors.textSecondary, lineHeight: 17 * s }}>
+          <Text style={[styles.label, { fontSize: 12 * s, letterSpacing: 0.8 * s }]}>NOTES</Text>
+          <Text style={{ fontFamily: fontFamily.regular, fontSize: 14 * s, color: colors.textSecondary, lineHeight: 19 * s }}>
             {fields.handwritten_notes}
           </Text>
         </View>
@@ -185,15 +241,8 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
 
       {/* Category */}
       <View style={{ marginTop: 14 * s, alignItems: 'center' }}>
-        {loading || !fields ? (
-          <Bar w={96 * s} s={s} />
-        ) : (
-          <View style={[styles.chip, { paddingHorizontal: 14 * s, paddingVertical: 7 * s, borderRadius: 999 }]}>
-            <Text numberOfLines={1} style={{ fontFamily: fontFamily.semibold, fontSize: 11.5 * s, color: colors.textPrimary }}>
-              {fields.category}
-            </Text>
-          </View>
-        )}
+        {loading || !fields ? <Bar w={96 * s} s={s} /> : <CategoryPill label={fields.category} s={s} />}
+      </View>
       </View>
     </View>
   );
@@ -201,6 +250,17 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // Front card over the gradient header. White fill so its rounded top clips
+  // against the header; the upward shadow makes it read as lifted on top.
+  bodyCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: -3 },
+    elevation: 6,
+  },
   solidRule: { borderBottomWidth: 1, borderColor: colors.border },
   section: { alignSelf: 'stretch' },
   label: { fontFamily: fontFamily.display, color: colors.textFaint },
@@ -208,6 +268,21 @@ const styles = StyleSheet.create({
   itemName: { flex: 1, fontFamily: fontFamily.regular, color: colors.textPrimary },
   itemPrice: { fontFamily: fontFamily.semibold, color: colors.textPrimary, textAlign: 'right' },
   totalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  // Light zinc pill with a hairline border, dark label — matches Figma 22:4.
-  chip: { backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: colors.border },
+  // Frosted-glass category pill: overflow-hidden body clips the frost; the
+  // shadow rides an outer wrapper since the two can't coexist.
+  pillShadow: {
+    alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  pill: {
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+  },
+  pillTint: { backgroundColor: 'rgba(244,245,247,0.35)' },
 });

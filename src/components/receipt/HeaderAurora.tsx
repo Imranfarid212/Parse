@@ -9,7 +9,7 @@
  * items. Purely decorative — it sits behind the text.
  */
 import React from 'react';
-import { Blur, Canvas, Circle, Fill, Group, LinearGradient, Paint, RadialGradient, Rect, vec } from '@shopify/react-native-skia';
+import { Blur, Canvas, Circle, Fill, Group, Paint, RadialGradient, vec } from '@shopify/react-native-skia';
 
 type Blob = { cx: number; cy: number; r: number; color: string };
 
@@ -49,15 +49,6 @@ export function HeaderAurora({ width, height }: { width: number; height: number 
           );
         })}
       </Group>
-
-      {/* Melt the mesh into white toward the bottom, before the divider. */}
-      <Rect x={0} y={height * 0.45} width={width} height={height * 0.55}>
-        <LinearGradient
-          start={vec(0, height * 0.45)}
-          end={vec(0, height)}
-          colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.9)']}
-        />
-      </Rect>
     </Canvas>
   );
 }
