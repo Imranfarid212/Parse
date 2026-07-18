@@ -60,7 +60,7 @@ export const mockConfig: MockConfig = {
   sample: 0,
 };
 
-const SAMPLES: { store: string; items: string[]; total: number; category: Category }[] = [
+const SAMPLES: { store: string; items: string[]; total: number; category: Category; notes: string }[] = [
   {
     store: 'Whole Foods Market',
     items: [
@@ -79,12 +79,13 @@ const SAMPLES: { store: string; items: string[]; total: number; category: Catego
     ],
     total: 73.36,
     category: 'Meals & Entertainment',
+    notes: 'Weekly grocery run — paid with joint card',
   },
-  { store: 'Shell', items: ['Unleaded 12.4 gal  48.20', 'Car wash  9.00'], total: 57.2, category: 'Vehicle Expenses' },
-  { store: 'Blue Bottle Coffee', items: ['Latte  5.75', 'Croissant  4.25'], total: 10.0, category: 'Meals & Entertainment' },
-  { store: 'Office Depot', items: ['Copy paper 5-ream  42.99', 'Pens 12pk  8.49'], total: 51.48, category: 'Office Supplies' },
-  { store: 'Delta Air Lines', items: ['SFO-JFK economy  318.40'], total: 318.4, category: 'Travel & Transit' },
-  { store: 'Adobe', items: ['Creative Cloud, 1 mo  59.99'], total: 59.99, category: 'Software & IT' },
+  { store: 'Shell', items: ['Unleaded 12.4 gal  48.20', 'Car wash  9.00'], total: 57.2, category: 'Vehicle Expenses', notes: '' },
+  { store: 'Blue Bottle Coffee', items: ['Latte  5.75', 'Croissant  4.25'], total: 10.0, category: 'Meals & Entertainment', notes: 'Client catch-up — reimburse' },
+  { store: 'Office Depot', items: ['Copy paper 5-ream  42.99', 'Pens 12pk  8.49'], total: 51.48, category: 'Office Supplies', notes: '' },
+  { store: 'Delta Air Lines', items: ['SFO-JFK economy  318.40'], total: 318.4, category: 'Travel & Transit', notes: 'Q3 client visit' },
+  { store: 'Adobe', items: ['Creative Cloud, 1 mo  59.99'], total: 59.99, category: 'Software & IT', notes: '' },
 ];
 
 const pick = <T,>(xs: readonly T[]) => xs[Math.floor(Math.random() * xs.length)];
@@ -115,7 +116,7 @@ export const mockExtractClient: ExtractClient = {
       items: s.items,
       total: s.total,
       category: s.category,
-      handwritten_notes: Math.random() < 0.25 ? 'client lunch — reimburse' : '',
+      handwritten_notes: s.notes,
     };
   },
 };
