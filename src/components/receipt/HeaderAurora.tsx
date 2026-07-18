@@ -9,7 +9,7 @@
  * items. Purely decorative — it sits behind the text.
  */
 import React from 'react';
-import { Blur, Canvas, Circle, Fill, Group, LinearGradient, RadialGradient, Rect, vec } from '@shopify/react-native-skia';
+import { Blur, Canvas, Circle, Fill, Group, LinearGradient, Paint, RadialGradient, Rect, vec } from '@shopify/react-native-skia';
 
 type Blob = { cx: number; cy: number; r: number; color: string };
 
@@ -31,7 +31,13 @@ export function HeaderAurora({ width, height }: { width: number; height: number 
     <Canvas style={{ width, height }} pointerEvents="none">
       <Fill color="#FFFFFF" />
 
-      <Group layer={<Blur blur={width * 0.06} />}>
+      <Group
+        layer={
+          <Paint>
+            <Blur blur={width * 0.06} />
+          </Paint>
+        }
+      >
         {BLOBS.map((b, i) => {
           const cx = b.cx * width;
           const cy = b.cy * height;
