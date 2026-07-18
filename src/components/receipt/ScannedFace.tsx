@@ -1,88 +1,75 @@
 /**
- * ScannedFace — the printed face of a scanned receipt, shown on ReceiptCard's
- * paper `bare` variant (no glass: a receipt photo is mostly bright paper, and
- * frost over it reads flat — HANDOFF rule 6).
+ * ScannedFace — the scanned receipt.
  *
- * Renders the 6 contract fields: store, date, items, total, category,
- * handwritten notes. With `loading`, the same layout renders as a skeleton so
- * the wait reads as the receipt developing rather than a spinner.
+ * One card, not two: a tinted header region (store + date) sits directly on the
+ * white body (items / total / notes / category) with NO radius or gap at the
+ * seam, so they read as a single sheet — rounded top, torn bottom. Grey-only
+ * hierarchy (weights, tracking, tabular numerals) per the design tokens.
  *
- * Long receipts don't get their own card. The card is a confirmation surface —
- * "right store, right total?" — not a document viewer, so it stays one fixed
- * size and one typography whether you scanned a coffee or a grocery run. The
- * item area caps at MAX_ROWS: at or under, every item lists; over, the last
- * row becomes a count. That costs one row, only when it's needed, and the card
- * never claims to have captured less than it did. The full list is in the edit
- * sheet, which owns the screen and can scroll without fighting the swipe.
- *
- * Sizes take the card's scale `s` (= width / 300), like the rest of the card.
+ * The card shares one ring + one soft shadow (shadow on an outer wrapper, ring
+ * on an inner overflow-hidden clip so the top corners round cleanly).
+ * Sizes take the card's scale `s` (= width / 300).
  */
-import React, { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { BlurView } from 'expo-blur';
-import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
+import React from 'react';
+import { StyleSheet, Text, View, type BoxShadowValue } from 'react-native';
 
-import { HeaderAurora } from '@/components/receipt/HeaderAurora';
-import { colors, fontFamily } from '@/theme/tokens';
+import { TornEdge } from '@/components/receipt/TornEdge';
+import { fontFamily } from '@/theme/tokens';
 import type { ReceiptFields } from '@/lib/receipts/types';
 
-const GLASS = isLiquidGlassAvailable();
+/** Spec greys (Tailwind scale) — kept local so the receipt matches the spec exactly. */
+const GRAY = {
+  900: '#111827',
+  700: '#374151',
+  500: '#6B7280',
+  400: '#9CA3AF',
+  200: '#E5E7EB',
+  100: '#F3F4F6',
+  50: '#F9FAFB',
+  ring: 'rgba(17,24,39,0.06)', // gray-900/6
+} as const;
 
 /**
- * The category chip as an Apple liquid-glass button — the `clear` +
- * `isInteractive` UIGlassEffect (iOS 26+), which is the real Liquid Glass
- * material rather than a plain frost; expo-blur is the fallback. A faint tint
- * keeps it legible on the white card. overflow:hidden clips the glass, so the
- * shadow lives on an outer wrapper (HANDOFF rule 6).
+ * Header tint experiment: step 1 = off-white (#F9FAFB) → step 6 = silver
+ * (#C0C4CB), evenly interpolated. Steps: 1 #F9FAFB · 2 #EEEFF1 · 3 #E2E4E8 ·
+ * 4 #D7DADE · 5 #CCCFD5 · 6 #C0C4CB.
  */
-function CategoryPill({ label, s }: { label: string; s: number }) {
-  return (
-    <View style={styles.pillShadow}>
-      <View style={[styles.pill, { paddingHorizontal: 15 * s, paddingVertical: 8 * s, borderRadius: 999 }]}>
-        {GLASS ? (
-          <GlassView
-            style={StyleSheet.absoluteFill}
-            glassEffectStyle="clear"
-            isInteractive
-            tintColor="rgba(255,255,255,0.28)"
-            colorScheme="light"
-          />
-        ) : (
-          <>
-            <BlurView intensity={24} tint="light" style={StyleSheet.absoluteFill} />
-            <View style={[StyleSheet.absoluteFill, styles.pillTint]} pointerEvents="none" />
-          </>
-        )}
-        <Text numberOfLines={1} style={{ fontFamily: fontFamily.semibold, fontSize: 11.5 * s, color: colors.textPrimary }}>
-          {label}
-        </Text>
-      </View>
-    </View>
-  );
-}
+const HEADER_TINT = '#ECEDEF'; // step 2.2
+const HEADER_LIGHT = '#F1F2F4'; // the reflection band (subtle)
 
-// Padding of ReceiptCard's bare-with-children body — the header bleeds by these
-// to reach the card edges (kept in sync with ui/ReceiptCard.tsx).
-const CARD_PAD_X = 18;
-const CARD_PAD_TOP = 16;
+// A 45° gradient (bottom-left → top-right) that holds the base, brightens
+// through a thick middle band, then returns to base — one diagonal light streak.
+const HEADER_GRADIENT = [
+  {
+    type: 'linear-gradient' as const,
+    direction: '45deg',
+    colorStops: [
+      { color: HEADER_TINT, positions: ['0%'] },
+      { color: HEADER_TINT, positions: ['34%'] },
+      { color: HEADER_LIGHT, positions: ['50%'] },
+      { color: HEADER_TINT, positions: ['66%'] },
+      { color: HEADER_TINT, positions: ['100%'] },
+    ],
+  },
+];
 
 /** Items shown before the rest collapse into a "+N more" row. */
 const MAX_ITEMS = 4;
 
+/** Wide, soft, diffuse card shadow (spec: 0 12px 40px rgba(0,0,0,0.06)). */
+const softShadow = (s: number): BoxShadowValue[] => [
+  { offsetX: 0, offsetY: 12 * s, blurRadius: 40 * s, color: 'rgba(0,0,0,0.06)' },
+];
+
 const money = (n: number) => n.toFixed(2);
 
-/**
- * The contract gives each item as one string ("Organic bananas 1.2 lb  1.74").
- * Split off a trailing price so the row can render name-left / price-right like
- * the Figma. No trailing price → the whole line is the name.
- */
+/** Split a trailing price off an item string; no price → the line is the name. */
 function parseItem(line: string): { name: string; price: string } {
   const m = line.match(/^(.*?)[\s]+\$?(\d[\d,]*\.\d{2})$/);
   if (!m) return { name: line.trim(), price: '' };
   return { name: m[1].trim(), price: m[2] };
 }
 
-/** Items to print (at most MAX_ITEMS), plus how many are left over. */
 function visibleItems(items: string[]): { shown: string[]; hidden: number } {
   if (items.length <= MAX_ITEMS) return { shown: items, hidden: 0 };
   return { shown: items.slice(0, MAX_ITEMS), hidden: items.length - MAX_ITEMS };
@@ -97,192 +84,141 @@ function prettyDate(iso: string | null): string {
   return `${d} ${MONTHS[m - 1]} ${y}`;
 }
 
-function Bar({ w, s }: { w: number | `${number}%`; s: number }) {
-  return <View style={{ width: w, height: 9 * s, borderRadius: 5 * s, backgroundColor: colors.border }} />;
+function Bar({ w, s, h = 9 }: { w: number | `${number}%`; s: number; h?: number }) {
+  return <View style={{ width: w, height: h * s, borderRadius: 5 * s, backgroundColor: GRAY[100] }} />;
 }
 
-export function ScannedFace({ s, fields, loading = false }: { s: number; fields?: ReceiptFields | null; loading?: boolean }) {
-  const { shown, hidden } = visibleItems(fields?.items ?? []);
-  const [header, setHeader] = useState({ w: 0, h: 0 });
+function Eyebrow({ children, s }: { children: string; s: number }) {
+  return (
+    <Text style={{ fontFamily: fontFamily.display, fontSize: 10 * s, letterSpacing: 1.5 * s, color: GRAY[400] }}>
+      {children}
+    </Text>
+  );
+}
 
-  const bleedX = CARD_PAD_X * s;
-  const bleedTop = CARD_PAD_TOP * s;
-  // How far the white body card rides up over the gradient header card.
-  const OVERLAP = 16 * s;
+export function ScannedFace({ width, fields, loading = false }: { width: number; fields?: ReceiptFields | null; loading?: boolean }) {
+  const s = width / 300;
+  const r = 20 * s;
+  const { shown, hidden } = visibleItems(fields?.items ?? []);
+  const busy = loading || !fields;
 
   return (
-    <View style={styles.root}>
-      {/* Header card — store + date over the pastel aurora mesh (Figma 22:4).
-          The BACK card: bleeds to the paper edges, and the white body card below
-          overlaps its lower edge to read as one sheet laid over another. */}
-      <View
-        onLayout={(e) => {
-          const { width, height } = e.nativeEvent.layout;
-          setHeader((p) => (p.w === width && p.h === height ? p : { w: width, h: height }));
-        }}
-        style={{
-          marginTop: -bleedTop,
-          marginHorizontal: -bleedX,
-          paddingTop: bleedTop + 14 * s,
-          // Extra bottom room: the body card overlaps this by OVERLAP.
-          paddingBottom: 14 * s + OVERLAP,
-          paddingHorizontal: bleedX,
-          borderTopLeftRadius: 8 * s,
-          borderTopRightRadius: 8 * s,
-          overflow: 'hidden',
-        }}
-      >
-        <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          <HeaderAurora width={header.w} height={header.h} />
-        </View>
-
-        {loading || !fields ? (
-          <View style={{ alignItems: 'center', gap: 7 * s }}>
-            <Bar w="62%" s={s} />
-            <Bar w="34%" s={s} />
-          </View>
-        ) : (
-          <>
-            <Text
-              numberOfLines={1}
-              style={{ fontFamily: fontFamily.display, fontSize: 24 * s, color: colors.textPrimary, textAlign: 'center', letterSpacing: -0.4 * s }}
-            >
-              {fields.store || 'Unknown store'}
-            </Text>
-            <Text
-              style={{
-                fontFamily: fontFamily.semibold,
-                fontSize: 12.5 * s,
-                color: colors.textSecondary,
-                opacity: 0.7,
-                textAlign: 'center',
-                marginTop: 4 * s,
-              }}
-            >
-              {prettyDate(fields.date)}
-            </Text>
-          </>
-        )}
-      </View>
-
-      {/* Body card — the FRONT card. Pulled up over the header by OVERLAP with
-          rounded top corners + an upward shadow, so it reads as placed on top;
-          the header's gradient shows through the two corner notches. */}
-      <View
-        style={[
-          styles.bodyCard,
-          {
-            marginTop: -OVERLAP,
-            marginHorizontal: -bleedX,
-            paddingHorizontal: bleedX,
-            paddingTop: 16 * s,
-            // Match the outer receipt card's top corner radius (8 * s).
-            borderTopLeftRadius: 8 * s,
-            borderTopRightRadius: 8 * s,
-          },
-        ]}
-      >
-      {/* Items */}
-      <View style={[styles.section, { gap: 8 * s }]}>
-        <Text style={[styles.label, { fontSize: 12 * s, letterSpacing: 0.8 * s }]}>ITEMS</Text>
-        <View style={{ gap: 7 * s }}>
-          {loading || !fields ? (
-            [0, 1, 2].map((i) => (
-              <View key={i} style={styles.itemRow}>
-                <Bar w={i === 2 ? '45%' : '62%'} s={s} />
-                <Bar w={40 * s} s={s} />
+    <View style={{ width }}>
+      {/* Shadow on the outer wrapper; ring + rounded top on the clip. */}
+      <View style={{ borderTopLeftRadius: r, borderTopRightRadius: r, boxShadow: softShadow(s) }}>
+        <View style={[styles.clip, { borderTopLeftRadius: r, borderTopRightRadius: r }]}>
+          {/* Header region — tinted, no radius at the seam. */}
+          <View style={{ backgroundColor: HEADER_TINT, experimental_backgroundImage: HEADER_GRADIENT, paddingVertical: 14 * s, paddingHorizontal: 18 * s, alignItems: 'center' }}>
+            {busy ? (
+              <View style={{ alignItems: 'center', gap: 7 * s }}>
+                <Bar w="60%" s={s} h={12} />
+                <Bar w="34%" s={s} />
               </View>
-            ))
-          ) : (
-            <>
-              {shown.map((line, i) => {
-                const { name, price } = parseItem(line);
-                return (
-                  <View key={`${line}-${i}`} style={styles.itemRow}>
-                    <Text numberOfLines={1} style={[styles.itemName, { fontSize: 15 * s }]}>
-                      {name}
-                    </Text>
-                    {price ? <Text style={[styles.itemPrice, { fontSize: 15 * s }]}>${price}</Text> : null}
+            ) : (
+              <>
+                <Text
+                  numberOfLines={1}
+                  style={{ fontFamily: fontFamily.display, fontSize: 22 * s, color: GRAY[900], letterSpacing: 0.6 * s }}
+                >
+                  {fields.store || 'Unknown store'}
+                </Text>
+                <Text
+                  style={{ fontFamily: fontFamily.semibold, fontSize: 12 * s, color: GRAY[500], marginTop: 3 * s, letterSpacing: 1 * s }}
+                >
+                  {prettyDate(fields.date)}
+                </Text>
+              </>
+            )}
+          </View>
+
+          {/* Body region — white, flush under the header. */}
+          <View style={{ backgroundColor: '#FFFFFF', paddingHorizontal: 18 * s, paddingTop: 16 * s, paddingBottom: 14 * s }}>
+            {/* Items */}
+            <Eyebrow s={s}>ITEMS</Eyebrow>
+            <View style={{ marginTop: 8 * s, gap: 7 * s }}>
+              {busy ? (
+                [0, 1, 2].map((i) => (
+                  <View key={i} style={styles.itemRow}>
+                    <Bar w={i === 2 ? '45%' : '62%'} s={s} />
+                    <Bar w={40 * s} s={s} />
                   </View>
-                );
-              })}
-              {hidden > 0 && (
-                <Text style={{ fontFamily: fontFamily.semibold, fontSize: 14 * s, color: colors.textFaint }}>
-                  +{hidden} more
+                ))
+              ) : (
+                <>
+                  {shown.map((line, i) => {
+                    const { name, price } = parseItem(line);
+                    return (
+                      <View key={`${line}-${i}`} style={styles.itemRow}>
+                        <Text numberOfLines={1} style={{ flex: 1, fontFamily: fontFamily.regular, fontSize: 15 * s, color: GRAY[900] }}>
+                          {name}
+                        </Text>
+                        {price ? (
+                          <Text style={{ fontFamily: fontFamily.semibold, fontSize: 15 * s, color: GRAY[900], letterSpacing: 1 * s }}>
+                            ${price}
+                          </Text>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                  {hidden > 0 && (
+                    <Text style={{ fontFamily: fontFamily.semibold, fontSize: 13 * s, color: GRAY[400] }}>+{hidden} more</Text>
+                  )}
+                </>
+              )}
+            </View>
+
+            {/* Total — dashed financial divider */}
+            <View style={[styles.dashed, { marginTop: 12 * s, borderTopColor: GRAY[200] }]} />
+            <View style={[styles.totalRow, { marginTop: 12 * s }]}>
+              <Text style={{ fontFamily: fontFamily.display, fontSize: 15 * s, color: GRAY[900], letterSpacing: 0.8 * s }}>Total</Text>
+              {busy ? (
+                <Bar w={80 * s} s={s} h={12} />
+              ) : (
+                <Text style={{ fontFamily: fontFamily.display, fontSize: 17 * s, color: GRAY[900], letterSpacing: 0.6 * s }}>
+                  ${money(fields.total)}
                 </Text>
               )}
-            </>
-          )}
+            </View>
+
+            {/* Notes */}
+            {!busy && fields.handwritten_notes ? (
+              <View style={{ marginTop: 14 * s, gap: 8 * s }}>
+                <Eyebrow s={s}>NOTES</Eyebrow>
+                <Text style={{ fontFamily: fontFamily.regular, fontSize: 13 * s, color: GRAY[500], lineHeight: 18 * s }}>
+                  {fields.handwritten_notes}
+                </Text>
+              </View>
+            ) : null}
+
+            {/* Category — low-contrast tag */}
+            <View style={{ marginTop: 14 * s, alignItems: 'center' }}>
+              {busy ? (
+                <Bar w={96 * s} s={s} h={12} />
+              ) : (
+                <View style={[styles.tag, { paddingHorizontal: 12 * s, paddingVertical: 6 * s, borderRadius: 999, borderColor: GRAY[200] }]}>
+                  <Text numberOfLines={1} style={{ fontFamily: fontFamily.semibold, fontSize: 11.5 * s, color: GRAY[700] }}>
+                    {fields.category}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
         </View>
       </View>
 
-      {/* Total */}
-      <View style={[styles.solidRule, { marginTop: 12 * s }]} />
-      <View style={[styles.totalRow, { marginTop: 12 * s }]}>
-        <Text style={{ fontFamily: fontFamily.display, fontSize: 14 * s, color: colors.textPrimary }}>Total</Text>
-        {loading || !fields ? (
-          <Bar w={80 * s} s={s} />
-        ) : (
-          <Text style={{ fontFamily: fontFamily.display, fontSize: 20.4 * s, color: colors.textPrimary }}>
-            ${money(fields.total)}
-          </Text>
-        )}
-      </View>
-
-      {/* Notes */}
-      {!loading && fields?.handwritten_notes ? (
-        <View style={[styles.section, { marginTop: 14 * s, gap: 8 * s }]}>
-          <Text style={[styles.label, { fontSize: 12 * s, letterSpacing: 0.8 * s }]}>NOTES</Text>
-          <Text style={{ fontFamily: fontFamily.regular, fontSize: 14 * s, color: colors.textSecondary, lineHeight: 19 * s }}>
-            {fields.handwritten_notes}
-          </Text>
-        </View>
-      ) : null}
-
-      {/* Category */}
-      <View style={{ marginTop: 14 * s, alignItems: 'center' }}>
-        {loading || !fields ? <Bar w={96 * s} s={s} /> : <CategoryPill label={fields.category} s={s} />}
-      </View>
+      {/* Torn bottom edge — white teeth flush under the body. */}
+      <View style={{ marginTop: -1 }}>
+        <TornEdge width={width} s={s} color="#FFFFFF" />
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
-  // Front card over the gradient header. White fill so its rounded top clips
-  // against the header; the upward shadow makes it read as lifted on top.
-  bodyCard: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 9,
-    shadowOffset: { width: 0, height: -3 },
-    elevation: 6,
-  },
-  solidRule: { borderBottomWidth: 1, borderColor: colors.border },
-  section: { alignSelf: 'stretch' },
-  label: { fontFamily: fontFamily.display, color: colors.textFaint },
+  // 1px ring on the whole card; bottom open so the teeth attach seamlessly.
+  clip: { overflow: 'hidden', borderWidth: 1, borderBottomWidth: 0, borderColor: GRAY.ring },
   itemRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  itemName: { flex: 1, fontFamily: fontFamily.regular, color: colors.textPrimary },
-  itemPrice: { fontFamily: fontFamily.semibold, color: colors.textPrimary, textAlign: 'right' },
   totalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  // Frosted-glass category pill: overflow-hidden body clips the frost; the
-  // shadow rides an outer wrapper since the two can't coexist.
-  pillShadow: {
-    alignSelf: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  pill: {
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.6)',
-  },
-  pillTint: { backgroundColor: 'rgba(244,245,247,0.35)' },
+  dashed: { borderTopWidth: 1, borderStyle: 'dashed' },
+  tag: { alignSelf: 'center', backgroundColor: GRAY[50], borderWidth: 1 },
 });

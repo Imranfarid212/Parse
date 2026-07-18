@@ -41,10 +41,9 @@ import { EditSheet } from '@/components/receipt/EditSheet';
 import { folderHeight } from '@/components/receipt/folder/geometry';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { ScannedFace } from '@/components/receipt/ScannedFace';
-import { ReceiptCard } from '@/components/ui/ReceiptCard';
 import type { ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
-import { colors, fontFamily, spacing } from '@/theme/tokens';
+import { fontFamily, spacing } from '@/theme/tokens';
 
 const CONFIRM_DY = 80;
 const CONFIRM_VY = 800;
@@ -91,7 +90,6 @@ export function ReceiptReview({
   const [editing, setEditing] = useState(false);
 
   const cardW = Math.min(width * 0.72, 290);
-  const cardH = Math.min(height * 0.52, 430);
 
   // Folder sits top-left; the flight runs from the card's centre to its mouth.
   const folderH = folderHeight(FOLDER_W);
@@ -229,9 +227,9 @@ export function ReceiptReview({
 
   return (
     <View style={styles.root}>
-      {/* Frozen frame, blurred back so the paper card is the only thing in focus. */}
+      {/* Frozen frame, blurred back so the card is the only thing in focus. */}
       <Image source={{ uri: photoUri }} style={styles.fill} contentFit="cover" />
-      <BlurView intensity={60} tint="dark" style={styles.fill} />
+      <BlurView intensity={80} tint="dark" style={styles.fill} />
       <View style={styles.scrim} />
 
       <Animated.View style={[styles.folder, { left: folderLeft, top: folderTop }, folderStyle]}>
@@ -241,7 +239,7 @@ export function ReceiptReview({
       <View style={styles.centre} pointerEvents="box-none">
         <GestureDetector gesture={pan}>
           <Animated.View
-            style={[{ width: cardW, height: cardH }, cardStyle]}
+            style={[{ width: cardW }, cardStyle]}
             accessible
             accessibilityRole="summary"
             accessibilityLabel={
@@ -257,9 +255,7 @@ export function ReceiptReview({
               if (e.nativeEvent.actionName === 'edit') openEdit();
             }}
           >
-            <ReceiptCard width={cardW} height={cardH} bare>
-              {(s) => <ScannedFace s={s} fields={fields} loading={loading} />}
-            </ReceiptCard>
+            <ScannedFace width={cardW} fields={fields} loading={loading} />
           </Animated.View>
         </GestureDetector>
 
