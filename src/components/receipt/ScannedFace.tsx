@@ -17,11 +17,17 @@
  *
  * Sizes take the card's scale `s` (= width / 300), like the rest of the card.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { HeaderAurora } from '@/components/receipt/HeaderAurora';
 import { colors, fontFamily } from '@/theme/tokens';
 import type { ReceiptFields } from '@/lib/receipts/types';
+
+// Padding of ReceiptCard's bare-with-children body — the header bleeds by these
+// to reach the card edges (kept in sync with ui/ReceiptCard.tsx).
+const CARD_PAD_X = 18;
+const CARD_PAD_TOP = 16;
 
 /** Rows the item area can hold. The last is spent on the count only if needed. */
 const MAX_ROWS = 6;
@@ -49,33 +55,59 @@ function Bar({ w, s }: { w: number | `${number}%`; s: number }) {
 
 export function ScannedFace({ s, fields, loading = false }: { s: number; fields?: ReceiptFields | null; loading?: boolean }) {
   const { shown, hidden } = visibleItems(fields?.items ?? []);
+  const [header, setHeader] = useState({ w: 0, h: 0 });
+
+  const bleedX = CARD_PAD_X * s;
+  const bleedTop = CARD_PAD_TOP * s;
 
   return (
     <View style={styles.root}>
-      {/* Store + date */}
-      {loading || !fields ? (
-        <View style={{ alignItems: 'center', gap: 7 * s }}>
-          <Bar w="62%" s={s} />
-          <Bar w="34%" s={s} />
+      {/* Header — store + date over the pastel aurora mesh (Figma 22:4).
+          Bleeds by the card's padding so the mesh reaches the paper edges. */}
+      <View
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          setHeader((p) => (p.w === width && p.h === height ? p : { w: width, h: height }));
+        }}
+        style={{
+          marginTop: -bleedTop,
+          marginHorizontal: -bleedX,
+          paddingTop: bleedTop + 14 * s,
+          paddingBottom: 12 * s,
+          paddingHorizontal: bleedX,
+          borderTopLeftRadius: 8 * s,
+          borderTopRightRadius: 8 * s,
+          overflow: 'hidden',
+          borderBottomWidth: 1,
+          borderBottomColor: colors.border,
+        }}
+      >
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <HeaderAurora width={header.w} height={header.h} />
         </View>
-      ) : (
-        <>
-          <Text
-            numberOfLines={1}
-            style={{ fontFamily: fontFamily.display, fontSize: 20 * s, color: colors.textPrimary, textAlign: 'center' }}
-          >
-            {fields.store || 'Unknown store'}
-          </Text>
-          <Text style={{ fontFamily: fontFamily.regular, fontSize: 11 * s, color: colors.textFaint, textAlign: 'center', marginTop: 3 * s }}>
-            {prettyDate(fields.date)}
-          </Text>
-        </>
-      )}
 
-      <View style={[styles.dash, { marginTop: 12 * s }]} />
+        {loading || !fields ? (
+          <View style={{ alignItems: 'center', gap: 7 * s }}>
+            <Bar w="62%" s={s} />
+            <Bar w="34%" s={s} />
+          </View>
+        ) : (
+          <>
+            <Text
+              numberOfLines={1}
+              style={{ fontFamily: fontFamily.display, fontSize: 20 * s, color: colors.textPrimary, textAlign: 'center' }}
+            >
+              {fields.store || 'Unknown store'}
+            </Text>
+            <Text style={{ fontFamily: fontFamily.regular, fontSize: 11 * s, color: colors.textFaint, textAlign: 'center', marginTop: 3 * s }}>
+              {prettyDate(fields.date)}
+            </Text>
+          </>
+        )}
+      </View>
 
       {/* Items */}
-      <View style={[styles.items, { marginTop: 10 * s, gap: 7 * s }]}>
+      <View style={[styles.items, { marginTop: 12 * s, gap: 7 * s }]}>
         {loading || !fields ? (
           [0, 1, 2].map((i) => <Bar key={i} w={i === 2 ? '55%' : '80%'} s={s} />)
         ) : (
