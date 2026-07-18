@@ -16,11 +16,11 @@ type Blob = { cx: number; cy: number; r: number; color: string };
 // Centres/radii are fractions of the header box; colours are pastel-on-white,
 // spread green → blue → violet left to right to read as one horizontal wash.
 const BLOBS: Blob[] = [
-  { cx: 0.28, cy: 0.72, r: 0.62, color: 'rgba(92,198,148,0.72)' }, // green, lower-left
-  { cx: 0.16, cy: 0.28, r: 0.5, color: 'rgba(120,176,220,0.5)' }, // blue, upper-left
-  { cx: 0.6, cy: 0.4, r: 0.56, color: 'rgba(176,150,226,0.58)' }, // violet, centre-right
-  { cx: 0.84, cy: 0.66, r: 0.54, color: 'rgba(150,168,236,0.55)' }, // periwinkle, right
-  { cx: 0.5, cy: 0.14, r: 0.42, color: 'rgba(158,206,206,0.4)' }, // teal wash, top
+  { cx: 0.28, cy: 0.72, r: 0.62, color: 'rgba(42,158,108,0.82)' }, // green, lower-left
+  { cx: 0.16, cy: 0.28, r: 0.5, color: 'rgba(58,128,196,0.62)' }, // blue, upper-left
+  { cx: 0.6, cy: 0.4, r: 0.56, color: 'rgba(138,104,206,0.7)' }, // violet, centre-right
+  { cx: 0.84, cy: 0.66, r: 0.54, color: 'rgba(102,124,214,0.66)' }, // periwinkle, right
+  { cx: 0.5, cy: 0.14, r: 0.42, color: 'rgba(96,178,178,0.52)' }, // teal wash, top
 ];
 
 export function HeaderAurora({ width, height }: { width: number; height: number }) {

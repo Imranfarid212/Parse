@@ -34,6 +34,17 @@ const MAX_ROWS = 6;
 
 const money = (n: number) => n.toFixed(2);
 
+/**
+ * The contract gives each item as one string ("Organic bananas 1.2 lb  1.74").
+ * Split off a trailing price so the row can render name-left / price-right like
+ * the Figma. No trailing price → the whole line is the name.
+ */
+function parseItem(line: string): { name: string; price: string } {
+  const m = line.match(/^(.*?)[\s]+\$?(\d[\d,]*\.\d{2})$/);
+  if (!m) return { name: line.trim(), price: '' };
+  return { name: m[1].trim(), price: m[2] };
+}
+
 /** Items to print, plus how many are left over. */
 function visibleItems(items: string[]): { shown: string[]; hidden: number } {
   if (items.length <= MAX_ROWS) return { shown: items, hidden: 0 };
@@ -95,11 +106,20 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
           <>
             <Text
               numberOfLines={1}
-              style={{ fontFamily: fontFamily.display, fontSize: 20 * s, color: colors.textPrimary, textAlign: 'center' }}
+              style={{ fontFamily: fontFamily.display, fontSize: 24 * s, color: colors.textPrimary, textAlign: 'center', letterSpacing: -0.4 * s }}
             >
               {fields.store || 'Unknown store'}
             </Text>
-            <Text style={{ fontFamily: fontFamily.regular, fontSize: 11 * s, color: colors.textFaint, textAlign: 'center', marginTop: 3 * s }}>
+            <Text
+              style={{
+                fontFamily: fontFamily.semibold,
+                fontSize: 12.5 * s,
+                color: colors.textSecondary,
+                opacity: 0.7,
+                textAlign: 'center',
+                marginTop: 4 * s,
+              }}
+            >
               {prettyDate(fields.date)}
             </Text>
           </>
@@ -107,78 +127,87 @@ export function ScannedFace({ s, fields, loading = false }: { s: number; fields?
       </View>
 
       {/* Items */}
-      <View style={[styles.items, { marginTop: 12 * s, gap: 7 * s }]}>
-        {loading || !fields ? (
-          [0, 1, 2].map((i) => <Bar key={i} w={i === 2 ? '55%' : '80%'} s={s} />)
-        ) : (
-          <>
-            {shown.map((line, i) => (
-              <Text
-                key={`${line}-${i}`}
-                numberOfLines={1}
-                style={{ fontFamily: fontFamily.regular, fontSize: 11 * s, color: colors.textSecondary }}
-              >
-                {line}
-              </Text>
-            ))}
-            {hidden > 0 && (
-              <Text style={{ fontFamily: fontFamily.semibold, fontSize: 11 * s, color: colors.textFaint }}>
-                +{hidden} more
-              </Text>
-            )}
-          </>
-        )}
+      <View style={[styles.section, { marginTop: 14 * s, gap: 8 * s }]}>
+        <Text style={[styles.label, { fontSize: 10 * s, letterSpacing: 0.8 * s }]}>ITEMS</Text>
+        <View style={{ gap: 7 * s }}>
+          {loading || !fields ? (
+            [0, 1, 2].map((i) => (
+              <View key={i} style={styles.itemRow}>
+                <Bar w={i === 2 ? '45%' : '62%'} s={s} />
+                <Bar w={40 * s} s={s} />
+              </View>
+            ))
+          ) : (
+            <>
+              {shown.map((line, i) => {
+                const { name, price } = parseItem(line);
+                return (
+                  <View key={`${line}-${i}`} style={styles.itemRow}>
+                    <Text numberOfLines={1} style={[styles.itemName, { fontSize: 13 * s }]}>
+                      {name}
+                    </Text>
+                    {price ? <Text style={[styles.itemPrice, { fontSize: 13 * s }]}>${price}</Text> : null}
+                  </View>
+                );
+              })}
+              {hidden > 0 && (
+                <Text style={{ fontFamily: fontFamily.semibold, fontSize: 12 * s, color: colors.textFaint }}>
+                  +{hidden} more
+                </Text>
+              )}
+            </>
+          )}
+        </View>
       </View>
 
-      <View style={styles.spacer} />
-
       {/* Total */}
-      <View style={[styles.dash, { marginBottom: 8 * s }]} />
-      <View style={styles.totalRow}>
-        <Text style={{ fontFamily: fontFamily.semibold, fontSize: 10 * s, letterSpacing: 1 * s, color: colors.textFaint }}>
-          TOTAL
-        </Text>
-        <View style={styles.spacer} />
+      <View style={[styles.solidRule, { marginTop: 12 * s }]} />
+      <View style={[styles.totalRow, { marginTop: 12 * s }]}>
+        <Text style={{ fontFamily: fontFamily.display, fontSize: 14 * s, color: colors.textPrimary }}>Total</Text>
         {loading || !fields ? (
-          <Bar w={64 * s} s={s} />
+          <Bar w={80 * s} s={s} />
         ) : (
-          <Text style={{ fontFamily: fontFamily.display, fontSize: 22 * s, color: colors.textPrimary }}>
-            {money(fields.total)}
+          <Text style={{ fontFamily: fontFamily.display, fontSize: 24 * s, color: colors.textPrimary }}>
+            ${money(fields.total)}
           </Text>
         )}
       </View>
 
-      {/* Category + handwritten notes */}
-      <View style={[styles.metaRow, { marginTop: 10 * s }]}>
+      {/* Notes */}
+      {!loading && fields?.handwritten_notes ? (
+        <View style={[styles.section, { marginTop: 14 * s, gap: 8 * s }]}>
+          <Text style={[styles.label, { fontSize: 10 * s, letterSpacing: 0.8 * s }]}>NOTES</Text>
+          <Text style={{ fontFamily: fontFamily.regular, fontSize: 12 * s, color: colors.textSecondary, lineHeight: 17 * s }}>
+            {fields.handwritten_notes}
+          </Text>
+        </View>
+      ) : null}
+
+      {/* Category */}
+      <View style={{ marginTop: 14 * s, alignItems: 'center' }}>
         {loading || !fields ? (
           <Bar w={96 * s} s={s} />
         ) : (
-          <View style={[styles.chip, { paddingHorizontal: 8 * s, paddingVertical: 4 * s, borderRadius: 999 }]}>
-            <Text numberOfLines={1} style={{ fontFamily: fontFamily.semibold, fontSize: 9.5 * s, color: colors.ctaText }}>
+          <View style={[styles.chip, { paddingHorizontal: 14 * s, paddingVertical: 7 * s, borderRadius: 999 }]}>
+            <Text numberOfLines={1} style={{ fontFamily: fontFamily.semibold, fontSize: 11.5 * s, color: colors.textPrimary }}>
               {fields.category}
             </Text>
           </View>
         )}
       </View>
-
-      {!loading && fields?.handwritten_notes ? (
-        <Text
-          numberOfLines={2}
-          style={{ marginTop: 8 * s, fontFamily: fontFamily.regular, fontSize: 10 * s, color: colors.textFaint, textAlign: 'center' }}
-        >
-          “{fields.handwritten_notes}”
-        </Text>
-      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  dash: { borderBottomWidth: 1, borderStyle: 'dashed', borderColor: colors.border },
-  items: { alignSelf: 'stretch' },
-  spacer: { flex: 1 },
-  totalRow: { flexDirection: 'row', alignItems: 'flex-end' },
-  metaRow: { flexDirection: 'row', justifyContent: 'center' },
-  chip: { backgroundColor: colors.accent, alignSelf: 'center' },
+  solidRule: { borderBottomWidth: 1, borderColor: colors.border },
+  section: { alignSelf: 'stretch' },
+  label: { fontFamily: fontFamily.display, color: colors.textFaint },
+  itemRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  itemName: { flex: 1, fontFamily: fontFamily.regular, color: colors.textPrimary },
+  itemPrice: { fontFamily: fontFamily.semibold, color: colors.textPrimary, textAlign: 'right' },
+  totalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  // Light zinc pill with a hairline border, dark label — matches Figma 22:4.
+  chip: { backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: colors.border },
 });
