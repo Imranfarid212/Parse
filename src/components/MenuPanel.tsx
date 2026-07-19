@@ -13,6 +13,7 @@ import { BlurView } from 'expo-blur';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
+import { ExportScreen } from '@/components/menu/ExportScreen';
 import { SettingsScreen } from '@/components/menu/SettingsScreen';
 import { SearchView } from '@/components/search/SearchView';
 import { colors, radius, spacing, typography } from '@/theme/tokens';
@@ -85,7 +86,9 @@ export function MenuPanel({ onClose }: { onClose: () => void }) {
       </View>
 
       <View style={styles.content}>
-        {active === 1 ? (
+        {active === 0 ? (
+          <ExportScreen />
+        ) : active === 1 ? (
           <SearchView />
         ) : active === 3 ? (
           <SettingsScreen />

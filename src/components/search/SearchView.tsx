@@ -1,20 +1,21 @@
 /**
- * SearchView — the Search tab content: a search bar, then either the fan
- * carousel ("Card view") or a plain list ("List view"), chosen by a small
- * glass toggle at the bottom. Rule: when results exceed 7, the system forces
- * List view and disables the toggle (card fan only supports up to 7).
+ * SearchView — the Search tab content. A header row (a "filter" pill on the
+ * left, a Card/List view toggle on the right), a search bar, then the results:
+ * the fan carousel ("Card view") or a plain list ("List view"). When a query
+ * matches nothing, the sleuth-dog empty state shows instead. Rule: when results
+ * exceed 7, the system forces List view and disables the toggle (the card fan
+ * only supports up to 7).
  */
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
-import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { Feather, Ionicons } from '@expo/vector-icons';
+import Animated, { FadeIn } from 'react-native-reanimated';
 
+import { GRAY, Toggle } from '@/components/menu/primitives';
 import { FanCarousel, type FanItem } from '@/components/search/FanCarousel';
+import { SleuthDog } from '@/components/search/SleuthDog';
 import { colors, radius, spacing, typography } from '@/theme/tokens';
 
-const GLASS = isLiquidGlassAvailable();
 const MAX_FAN = 7;
 
 // 7 dummy receipts for testing the carousel.
@@ -28,68 +29,45 @@ const DUMMY: FanItem[] = [
   { id: 6, total: '58.10' },
 ];
 
-function CardListToggle({ mode, onChange, disabled }: { mode: 'card' | 'list'; onChange: (m: 'card' | 'list') => void; disabled: boolean }) {
-  const OPTIONS: { key: 'card' | 'list'; label: string; icon: React.ComponentProps<typeof Ionicons>['name'] }[] = [
-    { key: 'card', label: 'Card view', icon: 'albums-outline' },
-    { key: 'list', label: 'List view', icon: 'list-outline' },
-  ];
-  const width = 220;
-  const pad = 4;
-  const segW = (width - pad * 2) / 2;
-  const activeIndex = mode === 'card' ? 0 : 1;
-  const pos = useSharedValue(activeIndex);
-
-  useEffect(() => {
-    pos.value = withSpring(activeIndex, { damping: 18, stiffness: 200 });
-  }, [activeIndex, pos]);
-
-  const indicator = useAnimatedStyle(() => ({ transform: [{ translateX: pad + pos.value * segW }] }));
-
-  return (
-    <View style={[styles.toggle, { width, opacity: disabled ? 0.5 : 1 }]}>
-      {GLASS ? (
-        <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" colorScheme="light" />
-      ) : (
-        <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
-      )}
-      <Animated.View style={[styles.indicator, { width: segW, height: 38, top: pad }, indicator]}>
-        {GLASS ? (
-          <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="clear" isInteractive colorScheme="light" />
-        ) : (
-          <View style={[StyleSheet.absoluteFill, styles.indicatorSolid]} />
-        )}
-      </Animated.View>
-      <View style={styles.segRow}>
-        {OPTIONS.map((o) => {
-          const on = o.key === mode;
-          return (
-            <Pressable
-              key={o.key}
-              disabled={disabled}
-              onPress={() => onChange(o.key)}
-              style={{ width: segW, height: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-            >
-              <Ionicons name={o.icon} size={16} color={on ? '#111' : colors.textSecondary} />
-              <Text style={[styles.segLabel, on && styles.segLabelActive]}>{o.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-    </View>
-  );
-}
-
 export function SearchView() {
   const { width } = useWindowDimensions();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'card' | 'list'>('card');
 
-  const results = DUMMY; // TODO: real search results
+  // A trimmed query filters the dummy set (by total). Empty query shows all.
+  const results = useMemo(() => {
+    const q = query.trim();
+    if (!q) return DUMMY;
+    return DUMMY.filter((r) => r.total.includes(q));
+  }, [query]);
+
+  const empty = results.length === 0;
   const forceList = results.length > MAX_FAN;
   const effectiveMode = forceList ? 'list' : mode;
 
   return (
     <View style={styles.root}>
+      {/* Header row: filter pill + view toggle */}
+      <View style={[styles.headerRow, { width: width - spacing.lg * 2 }]}>
+        <Pressable style={styles.filterPill} hitSlop={6}>
+          <Text style={styles.filterText}>All Receipts</Text>
+          <Feather name="chevron-down" size={14} color={GRAY[500]} />
+        </Pressable>
+
+        <View style={styles.viewToggle}>
+          <Feather
+            name={effectiveMode === 'card' ? 'grid' : 'list'}
+            size={14}
+            color={GRAY[500]}
+          />
+          <Text style={styles.viewLabel}>{effectiveMode === 'card' ? 'Card view' : 'List view'}</Text>
+          <Toggle
+            value={effectiveMode === 'card'}
+            onValueChange={(v) => !forceList && setMode(v ? 'card' : 'list')}
+          />
+        </View>
+      </View>
+
       {/* Search bar */}
       <View style={[styles.searchBar, { width: width - spacing.lg * 2 }]}>
         <Ionicons name="search" size={18} color={colors.textSecondary} />
@@ -109,7 +87,12 @@ export function SearchView() {
 
       {/* Body */}
       <View style={styles.body}>
-        {effectiveMode === 'card' ? (
+        {empty ? (
+          <Animated.View entering={FadeIn.duration(300)} style={styles.emptyWrap}>
+            <SleuthDog size={240} fadeColor={colors.background} />
+            <Text style={styles.emptyText}>No results found</Text>
+          </Animated.View>
+        ) : effectiveMode === 'card' ? (
           <FanCarousel items={results} />
         ) : (
           <ScrollView style={{ alignSelf: 'stretch' }} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
@@ -125,18 +108,33 @@ export function SearchView() {
           </ScrollView>
         )}
       </View>
-
-      {/* Card / List toggle */}
-      <View style={styles.toggleArea}>
-        <CardListToggle mode={effectiveMode} onChange={setMode} disabled={forceList} />
-        {forceList && <Text style={styles.forcedHint}>List view — more than {MAX_FAN} results</Text>}
-      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, alignItems: 'center' },
+
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  filterPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(120,120,128,0.10)',
+  },
+  filterText: { fontFamily: typography.button.fontFamily, fontSize: 13, color: colors.textPrimary },
+  viewToggle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  viewLabel: { fontFamily: typography.subtitle.fontFamily, fontSize: 12, color: GRAY[500] },
+
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -144,12 +142,17 @@ const styles = StyleSheet.create({
     height: 44,
     paddingHorizontal: spacing.md,
     borderRadius: radius.md,
-    backgroundColor: 'rgba(120,120,128,0.10)',
-    marginTop: spacing.sm,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: GRAY[200],
+    boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 2, color: 'rgba(0,0,0,0.04)' }],
   },
   searchInput: { flex: 1, fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: colors.textPrimary, padding: 0 },
 
   body: { flex: 1, alignSelf: 'stretch', justifyContent: 'center' },
+
+  emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: -40 },
+  emptyText: { fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: GRAY[500], marginTop: -24 },
 
   listRow: {
     flexDirection: 'row',
@@ -162,13 +165,4 @@ const styles = StyleSheet.create({
   listIcon: { width: 32, alignItems: 'center' },
   listLabel: { flex: 1, fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: colors.textPrimary },
   listTotal: { fontFamily: typography.button.fontFamily, fontSize: 15, color: colors.textPrimary },
-
-  toggleArea: { alignItems: 'center', paddingVertical: spacing.md, gap: 6 },
-  toggle: { height: 46, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: 'rgba(120,120,128,0.10)', justifyContent: 'center' },
-  segRow: { flexDirection: 'row', paddingHorizontal: 4 },
-  indicator: { position: 'absolute', left: 0, borderRadius: radius.pill, overflow: 'hidden' },
-  indicatorSolid: { backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: radius.pill },
-  segLabel: { fontFamily: typography.subtitle.fontFamily, fontSize: 13, color: colors.textSecondary },
-  segLabelActive: { color: '#111', fontFamily: typography.button.fontFamily },
-  forcedHint: { fontSize: 11, color: colors.textSecondary },
 });
