@@ -94,12 +94,20 @@ export function Row({
   );
 }
 
-/** Custom pill toggle: grey when off, dark (gray-900) when on. */
-export function Toggle({ value, onValueChange }: { value: boolean; onValueChange: (v: boolean) => void }) {
+/** Custom pill toggle: grey when off, `activeColor` (default gray-900) when on. */
+export function Toggle({
+  value,
+  onValueChange,
+  activeColor = GRAY[900],
+}: {
+  value: boolean;
+  onValueChange: (v: boolean) => void;
+  activeColor?: string;
+}) {
   const p = useDerivedValue(() => withTiming(value ? 1 : 0, { duration: 200 }));
 
   const track = useAnimatedStyle(() => ({
-    backgroundColor: p.value > 0.5 ? GRAY[900] : GRAY[200],
+    backgroundColor: p.value > 0.5 ? activeColor : GRAY[200],
   }));
   const knob = useAnimatedStyle(() => ({ transform: [{ translateX: p.value * 20 }] }));
 

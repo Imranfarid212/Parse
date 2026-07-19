@@ -14,6 +14,7 @@ import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { ExportScreen } from '@/components/menu/ExportScreen';
+import { PlanScreen } from '@/components/menu/PlanScreen';
 import { SettingsScreen } from '@/components/menu/SettingsScreen';
 import { SearchView } from '@/components/search/SearchView';
 import { colors, radius, spacing, typography } from '@/theme/tokens';
@@ -29,6 +30,9 @@ const TABS: { label: string; icon: IconName }[] = [
   { label: 'Plan', icon: 'sparkles-outline' },
   { label: 'Settings', icon: 'settings-outline' },
 ];
+
+/** Header title shown per tab, where it differs from the nav label. */
+const HEADER_TITLE: Record<string, string> = { Plan: 'Subscription' };
 
 function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: number) => void; width: number }) {
   const tabW = (width - PAD * 2) / TABS.length;
@@ -79,7 +83,7 @@ export function MenuPanel({ onClose }: { onClose: () => void }) {
   return (
     <View style={[styles.panel, { paddingTop: insets.top + spacing.sm }]}>
       <View style={styles.header}>
-        <Text style={styles.title}>{TABS[active].label}</Text>
+        <Text style={styles.title}>{HEADER_TITLE[TABS[active].label] ?? TABS[active].label}</Text>
         <Pressable onPress={onClose} hitSlop={12} style={styles.headerBtn}>
           <Ionicons name="close" size={24} color={colors.textPrimary} />
         </Pressable>
@@ -90,12 +94,10 @@ export function MenuPanel({ onClose }: { onClose: () => void }) {
           <ExportScreen />
         ) : active === 1 ? (
           <SearchView />
-        ) : active === 3 ? (
-          <SettingsScreen />
+        ) : active === 2 ? (
+          <PlanScreen />
         ) : (
-          <View style={styles.placeholderWrap}>
-            <Text style={styles.placeholder}>{TABS[active].label} — coming soon</Text>
-          </View>
+          <SettingsScreen />
         )}
       </View>
 
@@ -118,8 +120,6 @@ const styles = StyleSheet.create({
   headerBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   title: { fontFamily: typography.display.fontFamily, fontSize: 22, color: colors.textPrimary },
   content: { flex: 1 },
-  placeholderWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  placeholder: { fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: colors.textSecondary },
 
   toggleArea: { paddingHorizontal: spacing.lg },
   tabsWrap: { borderRadius: radius.pill, overflow: 'hidden', backgroundColor: 'rgba(120,120,128,0.10)', justifyContent: 'center' },
