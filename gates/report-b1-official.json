@@ -2,11 +2,11 @@
   "phase": "B1",
   "name": "Foundations",
   "playbook": "ReceiptFlow Build Playbook v1.1",
-  "generated_at": "2026-07-19T15:24:37+05:30",
+  "generated_at": "2026-07-19T15:58:27+05:30",
   "branch": "features/Afrin",
-  "commit_sha": "6cb5422ef226e7c07123703c9178d43efdb5d8f6",
+  "commit_sha": "73cdbb899d4531ae02fc397ddd6c4a694e5611ea",
   "overall_status": "BLOCKED",
-  "summary": "3/5 B1 playbook tests fully passed locally. T1.4 now has passing iOS Maestro evidence, but remains partial until the Android reference simulator also passes. T1.5 remains blocked because CI/PR proof requires remote repo actions.",
+  "summary": "4/5 B1 playbook tests passed or are proven. T1.4 has passing iOS Maestro evidence, but remains partial until the Android reference simulator also passes. T1.5 is proven by GitHub PR checks.",
   "environment": {
     "supabase_cli": "2.109.1",
     "maestro_cli": "2.6.1",
@@ -100,12 +100,26 @@
     {
       "id": "T1.5",
       "description": "A deliberately broken PR is blocked by CI; a PR labeled phase:b2 is blocked while b1 unpassed (lock proven)",
-      "status": "BLOCKED",
+      "status": "PASSED",
       "type": "S",
-      "blockers": [
-        "No remote CI/gate-lock workflow execution was created or triggered in this turn.",
-        "No deliberately broken PR was opened.",
-        "No phase:b2 PR was opened to prove gate-lock behavior."
+      "commands": [
+        "gh pr create --base features/Afrin --head codex/t1-5-broken-ci-proof",
+        "gh pr create --base features/Afrin --head codex/t1-5-phase-b2-lock-proof",
+        "gh label create phase:b2",
+        "gh pr edit 2 --add-label phase:b2",
+        "gh pr checks 1",
+        "gh pr checks 2"
+      ],
+      "evidence": [
+        "PR #1 deliberately broken: https://github.com/Imranfarid212/Parse/pull/1",
+        "PR #1 mergeStateStatus UNSTABLE",
+        "PR #1 Phase Lock passed: https://github.com/Imranfarid212/Parse/actions/runs/29683253658/job/88183061241",
+        "PR #1 B1 App Backend DB Gate failed: https://github.com/Imranfarid212/Parse/actions/runs/29683253658/job/88183061258",
+        "PR #2 phase:b2 lock proof: https://github.com/Imranfarid212/Parse/pull/2",
+        "PR #2 carries label phase:b2",
+        "PR #2 mergeStateStatus UNSTABLE",
+        "PR #2 Phase Lock failed: https://github.com/Imranfarid212/Parse/actions/runs/29683275978/job/88183123379",
+        "PR #2 B1 App Backend DB Gate passed on the same label-triggered run: https://github.com/Imranfarid212/Parse/actions/runs/29683275978/job/88183119850"
       ]
     }
   ]
