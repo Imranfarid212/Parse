@@ -5,7 +5,7 @@ export type SupabaseHealthResult =
   | { ok: false; reason: string; status?: number; durationMs?: number; environment: string; mockBackend: boolean };
 
 function restUrl(projectUrl: string) {
-  return `${projectUrl.replace(/\/+$/, '')}/rest/v1/`;
+  return `${projectUrl.replace(/\/+$/, '')}/rest/v1/rpc/health_check`;
 }
 
 export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
@@ -24,10 +24,13 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
 
   try {
     const response = await fetch(restUrl(env.supabaseUrl), {
+      method: 'POST',
       headers: {
         apikey: env.supabaseAnonKey,
         Authorization: `Bearer ${env.supabaseAnonKey}`,
+        'Content-Type': 'application/json',
       },
+      body: '{}',
     });
     const durationMs = Date.now() - startedAt;
 
@@ -35,6 +38,19 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
       return {
         ok: false,
         reason: `Supabase REST responded with HTTP ${response.status}.`,
+        status: response.status,
+        durationMs,
+        environment: env.environment,
+        mockBackend: env.mockBackend,
+      };
+    }
+
+    const value = Number(await response.text());
+
+    if (value !== 1) {
+      return {
+        ok: false,
+        reason: `Supabase health_check returned ${value}.`,
         status: response.status,
         durationMs,
         environment: env.environment,

@@ -6,3 +6,5 @@ appId: com.imranfarid.parse
 - assertVisible: "B1 Foundations"
 - assertVisible:
     id: "b1-health-screen"
+- assertVisible: "READY"
+- assertVisible: "Supabase responded with the anon key."

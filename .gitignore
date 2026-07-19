@@ -41,3 +41,7 @@ example
 # generated native folders
 /ios
 /android
+
+# Supabase local runtime metadata
+supabase/.branches/
+supabase/.temp/

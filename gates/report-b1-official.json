@@ -1,0 +1,112 @@
+{
+  "phase": "B1",
+  "name": "Foundations",
+  "playbook": "ReceiptFlow Build Playbook v1.1",
+  "generated_at": "2026-07-19T15:24:37+05:30",
+  "branch": "features/Afrin",
+  "commit_sha": "6cb5422ef226e7c07123703c9178d43efdb5d8f6",
+  "overall_status": "BLOCKED",
+  "summary": "3/5 B1 playbook tests fully passed locally. T1.4 now has passing iOS Maestro evidence, but remains partial until the Android reference simulator also passes. T1.5 remains blocked because CI/PR proof requires remote repo actions.",
+  "environment": {
+    "supabase_cli": "2.109.1",
+    "maestro_cli": "2.6.1",
+    "ios_simulator": "iPhone 16e, iOS 26.0, 9D57DB4B-5814-4293-B684-35AD8F7FEE3A",
+    "docker_runtime": "colima",
+    "supabase_start_command": "supabase start -x vector",
+    "metro_command": "EXPO_PACKAGER_HOSTNAME=192.168.1.6 EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 EXPO_PUBLIC_SUPABASE_ANON_KEY=<local anon> npx expo start --dev-client --lan --port 8081 --clear",
+    "notes": [
+      "Vector log collector excluded because it is unhealthy under local Colima; database, auth, storage, REST, realtime, mail, edge runtime, gateway, and analytics started for DB validation.",
+      "iOS dev client required LAN-mode Metro because localhost bound to IPv6 ::1 while the dev client requested 127.0.0.1.",
+      "Supabase local stack was stopped after validation."
+    ]
+  },
+  "tests": [
+    {
+      "id": "T1.1",
+      "description": "supabase db reset applies every v1.1 migration on a fresh stack, exit 0; seed includes locked Miscellaneous",
+      "status": "PASSED",
+      "type": "I",
+      "commands": [
+        "supabase start -x vector",
+        "supabase db reset",
+        "npm run b1:db:verify"
+      ],
+      "evidence": [
+        "supabase db reset exited 0",
+        "category count = 10",
+        "Miscellaneous:true:true",
+        "storage buckets exports:false, receipts:false",
+        "provider_state singleton closed:0",
+        "scan_ledger UNIQUE(user_id, reason, ref_id) verified"
+      ]
+    },
+    {
+      "id": "T1.2",
+      "description": "Drift checks pass: db.types.ts regenerated == committed; functions/_shared/contracts mirror == packages/contracts",
+      "status": "PASSED",
+      "type": "I",
+      "commands": [
+        "supabase gen types typescript --local > packages/contracts/src/db.types.ts",
+        "npm run contracts:sync",
+        "npm run b1:backend",
+        "npm run b1:db:verify"
+      ],
+      "evidence": [
+        "Real db.types.ts generated from local Supabase stack",
+        "Generated db.types.ts matches packages/contracts/src/db.types.ts",
+        "supabase/functions/_shared/contracts mirror matches packages/contracts/src"
+      ]
+    },
+    {
+      "id": "T1.3",
+      "description": "pnpm -r typecheck plus lint green across app, contracts, functions",
+      "status": "PASSED",
+      "type": "U",
+      "commands": [
+        "npm run b1:app",
+        "npm run typecheck"
+      ],
+      "evidence": [
+        "TypeScript exited 0",
+        "Expo lint exited 0",
+        "Lint emitted two existing skeleton warnings but no errors"
+      ],
+      "warnings": [
+        "src/components/receipt/ReceiptReview.tsx: unused Pressable",
+        "src/components/search/FanCarousel.tsx: unused n"
+      ]
+    },
+    {
+      "id": "T1.4",
+      "description": "App boots on both reference simulators; health screen round-trips select 1",
+      "status": "PARTIAL",
+      "type": "E",
+      "commands": [
+        "npm run b1:maestro"
+      ],
+      "evidence": [
+        "Maestro CLI 2.6.1 installed at ~/.maestro/bin/maestro",
+        "OpenJDK installed via Homebrew and wired into npm run b1:maestro",
+        "iPhone 16e iOS 26.0 simulator booted",
+        "Flow b1-app-smoke completed on iOS",
+        "Landing assertion passed: Never type an expense again",
+        "Deep link assertion passed: parse://health",
+        "Health screen assertions passed: B1 Foundations, b1-health-screen, READY, Supabase responded with the anon key."
+      ],
+      "blockers": [
+        "Android reference simulator leg has not been run in this environment, so the full playbook T1.4 remains partial."
+      ]
+    },
+    {
+      "id": "T1.5",
+      "description": "A deliberately broken PR is blocked by CI; a PR labeled phase:b2 is blocked while b1 unpassed (lock proven)",
+      "status": "BLOCKED",
+      "type": "S",
+      "blockers": [
+        "No remote CI/gate-lock workflow execution was created or triggered in this turn.",
+        "No deliberately broken PR was opened.",
+        "No phase:b2 PR was opened to prove gate-lock behavior."
+      ]
+    }
+  ]
+}

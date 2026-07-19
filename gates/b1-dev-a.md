@@ -13,8 +13,8 @@ Playbook source: ReceiptFlow Build Playbook v1.1, B1 Foundations.
 
 ## Dev B / shared repo blockers for full B1 5/5
 
-- Complete Supabase v1.1 migrations and seed data, including locked `Miscellaneous`.
-- `packages/contracts` with enums, error codes, canonical copy strings, fixtures, and generated `db.types.ts`.
-- Contract sync into `supabase/functions/_shared/contracts`.
+- Supabase CLI local reset still needs to be run against `supabase/migrations/20260719000100_b1_foundations.sql`.
+- `packages/contracts` now contains the B1 enums, error codes, canonical copy strings, fixtures, zod schemas, and first `db.types.ts`.
+- `npm run contracts:sync` mirrors contracts into `supabase/functions/_shared/contracts`.
 - Root workspace CI, gate runner, `gates/phases.json`, CODEOWNERS, and phase lock workflow.
 - Reference iOS and Android devices/simulators finalized for gate E2E.

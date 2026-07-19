@@ -11,6 +11,7 @@
     "@expo/ui": "~57.0.7",
     "@expo/vector-icons": "^15.0.2",
     "@shopify/react-native-skia": "2.6.2",
+    "zod": "^4.4.3",
     "expo": "~57.0.7",
     "expo-blur": "~57.0.2",
     "expo-camera": "~57.0.3",
@@ -59,7 +60,14 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "b1:app": "npm run typecheck && npm run lint",
-    "b1:maestro": "maestro test .maestro/b1-app-smoke.yaml"
+    "contracts:sync": "node scripts/contracts-sync.js",
+    "b1:backend": "npm run contracts:sync && node scripts/verify-b1-backend.js",
+    "b1:db:reset": "supabase start -x vector && supabase db reset",
+    "b1:db:verify": "node scripts/verify-b1-db.js",
+    "b1:all": "npm run b1:app && npm run b1:backend",
+    "gate": "node scripts/gate.js",
+    "phase-lock": "node scripts/phase-lock.js",
+    "b1:maestro": "JAVA_HOME=/opt/homebrew/opt/openjdk PATH=/opt/homebrew/opt/openjdk/bin:$HOME/.maestro/bin:$PATH maestro test .maestro/b1-app-smoke.yaml"
   },
   "private": true
 }
