@@ -1,0 +1,14 @@
+{
+  "name": "document-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Live document-corner detection for VisionCamera frames (Vision framework, iOS-only)",
+  "main": "src/specs/DocumentTracker.nitro.ts",
+  "license": "MIT",
+  "author": "Parse",
+  "homepage": "https://github.com/Imranfarid212/Parse",
+  "peerDependencies": {
+    "react-native-nitro-modules": "*",
+    "react-native-vision-camera": "*"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": ["documenttracker"],
+  "ios": {
+    "iosModuleName": "DocumentTracker"
+  },
+  "android": {
+    "androidNamespace": ["documenttracker"],
+    "androidCxxLibName": "DocumentTracker"
+  },
+  "autolinking": {
+    "DocumentTracker": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridDocumentTracker"
+      }
+    }
+  },
+  "ignorePaths": ["**/node_modules"]
+}

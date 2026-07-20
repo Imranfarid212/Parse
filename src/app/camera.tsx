@@ -26,6 +26,7 @@ import Animated, {
 import { MenuPanel } from '@/components/MenuPanel';
 import { ReceiptReview } from '@/components/receipt/ReceiptReview';
 import { TapToFocusLayer, useFocusReticle } from '@/components/camera/TapToFocus';
+import { TrackingQuad, useDocumentTracking } from '@/components/camera/TrackingQuad';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
@@ -74,6 +75,9 @@ export default function CameraScreen() {
   // Full quality — the receipt gets downscaled to ~1024px for /extract anyway,
   // so the only thing resolution buys us here is legible small print.
   const photoOutput = usePhotoOutput({ qualityPrioritization: 'quality' });
+  // Live document tracking (iOS builds carrying the document-tracker plugin;
+  // inert everywhere else — `output` is null and the static guide stays).
+  const tracking = useDocumentTracking();
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<Mode>('default');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -125,6 +129,7 @@ export default function CameraScreen() {
 
   // Slide the whole [camera | menu] strip left as the menu opens.
   const stripStyle = useAnimatedStyle(() => ({ transform: [{ translateX: -width * menuProgress.value }] }));
+  const guideStyle = useAnimatedStyle(() => ({ opacity: 1 - tracking.shown.value }));
   const folderStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: interpolate(folderIn.value, [0, 1], [folderOffX, 0]) },
@@ -311,7 +316,7 @@ export default function CameraScreen() {
               ref={cameraRef}
               style={StyleSheet.absoluteFill}
               device={device}
-              outputs={[photoOutput]}
+              outputs={tracking.output ? [photoOutput, tracking.output] : [photoOutput]}
               // Stays live behind the review overlay — the flight hands the
               // screen back at 90%, and a stopped session would show black.
               isActive={!menuOpen}
@@ -321,6 +326,9 @@ export default function CameraScreen() {
           {/* Tap bare preview to focus THERE. Sits directly on the camera so
               every control below paints above it. */}
           <TapToFocusLayer point={focus.point} onFocus={focusAt} enabled={!busy} />
+
+          {/* Live document outline, riding the tracker's shared values. */}
+          <TrackingQuad tracking={tracking} />
 
           {/* One-click's folder. Always mounted — it has to stay around to
               animate out when you switch to Default; it just parks off-screen.
@@ -334,9 +342,12 @@ export default function CameraScreen() {
             <Text style={styles.menuLabel}>Menu</Text>
           </Pressable>
 
-          <View style={styles.guideWrap} pointerEvents="none">
+          {/* The static framing hint yields while the live outline is on the
+              document — two rectangles at once reads as a bug. Where tracking
+              isn't available, `shown` never leaves 0 and the guide just stays. */}
+          <Animated.View style={[styles.guideWrap, guideStyle]} pointerEvents="none">
             <View style={styles.guide} />
-          </View>
+          </Animated.View>
 
           <View style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}>
             <Pressable style={[styles.capture, busy && styles.captureBusy]} onPress={onCapture} disabled={busy}>
