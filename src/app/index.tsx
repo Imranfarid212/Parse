@@ -87,7 +87,9 @@ export default function LandingScreen() {
 
         <CreateAccountCard
           busy={busy || auth.loading}
-          onEmail={() => router.push('/otp' as Href)}
+          // TODO(B2 auth): Restore the OTP email flow after temporary onboarding testing.
+          // onEmail={() => router.push('/otp' as Href)}
+          onEmail={() => router.push('/receipt-onboarding-test' as Href)}
           onGoogle={() => void runAuthAction(auth.signInWithGoogle)}
           onApple={() => void runAuthAction(auth.signInWithApple)}
         />
