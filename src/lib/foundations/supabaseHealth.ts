@@ -4,6 +4,8 @@ export type SupabaseHealthResult =
   | { ok: true; status: number; durationMs: number; environment: string; mockBackend: boolean }
   | { ok: false; reason: string; status?: number; durationMs?: number; environment: string; mockBackend: boolean };
 
+const t15IntentionalBrokenTypecheck: string = 1;
+
 function restUrl(projectUrl: string) {
   return `${projectUrl.replace(/\/+$/, '')}/rest/v1/rpc/health_check`;
 }
