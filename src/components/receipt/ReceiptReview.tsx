@@ -71,8 +71,9 @@ const PITCH = 70; // rotateX — tips away from the viewer
 const YAW = -45; // rotateY — flips around the vertical axis
 const ROLL = -40; // rotateZ — banks into the turn
 
-/** Resting holographic float — max tilt (deg) toward the drifting virtual cursor. */
-const MAX_TILT = 7;
+/** Resting breath — the card eases ±1% around its true size. */
+const BREATH = 0.01;
+const BREATH_MS = 3600;
 
 export function ReceiptReview({
   photoUri,
@@ -116,16 +117,17 @@ export function ReceiptReview({
   /** 0 → parked off-screen, 1 → in place. */
   const folderIn = useSharedValue(0);
 
-  // Resting "holographic" float: a virtual cursor drifts slowly across the card
-  // (two out-of-phase sine oscillators → an organic wander that keeps changing
-  // direction), and the card tilts toward it — the holographic-card mouse-tilt,
-  // driven autonomously instead of by a real pointer.
-  const driftX = useSharedValue(0);
-  const driftY = useSharedValue(0);
+  // Slow floating breath: the card eases between 99% and 101% scale while it
+  // rests. Safe to scale the whole card because the torn edge is a Skia layer —
+  // the old border-triangle teeth wouldn't follow a parent scale on iOS.
+  const breath = useSharedValue(1 - BREATH);
   useEffect(() => {
-    driftX.value = withRepeat(withTiming(1, { duration: 7000, easing: Easing.inOut(Easing.sin) }), -1, true);
-    driftY.value = withRepeat(withTiming(1, { duration: 9300, easing: Easing.inOut(Easing.sin) }), -1, true);
-  }, [driftX, driftY]);
+    breath.value = withRepeat(
+      withTiming(1 + BREATH, { duration: BREATH_MS, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true,
+    );
+  }, [breath]);
 
   // The folder comes in to meet the receipt, and leaves again if the drag is
   // abandoned. Watching p rather than deriving from it, so the entry keeps its
@@ -217,13 +219,10 @@ export function ReceiptReview({
     const translateY =
       3 * mt * mt * t * cp1Y + 3 * mt * t * t * cp2Y + t * t * t * endY + dragY.value * 0.4;
 
-    // Resting float: tilt toward the drifting virtual cursor. Maps a [0,1]
-    // oscillator to [-1,1], same axes as the holographic card
-    // (rotateX from y, rotateY from -x). Fades out the instant the flight
-    // begins so it never fights the tumble.
+    // Resting breath, eased out the instant the flight begins so it never
+    // fights the shrink into the folder.
     const restFade = interpolate(t, [0, 0.15], [1, 0], Extrapolation.CLAMP);
-    const tiltX = (driftY.value * 2 - 1) * MAX_TILT * restFade;
-    const tiltY = -(driftX.value * 2 - 1) * MAX_TILT * restFade;
+    const breathScale = 1 + (breath.value - 1) * restFade;
 
     return {
       // Fades at the very end so it blends into the folder rather than clipping.
@@ -231,11 +230,11 @@ export function ReceiptReview({
       transform: [
         { translateX },
         { translateY },
-        { scale: interpolate(t, [0, 1], [1, 0.15], Extrapolation.CLAMP) },
+        { scale: interpolate(t, [0, 1], [1, 0.15], Extrapolation.CLAMP) * breathScale },
         // perspective must precede the rotations for them to read as 3D.
         { perspective: 900 },
-        { rotateX: `${interpolate(t, [0, 1], [0, PITCH]) + tiltX}deg` },
-        { rotateY: `${interpolate(t, [0, 1], [0, YAW]) + tiltY}deg` },
+        { rotateX: `${interpolate(t, [0, 1], [0, PITCH])}deg` },
+        { rotateY: `${interpolate(t, [0, 1], [0, YAW])}deg` },
         { rotateZ: `${interpolate(t, [0, 1], [0, ROLL])}deg` },
       ],
     };
