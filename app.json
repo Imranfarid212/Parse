@@ -15,8 +15,7 @@
       "bundleIdentifier": "com.imranfarid.parse",
       "usesAppleSignIn": true,
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false,
-        "UIViewEdgeAntialiasing": true
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {

@@ -40,6 +40,21 @@ export const SHEETS = {
 export type SheetVariant = keyof typeof SHEETS;
 
 /**
+ * How each sheet displaces as `spread` goes 0 → 1 (parting to accept an
+ * arriving receipt). In viewbox units, about the sheet's own centre; `rot` is
+ * radians, as Skia wants.
+ *
+ * Exported rather than inlined in RecentsFolder because the arriving receipt
+ * has to land on the front sheet's DISPLACED position — by the time it touches
+ * down, spread is 1 and the sheet is no longer where SHEETS says it is. Two
+ * copies of these numbers is exactly the drift this module exists to prevent.
+ */
+export const SPREAD = {
+  back: { dx: -3.5, dy: -3, rot: -0.07 },
+  front: { dx: 3.5, dy: -2, rot: 0.055 },
+} as const;
+
+/**
  * Premium emerald, translucent so the panels read as frosted glass rather than
  * paint. The greens are deliberately alpha'd: the flap's frost comes from a
  * Skia BackdropFilter blurring the sheets beneath it, which only shows through
