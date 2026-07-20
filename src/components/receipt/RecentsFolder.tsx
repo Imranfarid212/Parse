@@ -23,7 +23,7 @@ import { useDerivedValue, type SharedValue } from 'react-native-reanimated';
 import { FolderBack } from '@/components/receipt/folder/FolderBack';
 import { FolderFront, Frost } from '@/components/receipt/folder/FolderFront';
 import { FolderSheet } from '@/components/receipt/folder/FolderSheet';
-import { VIEW_W, folderHeight } from '@/components/receipt/folder/geometry';
+import { SPREAD, VIEW_W, folderHeight } from '@/components/receipt/folder/geometry';
 import { colors, fontFamily } from '@/theme/tokens';
 
 export function RecentsFolder({
@@ -31,39 +31,70 @@ export function RecentsFolder({
   label = 'Recents',
   /** 0 → at rest, 1 → sheets parted to make room for an arriving receipt. */
   spread,
+  /** 0 → flap shut, 1 → dropped open to receive a receipt. */
+  flap,
+  /** How far the flap drops when open, in viewbox units. */
+  flapDrop = 5,
+  /**
+   * Which slice of the folder to draw.
+   *
+   * `all` is the whole thing in one canvas — correct whenever nothing needs to
+   * sit *inside* it. But an arriving receipt is a React Native view, and an RN
+   * view cannot be interleaved into a Skia canvas's draw order, so there is no
+   * way to get it between the sheets and the flap within a single canvas.
+   * Rendering `back` and `front` as two stacked layers leaves a gap in the
+   * z-order for the receipt to occupy — see ReceiptReview.
+   *
+   * Frost rides with `back`: it's a BackdropFilter, so it can only blur what
+   * was drawn before it in its OWN canvas. Left on the front layer it would
+   * have an empty backdrop and blur nothing.
+   */
+  layer = 'all',
 }: {
   width: number;
   label?: string;
   spread?: SharedValue<number>;
+  flap?: SharedValue<number>;
+  flapDrop?: number;
+  layer?: 'all' | 'back' | 'front';
 }) {
   const height = folderHeight(width);
+  const back = layer === 'all' || layer === 'back';
+  const front = layer === 'all' || layer === 'front';
 
   // Viewbox units throughout — these run inside the scaled group.
   // NB: Skia rotations are radians, not degrees.
   const backSheet = useDerivedValue<Transforms3d>(() => {
     const p = spread?.value ?? 0;
-    return [{ translateX: -3.5 * p }, { translateY: -3 * p }, { rotate: -0.07 * p }];
+    return [{ translateX: SPREAD.back.dx * p }, { translateY: SPREAD.back.dy * p }, { rotate: SPREAD.back.rot * p }];
   });
 
   const frontSheet = useDerivedValue<Transforms3d>(() => {
     const p = spread?.value ?? 0;
-    return [{ translateX: 3.5 * p }, { translateY: -2 * p }, { rotate: 0.055 * p }];
+    return [{ translateX: SPREAD.front.dx * p }, { translateY: SPREAD.front.dy * p }, { rotate: SPREAD.front.rot * p }];
   });
+
+  // The flap drops straight down to open. Deliberately a translate and not a
+  // rotate: a rotate would need an explicit origin on the flap's top edge, and
+  // without one Skia swings it about the canvas origin instead.
+  const flapT = useDerivedValue<Transforms3d>(() => [{ translateY: flapDrop * (flap?.value ?? 0) }]);
 
   return (
     <View style={{ width, height }}>
+      {/* Nulls rather than fragments: Skia's reconciler takes children, and a
+          Fragment is not a Skia node. */}
       <Canvas style={{ width, height }} pointerEvents="none">
         <Group transform={[{ scale: width / VIEW_W }]}>
-          <FolderBack />
-          <FolderSheet variant="back" transform={backSheet} />
-          <FolderSheet variant="front" transform={frontSheet} />
+          {back ? <FolderBack /> : null}
+          {back ? <FolderSheet variant="back" transform={backSheet} /> : null}
+          {back ? <FolderSheet variant="front" transform={frontSheet} /> : null}
           {/* Blurs the back panel and both sheets, clipped to the flap. */}
-          <Frost />
-          <FolderFront />
+          {back ? <Frost /> : null}
+          {front ? <FolderFront transform={flapT} /> : null}
         </Group>
       </Canvas>
 
-      {!!label && (
+      {!!label && back && (
         <Text numberOfLines={1} style={[styles.label, { top: height + 2, fontSize: Math.max(9, width * 0.11) }]}>
           {label}
         </Text>

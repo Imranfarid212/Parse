@@ -11,8 +11,7 @@
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.imranfarid.parse",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false,
-        "UIViewEdgeAntialiasing": true
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {

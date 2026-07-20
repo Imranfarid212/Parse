@@ -19,6 +19,7 @@ import Animated, {
 
 import { MenuPanel } from '@/components/MenuPanel';
 import { ReceiptReview } from '@/components/receipt/ReceiptReview';
+import { TapToFocusLayer, useTapToFocus } from '@/components/camera/TapToFocus';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
@@ -68,6 +69,7 @@ export default function CameraScreen() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>({ k: 'idle' });
   const [notice, setNotice] = useState<string | null>(null);
+  const focus = useTapToFocus();
   const menuProgress = useSharedValue(0);
 
   // One-click's folder: slides in when the mode is chosen and stays; the
@@ -201,15 +203,26 @@ export default function CameraScreen() {
     }
   };
 
-  /** Swipe-up. Optimistic: the local write lands, the flight already played. */
+  /**
+   * Swipe-up. Optimistic: the local write lands, the flight already played.
+   *
+   * Fires when the receipt is home (90% of the flight), not when the overlay
+   * tears down — from that moment the camera is usable again, so a second
+   * capture can replace this phase while the folder is still animating. Writing
+   * on teardown instead would drop the receipt in exactly that case.
+   */
   const onConfirmed = useCallback(
     async (fields: ReceiptFields) => {
       if (phase.k === 'review' && phase.rowId) await confirm(phase.rowId, fields);
-      setPhase({ k: 'idle' });
       popFolder();
     },
     [phase, popFolder],
   );
+
+  /** The flight has finished playing; drop the overlay if it's still ours. */
+  const onReviewDone = useCallback(() => {
+    setPhase((prev) => (prev.k === 'review' ? { k: 'idle' } : prev));
+  }, []);
 
   /** Retake: cancel any in-flight extract and drop the row. */
   const onRetake = useCallback(async () => {
@@ -221,6 +234,14 @@ export default function CameraScreen() {
   const onFieldsChange = useCallback((fields: ReceiptFields) => {
     setPhase((prev) => (prev.k === 'review' ? { ...prev, fields } : prev));
   }, []);
+
+  // Back at the live preview: drop any focus lock. A new scan is a new
+  // document, and inheriting the last one's lock would hold the lens at the
+  // wrong distance for it.
+  const releaseFocus = focus.release;
+  useEffect(() => {
+    if (phase.k === 'idle') releaseFocus();
+  }, [phase.k, releaseFocus]);
 
   if (!permission) {
     return (
@@ -253,7 +274,17 @@ export default function CameraScreen() {
       <Animated.View style={[styles.strip, { width: width * 2 }, stripStyle]}>
         {/* ── Camera half ── */}
         <View style={{ width }}>
-          <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" flash="auto" />
+          <CameraView
+            ref={cameraRef}
+            style={StyleSheet.absoluteFill}
+            facing="back"
+            flash="auto"
+            autofocus={focus.mode}
+          />
+
+          {/* Tap bare preview to re-run autofocus and lock it. Sits directly on
+              the camera so every control below paints above it. */}
+          <TapToFocusLayer point={focus.point} onFocus={focus.focusAt} enabled={!busy} />
 
           {/* One-click's folder. Always mounted — it has to stay around to
               animate out when you switch to Default; it just parks off-screen.
@@ -304,6 +335,7 @@ export default function CameraScreen() {
           fields={phase.fields}
           loading={phase.loading}
           onConfirmed={onConfirmed}
+          onDone={onReviewDone}
           onRetake={onRetake}
           onFieldsChange={onFieldsChange}
         />
