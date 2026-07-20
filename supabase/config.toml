@@ -1,0 +1,22 @@
+project_id = "receiptflow-local"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage"]
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = false
+port = 54323
+
+[auth]
+enabled = true
+site_url = "receiptflow://"
+additional_redirect_urls = ["receiptflow://auth/callback"]
+
+[storage]
+enabled = true

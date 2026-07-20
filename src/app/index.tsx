@@ -46,10 +46,13 @@ export default function LandingScreen() {
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             style={[styles.screen, { paddingTop: insets.top + spacing.lg, paddingBottom: insets.bottom + 4 }]}
+            testID="landing-screen"
           >
             <Animated.View style={[styles.heroText, heroStyle]}>
               <View ref={textRef} onLayout={measureText}>
-                <Text style={styles.headline}>{HEADLINE}</Text>
+                <Text style={styles.headline} testID="landing-headline">
+                  {HEADLINE}
+                </Text>
                 <Text style={styles.subtitle}>{SUBTITLE}</Text>
               </View>
             </Animated.View>
