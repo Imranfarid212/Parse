@@ -253,6 +253,15 @@ export default function CameraScreen() {
     setPhase((prev) => (prev.k === 'review' ? { ...prev, fields } : prev));
   }, []);
 
+  if (auth.loading) {
+    return (
+      <View style={styles.gate}>
+        <StatusBar style="light" />
+        <ActivityIndicator color="#fff" />
+      </View>
+    );
+  }
+
   if (!permission) {
     return (
       <View style={styles.gate}>

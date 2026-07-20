@@ -13,6 +13,7 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.imranfarid.parse",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "UIViewEdgeAntialiasing": true

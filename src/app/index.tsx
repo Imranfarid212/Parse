@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
 import { type Href, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
@@ -61,6 +61,14 @@ export default function LandingScreen() {
     }
   };
 
+  if (auth.loading || auth.session) {
+    return (
+      <View style={styles.loadingGate}>
+        <ActivityIndicator color={colors.accent} />
+      </View>
+    );
+  }
+
   return (
     <AnimatedGridBackground excludeBand={textBand}>
       <KeyboardAvoidingView
@@ -89,6 +97,7 @@ export default function LandingScreen() {
 }
 
 const styles = StyleSheet.create({
+  loadingGate: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
   screen: { width: '100%', height: '100%', paddingHorizontal: 4 },
   heroText: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md },
   headline: {

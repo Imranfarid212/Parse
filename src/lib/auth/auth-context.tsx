@@ -82,16 +82,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshProfile = useCallback(async () => {
     const currentSession = (await supabase.auth.getSession()).data.session;
-    setSession(currentSession);
 
     const { data: categoryRows, error: categoryError } = await supabase
       .from('categories')
       .select('id,name,is_default,is_system')
       .order('id');
     if (categoryError) throw categoryError;
-    setCategories(categoryRows ?? []);
 
     if (!currentSession?.user) {
+      setSession(null);
+      setCategories(categoryRows ?? []);
       setProfile(null);
       setSelectedCategoryIds([]);
       return;
@@ -103,7 +103,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq('id', currentSession.user.id)
       .maybeSingle();
     if (profileError) throw profileError;
-    setProfile(profileRow ?? null);
 
     const { data: pickedRows, error: pickedError } = await supabase
       .from('user_categories')
@@ -111,6 +110,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq('user_id', currentSession.user.id)
       .order('sort_order');
     if (pickedError) throw pickedError;
+
+    setSession(currentSession);
+    setCategories(categoryRows ?? []);
+    setProfile(profileRow ?? null);
     setSelectedCategoryIds((pickedRows ?? []).map((row) => row.category_id));
   }, []);
 
@@ -133,8 +136,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void load();
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      void refreshProfile();
+      if (!nextSession) {
+        setSession(null);
+        setProfile(null);
+        setSelectedCategoryIds([]);
+        return;
+      }
+
+      setLoading(true);
+      void refreshProfile().finally(() => {
+        if (alive) setLoading(false);
+      });
     });
 
     return () => {
@@ -194,41 +206,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signInWithGoogle = useCallback(async () => {
     const redirectTo = getRedirectUrl();
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo,
-        skipBrowserRedirect: true,
-      },
-    });
-    if (error) throw error;
-    if (!data.url) throw new Error('Google sign-in did not return an OAuth URL.');
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+        },
+      });
+      if (error) throw error;
+      if (!data.url) throw new Error('Google sign-in did not return an OAuth URL.');
 
-    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-    if (result.type === 'success') {
-      await exchangeOAuthResult(result.url);
-      await refreshProfile();
-    } else if (result.type !== 'cancel') {
-      throw new Error('Google sign-in did not complete.');
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      if (result.type === 'success') {
+        await exchangeOAuthResult(result.url);
+        await refreshProfile();
+      } else if (result.type !== 'cancel') {
+        throw new Error('Google sign-in did not complete.');
+      }
+    } finally {
+      setLoading(false);
     }
   }, [refreshProfile]);
 
   const signInWithApple = useCallback(async () => {
-    const credential = await AppleAuthentication.signInAsync({
-      requestedScopes: [
-        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
-        AppleAuthentication.AppleAuthenticationScope.EMAIL,
-      ],
-    });
+    setLoading(true);
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
 
-    if (!credential.identityToken) throw new Error('Apple did not return an identity token.');
+      if (!credential.identityToken) throw new Error('Apple did not return an identity token.');
 
-    const { error } = await supabase.auth.signInWithIdToken({
-      provider: 'apple',
-      token: credential.identityToken,
-    });
-    if (error) throw error;
-    await refreshProfile();
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: 'apple',
+        token: credential.identityToken,
+      });
+      if (error) throw error;
+      await refreshProfile();
+    } finally {
+      setLoading(false);
+    }
   }, [refreshProfile]);
 
   const completeOnboarding = useCallback(
@@ -245,10 +267,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
+    setLoading(true);
     const { error } = await supabase.auth.signOut();
-    if (error) throw error;
-    setProfile(null);
-    setSelectedCategoryIds([]);
+    try {
+      if (error) throw error;
+      setSession(null);
+      setProfile(null);
+      setSelectedCategoryIds([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const value = useMemo<AuthContextValue>(
