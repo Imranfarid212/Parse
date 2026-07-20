@@ -621,6 +621,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      complete_onboarding: {
+        Args: {
+          selected_category_ids: number[]
+          selected_country?: string
+          selected_default_currency?: string
+        }
+        Returns: undefined
+      }
       health_check: { Args: never; Returns: number }
       refresh_receipt_search_text: {
         Args: { target_receipt_id: string }

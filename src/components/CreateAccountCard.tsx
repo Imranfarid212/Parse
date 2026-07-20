@@ -1,8 +1,3 @@
-/**
- * CreateAccountCard — placeholder auth drawer: a floating frosted-glass sheet
- * holding just the three sign-up buttons. Every button calls onProceed
- * (→ onboarding). No real auth wired.
- */
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
@@ -13,7 +8,17 @@ import { colors, palette, radius, spacing, typography } from '@/theme/tokens';
 
 const BTN = palette.buttonDark;
 
-export function CreateAccountCard({ onProceed }: { onProceed: () => void }) {
+export function CreateAccountCard({
+  onEmail,
+  onGoogle,
+  onApple,
+  busy,
+}: {
+  onEmail: () => void;
+  onGoogle: () => void;
+  onApple: () => void;
+  busy?: boolean;
+}) {
   return (
     // Outer wrapper carries the shadow (BlurView needs overflow:hidden, which clips shadows).
     <View style={styles.shadow}>
@@ -23,17 +28,32 @@ export function CreateAccountCard({ onProceed }: { onProceed: () => void }) {
 
         <Text style={styles.title}>Your search ends here</Text>
 
-        <Pressable style={({ pressed }) => [styles.btn, styles.dark, pressed && styles.pressed]} onPress={onProceed}>
+        <Pressable
+          style={({ pressed }) => [styles.btn, styles.dark, (pressed || busy) && styles.pressed]}
+          onPress={onGoogle}
+          disabled={busy}
+          testID="auth-google-button"
+        >
           <GoogleLogo size={18} />
           <Text style={styles.labelLight}>Sign in with Google</Text>
         </Pressable>
 
-        <Pressable style={({ pressed }) => [styles.btn, styles.white, pressed && styles.pressed]} onPress={onProceed}>
+        <Pressable
+          style={({ pressed }) => [styles.btn, styles.white, (pressed || busy) && styles.pressed]}
+          onPress={onApple}
+          disabled={busy}
+          testID="auth-apple-button"
+        >
           <Ionicons name="logo-apple" size={20} color="#111" />
           <Text style={styles.labelDark}>Sign in with Apple</Text>
         </Pressable>
 
-        <Pressable style={({ pressed }) => [styles.btn, styles.soft, pressed && styles.pressed]} onPress={onProceed}>
+        <Pressable
+          style={({ pressed }) => [styles.btn, styles.soft, (pressed || busy) && styles.pressed]}
+          onPress={onEmail}
+          disabled={busy}
+          testID="auth-email-button"
+        >
           <Feather name="mail" size={17} color="#111" />
           <Text style={styles.labelDark}>Use my email</Text>
         </Pressable>

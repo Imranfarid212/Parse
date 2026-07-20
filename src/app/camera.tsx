@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { type Href, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
@@ -21,6 +22,8 @@ import { MenuPanel } from '@/components/MenuPanel';
 import { ReceiptReview } from '@/components/receipt/ReceiptReview';
 import { TapToFocusLayer, useTapToFocus } from '@/components/camera/TapToFocus';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
+import { TOAST_REFERRAL_PROMPT, useAuth } from '@/lib/auth/auth-context';
+import { markReferralPromptSeen, shouldShowReferralPrompt } from '@/lib/auth/referralPrompt';
 import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
 import type { ReceiptFields } from '@/lib/receipts/types';
@@ -60,6 +63,8 @@ function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => voi
 }
 
 export default function CameraScreen() {
+  const router = useRouter();
+  const auth = useAuth();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
@@ -77,6 +82,7 @@ export default function CameraScreen() {
   const digest = useSharedValue(1);
   const folderIn = useSharedValue(0);
   const abortRef = useRef<AbortController | null>(null);
+  const referralPromptChecked = useRef(false);
 
   const folderTop = insets.top + spacing.sm;
   // Parked just past the left edge, at its resting height — it slides straight
@@ -103,6 +109,15 @@ export default function CameraScreen() {
     return () => sub.remove();
   }, []);
 
+  useEffect(() => {
+    if (auth.loading) return;
+    if (!auth.session) {
+      router.replace('/');
+      return;
+    }
+    if (auth.profile && !auth.profile.onboarding_complete) router.replace('/onboarding' as Href);
+  }, [auth.loading, auth.profile, auth.session, router]);
+
   const openMenu = () => {
     setMenuOpen(true);
     menuProgress.value = withTiming(1, { duration: 620, easing: EMPHASIZED_SETTLE });
@@ -126,6 +141,22 @@ export default function CameraScreen() {
     setNotice(msg);
     setTimeout(() => setNotice(null), 2200);
   }, []);
+
+  useEffect(() => {
+    const userId = auth.user?.id;
+    if (!userId || referralPromptChecked.current || !auth.profile?.onboarding_complete) return;
+    const promptUserId = userId;
+    referralPromptChecked.current = true;
+
+    async function showOnce() {
+      if (await shouldShowReferralPrompt(promptUserId)) {
+        flashNotice(TOAST_REFERRAL_PROMPT);
+        await markReferralPromptSeen(promptUserId);
+      }
+    }
+
+    void showOnce();
+  }, [auth.profile?.onboarding_complete, auth.user?.id, flashNotice]);
 
   /** Shrink, overshoot, settle — the folder "digesting" a scan. */
   const popFolder = useCallback(() => {
@@ -242,6 +273,15 @@ export default function CameraScreen() {
   useEffect(() => {
     if (phase.k === 'idle') releaseFocus();
   }, [phase.k, releaseFocus]);
+
+  if (auth.loading) {
+    return (
+      <View style={styles.gate}>
+        <StatusBar style="light" />
+        <ActivityIndicator color="#fff" />
+      </View>
+    );
+  }
 
   if (!permission) {
     return (
