@@ -16,7 +16,7 @@ port = 54323
 [auth]
 enabled = true
 site_url = "receiptflow://"
-additional_redirect_urls = ["receiptflow://auth/callback"]
+additional_redirect_urls = ["receiptflow://auth/callback", "parse://auth/callback"]
 
 [storage]
 enabled = true

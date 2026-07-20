@@ -9,6 +9,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 import { Card, Divider, Eyebrow, GRAY, Row, Toggle } from '@/components/menu/primitives';
+import { useAuth } from '@/lib/auth/auth-context';
 import { fontFamily, spacing } from '@/theme/tokens';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -21,8 +22,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export function SettingsScreen() {
+  const auth = useAuth();
   const [darkMode, setDarkMode] = useState(false);
   const [push, setPush] = useState(false);
+  const email = auth.user?.email ?? 'Signed in';
+  const displayName = auth.user?.user_metadata?.full_name ?? email.split('@')[0] ?? 'Parse user';
 
   return (
     <ScrollView
@@ -35,8 +39,8 @@ export function SettingsScreen() {
           <Feather name="user" size={24} color={GRAY[500]} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text numberOfLines={1} style={styles.name}>Alex Founder</Text>
-          <Text numberOfLines={1} style={styles.email}>alex@acmecorp.com</Text>
+          <Text numberOfLines={1} style={styles.name}>{displayName}</Text>
+          <Text numberOfLines={1} style={styles.email}>{email}</Text>
         </View>
         <View style={styles.editBtn}>
           <Text style={styles.editText}>Edit</Text>
@@ -44,9 +48,9 @@ export function SettingsScreen() {
       </Card>
 
       <Section title="Preferences">
-        <Row icon="dollar-sign" label="Default Currency" value="USD ($)" onPress={() => {}} />
+        <Row icon="dollar-sign" label="Default Currency" value={auth.profile?.default_currency ?? 'USD'} onPress={() => {}} />
         <Divider />
-        <Row icon="tag" label="Categories" value="12 active" onPress={() => {}} />
+        <Row icon="tag" label="Categories" value={`${auth.selectedCategoryIds.length} active`} onPress={() => {}} />
         <Divider />
         <Row icon="moon" label="Dark Mode" right={<Toggle value={darkMode} onValueChange={setDarkMode} />} />
         <Divider />
@@ -66,7 +70,7 @@ export function SettingsScreen() {
       </Section>
 
       <Section title="Account Actions">
-        <Row icon="log-out" iconColor="#EF4444" iconBg="#FEF2F2" label="Log Out" labelColor="#EF4444" onPress={() => {}} />
+        <Row icon="log-out" iconColor="#EF4444" iconBg="#FEF2F2" label="Log Out" labelColor="#EF4444" onPress={() => { void auth.signOut(); }} />
       </Section>
 
       <Text style={styles.version}>Version 1.0.4 (Build 402)</Text>
