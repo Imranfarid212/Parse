@@ -26,7 +26,7 @@ import Animated, {
 import { MenuPanel } from '@/components/MenuPanel';
 import { ReceiptReview } from '@/components/receipt/ReceiptReview';
 import { TapToFocusLayer, useFocusReticle } from '@/components/camera/TapToFocus';
-import { TrackingQuad, useDocumentTracking } from '@/components/camera/TrackingQuad';
+import { TrackingDebug, TrackingQuad, useDocumentTracking } from '@/components/camera/TrackingQuad';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
@@ -329,6 +329,7 @@ export default function CameraScreen() {
 
           {/* Live document outline, riding the tracker's shared values. */}
           <TrackingQuad tracking={tracking} />
+          {__DEV__ && <TrackingDebug tracking={tracking} />}
 
           {/* One-click's folder. Always mounted — it has to stay around to
               animate out when you switch to Default; it just parks off-screen.

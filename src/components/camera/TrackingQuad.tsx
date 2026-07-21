@@ -25,8 +25,8 @@
  * losing the page fades the quad out ~LOST_MS later instead of strobing it on
  * single missed frames.
  */
-import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import { Canvas, Circle, Group, Path, Skia } from '@shopify/react-native-skia';
 import { useFrameOutput, type CameraFrameOutput, type Frame } from 'react-native-vision-camera';
 import {
@@ -66,6 +66,12 @@ export type DocumentTracking = {
   shown: SharedValue<number>;
   layout: SharedValue<{ w: number; h: number }>;
   corners: SharedValue<number>[]; // x1,y1 … x4,y4 in view space
+  /** True when the native plugin is present in THIS build. */
+  available: boolean;
+  /** Diagnostics: frames seen, pages found, last confidence. */
+  frames: SharedValue<number>;
+  hits: SharedValue<number>;
+  lastConf: SharedValue<number>;
 };
 
 export function useDocumentTracking(): DocumentTracking {
@@ -74,6 +80,9 @@ export function useDocumentTracking(): DocumentTracking {
   const raw = useSharedValue<RawQuad | null>(null);
   const layout = useSharedValue({ w: 0, h: 0 });
   const shown = useSharedValue(0);
+  const frames = useSharedValue(0);
+  const hits = useSharedValue(0);
+  const lastConf = useSharedValue(0);
   /* eslint-disable react-hooks/rules-of-hooks -- fixed-length list */
   const corners = [0, 0, 0, 0, 0, 0, 0, 0].map((v) => useSharedValue(v));
   /* eslint-enable react-hooks/rules-of-hooks */
@@ -86,7 +95,12 @@ export function useDocumentTracking(): DocumentTracking {
       'worklet';
       try {
         if (boxed == null) return;
+        frames.value += 1;
         const q = boxed.unbox().detect(frame);
+        if (q != null) {
+          hits.value += 1;
+          lastConf.value = q.confidence;
+        }
         if (q == null || q.confidence < MIN_CONFIDENCE) return;
         const prev = raw.value;
         raw.value = {
@@ -134,7 +148,50 @@ export function useDocumentTracking(): DocumentTracking {
     },
   );
 
-  return { output: boxed ? frameOutput : null, shown, layout, corners };
+  return {
+    output: boxed ? frameOutput : null,
+    shown,
+    layout,
+    corners,
+    available: boxed != null,
+    frames,
+    hits,
+    lastConf,
+  };
+}
+
+/**
+ * Dev-only readout of the tracking chain, so "no yellow" becomes a specific
+ * failure point rather than a mystery. Polls the shared values on the JS thread
+ * every 400ms — cheap, and only mounted in __DEV__.
+ *
+ *  available false        → the plugin isn't in this build (rebuild)
+ *  available true, frames stuck at 0 → the frame output isn't streaming
+ *  frames climbing, hits 0            → detection never finds a page
+ *  hits climbing, conf low            → found something below MIN_CONFIDENCE
+ *  hits + good conf, still no quad     → the view mapping / render is at fault
+ */
+export function TrackingDebug({ tracking }: { tracking: DocumentTracking }) {
+  const [s, setS] = useState({ frames: 0, hits: 0, conf: 0 });
+  useEffect(() => {
+    const id = setInterval(() => {
+      setS({
+        frames: Math.round(tracking.frames.value),
+        hits: Math.round(tracking.hits.value),
+        conf: tracking.lastConf.value,
+      });
+    }, 400);
+    return () => clearInterval(id);
+  }, [tracking]);
+
+  return (
+    <View style={styles.debug} pointerEvents="none">
+      <Text style={styles.debugText}>
+        plugin {tracking.available ? 'YES' : 'NO'} · frames {s.frames} · pages {s.hits} · conf{' '}
+        {s.conf.toFixed(2)}
+      </Text>
+    </View>
+  );
 }
 
 export function TrackingQuad({ tracking }: { tracking: DocumentTracking }) {
@@ -170,3 +227,16 @@ export function TrackingQuad({ tracking }: { tracking: DocumentTracking }) {
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  debug: {
+    position: 'absolute',
+    top: 100,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  debugText: { color: '#FFD60A', fontSize: 12, fontVariant: ['tabular-nums'] },
+});
