@@ -256,16 +256,20 @@ export default function CameraScreen() {
     setPhase((prev) => (prev.k === 'review' ? { ...prev, fields } : prev));
   }, []);
 
-  /** Aim the lens where the user tapped, and mark the spot. */
+  /** Aim the lens where the user tapped, mark the spot, and retarget tracking. */
   const showReticle = focus.show;
+  const redirectTracking = tracking.redirect;
   const focusAt = useCallback(
     (x: number, y: number) => {
       showReticle(x, y);
+      // Point the document tracker at the tap too — drop any stale lock and
+      // re-acquire on whatever's there (e.g. the card the user is indicating).
+      redirectTracking(x, y);
       // Throws if the session isn't ready yet; a failed focus is not worth
       // interrupting the user over.
       void cameraRef.current?.focusTo({ x, y }).catch(() => {});
     },
-    [showReticle],
+    [showReticle, redirectTracking],
   );
 
   // Back at the live preview: hand focus back to continuous. A new scan is a
@@ -277,6 +281,26 @@ export default function CameraScreen() {
     clearReticle();
     void cameraRef.current?.resetFocus().catch(() => {});
   }, [phase.k, clearReticle]);
+
+  // Keep the tracked card in focus: nudge the lens to the box centre when it has
+  // moved enough, rate-limited so the lens settles instead of hunting. Only on
+  // the live preview, and only while a box is actually shown.
+  const trackCenter = tracking.center;
+  const trackShown = tracking.shown;
+  useEffect(() => {
+    let last = { x: 0, y: 0, t: 0 };
+    const id = setInterval(() => {
+      if (phase.k !== 'idle' || busy || menuOpen) return;
+      if (trackShown.value < 0.6) return; // no confident box → leave continuous AF alone
+      const c = trackCenter.value;
+      const now = Date.now();
+      const moved = Math.hypot(c.x - last.x, c.y - last.y);
+      if (now - last.t < 1200 || moved < width * 0.06) return;
+      last = { x: c.x, y: c.y, t: now };
+      void cameraRef.current?.focusTo({ x: c.x, y: c.y }).catch(() => {});
+    }, 350);
+    return () => clearInterval(id);
+  }, [trackCenter, trackShown, phase.k, busy, menuOpen, width]);
 
   // No device yet means the camera list is still enumerating (or this is a
   // simulator with no camera at all).
