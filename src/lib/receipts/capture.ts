@@ -8,6 +8,7 @@
  */
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 
+import { detectAndCorrect } from '@/../modules/document-scan';
 import { extractClient, toReceiptFields } from '@/lib/receipts/client';
 import * as store from '@/lib/receipts/store';
 import { isNotAReceipt, type ReceiptFields, type ReceiptRow } from '@/lib/receipts/types';
@@ -38,7 +39,20 @@ export type CaptureOutcome =
  * retry queue owns it from there.
  */
 export async function processCapture(photoUri: string, signal?: AbortSignal): Promise<CaptureOutcome> {
-  const compressed = await compressForUpload(photoUri);
+  // Deskew + crop to the document before compressing (iOS; null elsewhere or
+  // when no page is found — then the original frame proceeds untouched). A
+  // flattened page at 1024px spends its pixels on print, not table.
+  const corrected = await detectAndCorrect(photoUri);
+  if (__DEV__) {
+    // The mock /extract gives the deskew no visible surface in the UI yet, so
+    // this Metro line is the way to verify it fired on a real device.
+    console.log(
+      corrected
+        ? `[document-scan] page found (confidence ${corrected.confidence.toFixed(2)}) → ${corrected.uri}`
+        : '[document-scan] no page found — using original frame',
+    );
+  }
+  const compressed = await compressForUpload(corrected?.uri ?? photoUri);
   // The row exists before the network is touched, so a crash/kill mid-request
   // still leaves the scan recoverable.
   const row = await store.insertCaptured(compressed);

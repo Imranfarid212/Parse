@@ -4,7 +4,13 @@ import { type Href, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import {
+  Camera,
+  useCameraDevice,
+  useCameraPermission,
+  usePhotoOutput,
+  type CameraRef,
+} from 'react-native-vision-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import * as Network from 'expo-network';
@@ -20,7 +26,8 @@ import Animated, {
 
 import { MenuPanel } from '@/components/MenuPanel';
 import { ReceiptReview } from '@/components/receipt/ReceiptReview';
-import { TapToFocusLayer, useTapToFocus } from '@/components/camera/TapToFocus';
+import { TapToFocusLayer, useFocusReticle } from '@/components/camera/TapToFocus';
+import { TrackingDebug, TrackingQuad, useDocumentTracking } from '@/components/camera/TrackingQuad';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { TOAST_REFERRAL_PROMPT, useAuth } from '@/lib/auth/auth-context';
 import { markReferralPromptSeen, shouldShowReferralPrompt } from '@/lib/auth/referralPrompt';
@@ -67,14 +74,21 @@ export default function CameraScreen() {
   const auth = useAuth();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const [permission, requestPermission] = useCameraPermissions();
-  const cameraRef = useRef<CameraView>(null);
+  const { hasPermission, requestPermission, canRequestPermission } = useCameraPermission();
+  const cameraRef = useRef<CameraRef>(null);
+  const device = useCameraDevice('back');
+  // Full quality — the receipt gets downscaled to ~1024px for /extract anyway,
+  // so the only thing resolution buys us here is legible small print.
+  const photoOutput = usePhotoOutput({ qualityPrioritization: 'quality' });
+  // Live document tracking (iOS builds carrying the document-tracker plugin;
+  // inert everywhere else — `output` is null and the static guide stays).
+  const tracking = useDocumentTracking();
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<Mode>('default');
   const [menuOpen, setMenuOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>({ k: 'idle' });
   const [notice, setNotice] = useState<string | null>(null);
-  const focus = useTapToFocus();
+  const focus = useFocusReticle();
   const menuProgress = useSharedValue(0);
 
   // One-click's folder: slides in when the mode is chosen and stays; the
@@ -130,6 +144,7 @@ export default function CameraScreen() {
 
   // Slide the whole [camera | menu] strip left as the menu opens.
   const stripStyle = useAnimatedStyle(() => ({ transform: [{ translateX: -width * menuProgress.value }] }));
+  const guideStyle = useAnimatedStyle(() => ({ opacity: 1 - tracking.shown.value }));
   const folderStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: interpolate(folderIn.value, [0, 1], [folderOffX, 0]) },
@@ -177,8 +192,14 @@ export default function CameraScreen() {
     if (!cameraRef.current || busy) return;
     try {
       setBusy(true);
-      const photo = await cameraRef.current.takePictureAsync({ quality: 1 });
-      if (!photo?.uri) return;
+      // VisionCamera hands back a native Photo object rather than a URI. Spill
+      // it to a temp file for the pipeline, then dispose — the underlying
+      // buffer is native memory and won't be reclaimed by GC.
+      const captured = await photoOutput.capturePhoto({ flashMode: 'auto' }, {});
+      const path = await captured.saveToTemporaryFileAsync();
+      captured.dispose();
+      const photo = { uri: path.startsWith('file://') ? path : `file://${path}` };
+      if (!photo.uri) return;
 
       abortRef.current?.abort();
       const ac = new AbortController();
@@ -266,14 +287,53 @@ export default function CameraScreen() {
     setPhase((prev) => (prev.k === 'review' ? { ...prev, fields } : prev));
   }, []);
 
-  // Back at the live preview: drop any focus lock. A new scan is a new
-  // document, and inheriting the last one's lock would hold the lens at the
-  // wrong distance for it.
-  const releaseFocus = focus.release;
-  useEffect(() => {
-    if (phase.k === 'idle') releaseFocus();
-  }, [phase.k, releaseFocus]);
+  /** Aim the lens where the user tapped, mark the spot, and retarget tracking. */
+  const showReticle = focus.show;
+  const redirectTracking = tracking.redirect;
+  const focusAt = useCallback(
+    (x: number, y: number) => {
+      showReticle(x, y);
+      // Point the document tracker at the tap too — drop any stale lock and
+      // re-acquire on whatever's there (e.g. the card the user is indicating).
+      redirectTracking(x, y);
+      // Throws if the session isn't ready yet; a failed focus is not worth
+      // interrupting the user over.
+      void cameraRef.current?.focusTo({ x, y }).catch(() => {});
+    },
+    [showReticle, redirectTracking],
+  );
 
+  // Back at the live preview: hand focus back to continuous. A new scan is a
+  // new document, and inheriting the last one's focus point would hold the lens
+  // at the wrong distance for it.
+  const clearReticle = focus.clear;
+  useEffect(() => {
+    if (phase.k !== 'idle') return;
+    clearReticle();
+    void cameraRef.current?.resetFocus().catch(() => {});
+  }, [phase.k, clearReticle]);
+
+  // Keep the tracked card in focus: nudge the lens to the box centre when it has
+  // moved enough, rate-limited so the lens settles instead of hunting. Only on
+  // the live preview, and only while a box is actually shown.
+  const trackCenter = tracking.center;
+  const trackShown = tracking.shown;
+  useEffect(() => {
+    let last = { x: 0, y: 0, t: 0 };
+    const id = setInterval(() => {
+      if (phase.k !== 'idle' || busy || menuOpen) return;
+      if (trackShown.value < 0.6) return; // no confident box → leave continuous AF alone
+      const c = trackCenter.value;
+      const now = Date.now();
+      const moved = Math.hypot(c.x - last.x, c.y - last.y);
+      if (now - last.t < 1200 || moved < width * 0.06) return;
+      last = { x: c.x, y: c.y, t: now };
+      void cameraRef.current?.focusTo({ x: c.x, y: c.y }).catch(() => {});
+    }, 350);
+    return () => clearInterval(id);
+  }, [trackCenter, trackShown, phase.k, busy, menuOpen, width]);
+
+  // Auth still resolving — hold on a spinner before any routing decision.
   if (auth.loading) {
     return (
       <View style={styles.gate}>
@@ -283,7 +343,9 @@ export default function CameraScreen() {
     );
   }
 
-  if (!permission) {
+  // No device yet means the camera list is still enumerating (or this is a
+  // simulator with no camera at all).
+  if (hasPermission && !device) {
     return (
       <View style={styles.gate}>
         <StatusBar style="light" />
@@ -292,16 +354,16 @@ export default function CameraScreen() {
     );
   }
 
-  if (!permission.granted) {
+  if (!hasPermission) {
     return (
       <View style={styles.gate}>
         <StatusBar style="light" />
         <Text style={styles.gateText}>Camera access is needed to scan receipts.</Text>
         <Pressable
           style={styles.gateBtn}
-          onPress={permission.canAskAgain ? requestPermission : () => Linking.openSettings()}
+          onPress={canRequestPermission ? () => void requestPermission() : () => Linking.openSettings()}
         >
-          <Text style={styles.gateBtnText}>{permission.canAskAgain ? 'Allow camera' : 'Open Settings'}</Text>
+          <Text style={styles.gateBtnText}>{canRequestPermission ? 'Allow camera' : 'Open Settings'}</Text>
         </Pressable>
       </View>
     );
@@ -314,17 +376,25 @@ export default function CameraScreen() {
       <Animated.View style={[styles.strip, { width: width * 2 }, stripStyle]}>
         {/* ── Camera half ── */}
         <View style={{ width }}>
-          <CameraView
-            ref={cameraRef}
-            style={StyleSheet.absoluteFill}
-            facing="back"
-            flash="auto"
-            autofocus={focus.mode}
-          />
+          {device && (
+            <Camera
+              ref={cameraRef}
+              style={StyleSheet.absoluteFill}
+              device={device}
+              outputs={tracking.output ? [photoOutput, tracking.output] : [photoOutput]}
+              // Stays live behind the review overlay — the flight hands the
+              // screen back at 90%, and a stopped session would show black.
+              isActive={!menuOpen}
+            />
+          )}
 
-          {/* Tap bare preview to re-run autofocus and lock it. Sits directly on
-              the camera so every control below paints above it. */}
-          <TapToFocusLayer point={focus.point} onFocus={focus.focusAt} enabled={!busy} />
+          {/* Tap bare preview to focus THERE. Sits directly on the camera so
+              every control below paints above it. */}
+          <TapToFocusLayer point={focus.point} onFocus={focusAt} enabled={!busy} />
+
+          {/* Live document outline, riding the tracker's shared values. */}
+          <TrackingQuad tracking={tracking} />
+          {__DEV__ && <TrackingDebug tracking={tracking} />}
 
           {/* One-click's folder. Always mounted — it has to stay around to
               animate out when you switch to Default; it just parks off-screen.
@@ -338,9 +408,12 @@ export default function CameraScreen() {
             <Text style={styles.menuLabel}>Menu</Text>
           </Pressable>
 
-          <View style={styles.guideWrap} pointerEvents="none">
+          {/* The static framing hint yields while the live outline is on the
+              document — two rectangles at once reads as a bug. Where tracking
+              isn't available, `shown` never leaves 0 and the guide just stays. */}
+          <Animated.View style={[styles.guideWrap, guideStyle]} pointerEvents="none">
             <View style={styles.guide} />
-          </View>
+          </Animated.View>
 
           <View style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}>
             <Pressable style={[styles.capture, busy && styles.captureBusy]} onPress={onCapture} disabled={busy}>

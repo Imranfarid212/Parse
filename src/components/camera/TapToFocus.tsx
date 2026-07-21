@@ -1,30 +1,16 @@
 /**
- * TapToFocus — tap the preview to re-run autofocus and hold it.
+ * TapToFocus — tap the preview to focus the lens at that exact point.
  *
- * WHAT THIS CAN AND CANNOT DO. expo-camera exposes no point-of-interest focus:
- * `autofocus` is a single global switch — 'on' means "focus once, then LOCK",
- * 'off' means "focus continuously" (and is the default) — it is iOS-only, and
- * the camera ref has no focus method. There is no way to aim the lens at a
- * coordinate. (Verified against expo-camera 57: no `focusPoint`,
- * `pointOfInterest` or `setFocus` anywhere in the package; the `focusDistance`
- * in its types belongs to WebCameraSettings.)
+ * This is real point-of-interest focus: the tap coordinates go to
+ * `CameraRef.focusTo({ x, y })`, which drives the native focus/metering point.
+ * The reticle marks where the lens is actually being aimed.
  *
- * What a tap CAN do is force a fresh convergence and then lock it, which is the
- * half that actually matters when framing a receipt: continuous AF hunts, and
- * hunting is what produces the soft frame that makes /extract guess. Locking
- * once composed is the win.
- *
- *   tap → 'off'  drop any existing lock, let the lens hunt
- *       → after AF_SETTLE_MS → 'on'  lock wherever it converged
- *
- * The reticle is therefore honest feedback that focus was re-run — NOT a claim
- * that focus is biased toward that point. In practice a receipt fills the
- * frame, so centre-weighted AF lands on the document wherever you tapped.
- *
- * True aimed focus needs react-native-vision-camera's `focus({x, y})`, which is
- * a native module and a capture-pipeline migration.
+ * (It did not start out honest. On expo-camera there is no POI focus at all —
+ * `autofocus` is one global 'on'/'off' switch — so the first version could only
+ * force a global refocus and draw a square where you happened to tap. Swapping
+ * to VisionCamera is what turned the reticle from decoration into aim.)
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Pressable, StyleSheet } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Animated, {
@@ -34,52 +20,34 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
+import { useEffect } from 'react';
 
 import { EMPHASIZED } from '@/theme/motion';
 
-/** 'on' = focus once then lock · 'off' = continuous. Mirrors expo-camera's FocusMode. */
-export type AutofocusMode = 'on' | 'off';
-
-/** Time given to the lens to converge before the focus is locked. */
-const AF_SETTLE_MS = 650;
 /** How long the reticle sits at full strength before fading. */
 const RETICLE_HOLD_MS = 700;
 const RETICLE = 76;
 
 export type FocusPoint = { x: number; y: number; tick: number };
 
-export function useTapToFocus() {
-  const [mode, setMode] = useState<AutofocusMode>('off');
+/**
+ * Tracks where to draw the reticle. Deliberately does NOT drive the camera —
+ * the screen owns the camera ref and calls `focusTo` itself, so this stays a
+ * pure view concern.
+ */
+export function useFocusReticle() {
   const [point, setPoint] = useState<FocusPoint | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tick = useRef(0);
 
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-
-  /** Re-run autofocus, then lock. Rapid taps restart the cycle rather than stack. */
-  const focusAt = useCallback((x: number, y: number) => {
+  const show = useCallback((x: number, y: number) => {
     tick.current += 1;
     setPoint({ x, y, tick: tick.current });
     void Haptics.selectionAsync();
-
-    if (timer.current) clearTimeout(timer.current);
-    setMode('off');
-    timer.current = setTimeout(() => setMode('on'), AF_SETTLE_MS);
   }, []);
 
-  /**
-   * Back to continuous. Call whenever the frame is about to change for real —
-   * a new scan is a new document, and carrying a stale lock into it would keep
-   * the next receipt soft.
-   */
-  const release = useCallback(() => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    setMode('off');
-    setPoint(null);
-  }, []);
+  const clear = useCallback(() => setPoint(null), []);
 
-  return { mode, point, focusAt, release };
+  return { point, show, clear };
 }
 
 function Reticle({ x, y }: { x: number; y: number }) {
@@ -105,7 +73,7 @@ function Reticle({ x, y }: { x: number; y: number }) {
 }
 
 /**
- * Full-bleed tap target plus the reticle. Render directly after the CameraView:
+ * Full-bleed tap target plus the reticle. Render directly after the Camera:
  * later siblings (menu button, shutter, controls) paint above it and keep their
  * own taps, so this only receives taps on bare preview.
  */

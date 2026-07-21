@@ -15,7 +15,8 @@
       "bundleIdentifier": "com.imranfarid.parse",
       "usesAppleSignIn": true,
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Parse uses your camera to scan receipts."
       }
     },
     "android": {
