@@ -7,6 +7,14 @@ module.exports = defineConfig([
     ignores: ['ios/**', 'dist/**', 'web-build/**', '.expo/**'],
   },
   {
+    settings: {
+      'import/resolver': {
+        typescript: {},
+        node: {
+          extensions: ['.js', '.jsx', '.ts', '.tsx'],
+        },
+      },
+    },
     rules: {
       'react-hooks/immutability': 'off',
       'react-hooks/set-state-in-effect': 'off',
