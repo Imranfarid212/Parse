@@ -1,0 +1,13 @@
+# ReceiptFlow ownership gates.
+# Keep B1 foundations and phase gates under explicit project ownership.
+
+* @Imranfarid212
+
+/.github/ @Imranfarid212
+/gates/ @Imranfarid212
+/packages/contracts/ @Imranfarid212
+/scripts/gate.js @Imranfarid212
+/scripts/phase-lock.js @Imranfarid212
+/scripts/verify-b1-backend.js @Imranfarid212
+/scripts/verify-b1-db.js @Imranfarid212
+/supabase/ @Imranfarid212

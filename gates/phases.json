@@ -1,0 +1,42 @@
+{
+  "b1": {
+    "name": "Foundations",
+    "state": "in_progress"
+  },
+  "b2": {
+    "name": "Auth + onboarding",
+    "state": "locked"
+  },
+  "b3": {
+    "name": "Capture + offline queue",
+    "state": "locked"
+  },
+  "b4": {
+    "name": "Extraction fast path",
+    "state": "locked"
+  },
+  "b5": {
+    "name": "Fallback + durable jobs",
+    "state": "locked"
+  },
+  "b6": {
+    "name": "Receipt management",
+    "state": "locked"
+  },
+  "b7": {
+    "name": "Export",
+    "state": "locked"
+  },
+  "b8": {
+    "name": "Monetization + deletion",
+    "state": "locked"
+  },
+  "b9": {
+    "name": "Referrals + commissions",
+    "state": "locked"
+  },
+  "b10": {
+    "name": "Hardening + launch",
+    "state": "locked"
+  }
+}

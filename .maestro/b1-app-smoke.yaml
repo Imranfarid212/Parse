@@ -1,0 +1,10 @@
+appId: com.imranfarid.parse
+---
+- launchApp
+- assertVisible: "Never type an expense again"
+- openLink: "parse://health"
+- assertVisible: "B1 Foundations"
+- assertVisible:
+    id: "b1-health-screen"
+- assertVisible: "READY"
+- assertVisible: "Supabase responded with the anon key."

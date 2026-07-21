@@ -31,6 +31,9 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
+.env.staging
+.env.production
 .env*.local
 
 # typescript
@@ -41,3 +44,7 @@ example
 # generated native folders
 /ios
 /android
+
+# Supabase local runtime metadata
+supabase/.branches/
+supabase/.temp/

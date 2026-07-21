@@ -1,0 +1,29 @@
+{
+  "phase": "b2",
+  "status": "passed_local_backend",
+  "note": "Local B2 static/backend/db checks passed. Official playbook 5/5 still requires OTP device flow plus Apple/Google manual evidence.",
+  "duration_ms": 28350,
+  "commit_sha": "ad1f2e80c5517644a0a492698e9555fe5219f8b4",
+  "tests": [
+    {
+      "id": "T2.frontend-static",
+      "status": "passed",
+      "duration_ms": 2355
+    },
+    {
+      "id": "T2.backend-static",
+      "status": "passed",
+      "duration_ms": 234
+    },
+    {
+      "id": "T2.db-reset",
+      "status": "passed",
+      "duration_ms": 25448
+    },
+    {
+      "id": "T2.1-T2.5-db-verify",
+      "status": "passed",
+      "duration_ms": 313
+    }
+  ]
+}
