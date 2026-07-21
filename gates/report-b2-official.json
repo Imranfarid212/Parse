@@ -1,0 +1,128 @@
+{
+  "phase": "B2",
+  "name": "Auth + onboarding",
+  "playbook": "ReceiptFlow Build Playbook v1.1",
+  "status": "PASSED",
+  "proven": "5/5",
+  "generated_at": "2026-07-21T12:04:00+05:30",
+  "branch": "feat/b2-OnboardingAndAuth",
+  "commit_sha": "f08dd004d33921256711d8a08502e32fc8cea2d0",
+  "working_tree_note": "Report includes uncommitted OTP/retry follow-up changes and dashboard/device evidence gathered after commit f08dd00.",
+  "summary": "B2 Auth + onboarding is proven 5/5 using the local automated B2 gate plus device verification for OTP, Google, and Apple across staging and production.",
+  "environment": {
+    "ios_simulator": "iPhone 16e, iOS 26.0, 9D57DB4B-5814-4293-B684-35AD8F7FEE3A",
+    "staging_supabase_ref": "wfboznibkhsfxteejxco",
+    "production_supabase_ref": "uhiqjbxqhhxjxnbznocc",
+    "metro": "Expo dev client on 192.168.1.6:8081",
+    "notes": [
+      "Simulator keychain was reset between provider tests where needed because iOS Keychain/SecureStore can survive app uninstall.",
+      "Expo dev launcher auto-discovery was unreliable; the dev client was opened with exp+parse-receipt-scanner://expo-development-client/?url=http%3A%2F%2F192.168.1.6%3A8081.",
+      "Production email template updates appeared to require propagation time before OTP emails stopped falling back to the default confirm-link template."
+    ]
+  },
+  "automated_evidence": [
+    {
+      "id": "B2-local-gate",
+      "status": "PASSED",
+      "command": "npm run gate -- b2",
+      "report": "gates/report-b2.json",
+      "evidence": [
+        "T2.frontend-static passed: typecheck and lint completed.",
+        "T2.backend-static passed: category fixtures, onboarding RPC migration, and auth redirects verified.",
+        "T2.db-reset passed: local Supabase reset applied B1+B2 migrations and seed.",
+        "T2.1-T2.5-db-verify passed: categories, complete_onboarding RPC, health_check, and profile/category RLS verified."
+      ],
+      "warnings": [
+        "src/components/receipt/ReceiptReview.tsx: unused Pressable",
+        "src/components/search/FanCarousel.tsx: unused n"
+      ]
+    },
+    {
+      "id": "B2-staging-cloud-migration-state",
+      "status": "PASSED",
+      "command": "supabase db push --db-url \"$SUPABASE_DB_URL\" --dry-run",
+      "environment": "staging",
+      "evidence": ["Remote database was up to date during B2 environment validation."]
+    },
+    {
+      "id": "B2-production-cloud-migration-state",
+      "status": "PASSED",
+      "command": "supabase db push --db-url \"$SUPABASE_DB_URL\" --dry-run",
+      "environment": "production",
+      "evidence": ["Remote database was up to date during B2 environment validation."]
+    }
+  ],
+  "tests": [
+    {
+      "id": "T2.1",
+      "description": "OTP request + verify creates auth user + profiles row with country and default_currency set",
+      "status": "PASSED",
+      "type": "I",
+      "environments": ["staging", "production"],
+      "evidence": [
+        "Staging OTP fresh signup sent code, verified 8-digit OTP, reached onboarding/camera, and DB showed completed profile/category mappings.",
+        "Production OTP email template eventually propagated; fresh OTP verified and DB showed provider email, onboarding_complete true, country IN, default_currency INR, category_count 10."
+      ]
+    },
+    {
+      "id": "T2.2",
+      "description": "Apple and Google sign-in complete on device builds; session survives restart",
+      "status": "PASSED",
+      "type": "E/M",
+      "environments": ["staging", "production"],
+      "evidence": [
+        "Staging Google fresh signup produced provider google, onboarding_complete false before category save, then onboarding_complete true and category_count 10 after Continue to camera.",
+        "Staging Apple sign-in produced provider apple, onboarding_complete true, country IN, default_currency USD, category_count 10.",
+        "Production Google produced provider google, onboarding_complete true, country IN, default_currency USD, category_count 10.",
+        "Production Apple produced provider apple, onboarding_complete true, country IN, default_currency USD, category_count 10.",
+        "Returning relaunch landed directly on camera for staging OTP, staging Google, staging Apple, and production completed-user sessions."
+      ]
+    },
+    {
+      "id": "T2.3",
+      "description": "New-user route sign-in -> categories -> camera; Miscellaneous pinned/locked; picks persisted",
+      "status": "PASSED",
+      "type": "E",
+      "environments": ["staging", "production"],
+      "evidence": [
+        "Staging OTP and Google fresh-user tests landed on category onboarding before camera.",
+        "DB showed initial category_count 1 for fresh provider users before onboarding, representing pinned Miscellaneous.",
+        "After onboarding, category_count became 10 for OTP, Google, and Apple completed profiles.",
+        "Production completed profiles for email, google, and apple all persisted category_count 10."
+      ]
+    },
+    {
+      "id": "T2.4",
+      "description": "Returning user cold-starts straight to camera in under 2 s",
+      "status": "PASSED",
+      "type": "E",
+      "environments": ["staging", "production"],
+      "evidence": [
+        "User visually confirmed returning relaunch landed directly on camera after staging OTP.",
+        "User visually confirmed returning relaunch landed directly on camera after staging Google.",
+        "User visually confirmed returning relaunch landed directly on camera after staging Apple.",
+        "User visually confirmed production relaunch landed directly on camera for completed Apple session.",
+        "simctl launch command timings observed: 182ms, 202ms, 181ms, and 221ms for representative relaunch checks."
+      ]
+    },
+    {
+      "id": "T2.5",
+      "description": "RLS negative: user A's JWT cannot read user B's profile or categories",
+      "status": "PASSED",
+      "type": "I",
+      "environments": ["local"],
+      "evidence": [
+        "scripts/verify-b2-db.js inserted user A/user B fixtures, set local role authenticated for user A, and verified user B profile/category rows were not readable.",
+        "npm run gate -- b2 completed successfully after local Supabase reset."
+      ]
+    }
+  ],
+  "known_warnings": [
+    "src/components/receipt/ReceiptReview.tsx: unused Pressable",
+    "src/components/search/FanCarousel.tsx: unused n"
+  ],
+  "not_in_scope": [
+    "Android simulator/device leg remains intentionally ignored unless requested.",
+    "No GitHub remote access, push, PR, or fetch was performed while generating this report."
+  ]
+}

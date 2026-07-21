@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { type Href, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,8 +9,22 @@ import { AnimatedGridBackground } from '@/components/ui/AnimatedGridBackground';
 import { useAuth } from '@/lib/auth/auth-context';
 import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
+const OTP_LENGTH = 8;
+
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+function normalizeCode(value: string) {
+  return value.replace(/\D/g, '').slice(0, OTP_LENGTH);
+}
+
+function getOtpErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.toLowerCase().includes('internal server error') || message.includes('"status":500')) {
+    return 'The sign-in service had a temporary issue. Please try again.';
+  }
+  return error instanceof Error ? error.message : 'Please try again.';
 }
 
 export default function OtpScreen() {
@@ -33,26 +47,29 @@ export default function OtpScreen() {
       setBusy(true);
       await auth.signInWithOtp(nextEmail);
       setEmail(nextEmail);
+      setCode('');
       setSent(true);
     } catch (error) {
-      Alert.alert('Code not sent', error instanceof Error ? error.message : 'Please try again.');
+      Alert.alert('Code not sent', getOtpErrorMessage(error));
     } finally {
       setBusy(false);
     }
   };
 
   const verifyCode = async () => {
-    if (code.trim().length < 6) {
-      Alert.alert('Code needed', 'Enter the 6-digit code from your email.');
+    const nextCode = normalizeCode(code);
+    if (nextCode.length < OTP_LENGTH) {
+      Alert.alert('Code needed', `Enter the ${OTP_LENGTH}-digit code from your email.`);
       return;
     }
 
     try {
+      Keyboard.dismiss();
       setBusy(true);
-      await auth.verifyOtp(normalizeEmail(email), code.trim());
-      router.replace('/onboarding' as Href);
+      const profile = await auth.verifyOtp(normalizeEmail(email), nextCode);
+      router.replace((profile?.onboarding_complete ? '/camera' : '/onboarding') as Href);
     } catch (error) {
-      Alert.alert('Code not accepted', error instanceof Error ? error.message : 'Please try again.');
+      Alert.alert('Code not accepted', getOtpErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -74,7 +91,7 @@ export default function OtpScreen() {
           <Text style={styles.eyebrow}>EMAIL SIGN IN</Text>
           <Text style={styles.title}>{sent ? 'Check your inbox' : 'Start with email'}</Text>
           <Text style={styles.copy}>
-            {sent ? 'Enter the 6-digit code Supabase sent you.' : 'We will send a one-time code. No password to remember.'}
+            {sent ? `Enter the ${OTP_LENGTH}-digit code Supabase sent you.` : 'We will send a one-time code. No password to remember.'}
           </Text>
 
           <TextInput
@@ -92,11 +109,12 @@ export default function OtpScreen() {
           {sent && (
             <TextInput
               value={code}
-              onChangeText={setCode}
+              onChangeText={(value) => setCode(normalizeCode(value))}
               autoComplete="one-time-code"
               keyboardType="number-pad"
-              placeholder="123456"
-              maxLength={6}
+              placeholder="12345678"
+              maxLength={OTP_LENGTH}
+              editable={!busy}
               style={styles.input}
               testID="otp-code-input"
             />
@@ -112,11 +130,19 @@ export default function OtpScreen() {
           </Pressable>
 
           {sent && (
-            <Pressable onPress={() => setSent(false)} disabled={busy} style={styles.secondary}>
-              <Text style={styles.secondaryText}>Use a different email</Text>
+            <Pressable
+              onPress={() => {
+                setSent(false);
+                setCode('');
+              }}
+              disabled={busy}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryText}>Use a different email or resend</Text>
             </Pressable>
           )}
         </View>
+        {busy && <View style={styles.busyBlocker} pointerEvents="auto" />}
       </KeyboardAvoidingView>
     </AnimatedGridBackground>
   );
@@ -158,4 +184,5 @@ const styles = StyleSheet.create({
   secondary: { alignItems: 'center', paddingVertical: spacing.xs },
   secondaryText: { color: colors.textSecondary, fontFamily: fontFamily.semibold },
   pressed: { opacity: 0.8, transform: [{ scale: 0.99 }] },
+  busyBlocker: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 10 },
 });
