@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
-import { type Href, useRouter } from 'expo-router';
+import { type Href, useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   Easing,
@@ -31,10 +31,12 @@ export default function LandingScreen() {
     enter.value = withDelay(300, withTiming(1, { duration: 800, easing: Easing.inOut(Easing.ease) }));
   }, [enter]);
 
-  useEffect(() => {
-    if (auth.loading || !auth.session || !auth.profile) return;
-    router.replace((auth.profile.onboarding_complete ? '/camera' : '/onboarding') as Href);
-  }, [auth.loading, auth.profile, auth.session, router]);
+  useFocusEffect(
+    useCallback(() => {
+      if (auth.loading || !auth.session || !auth.profile) return;
+      router.replace((auth.profile.onboarding_complete ? '/camera' : '/onboarding') as Href);
+    }, [auth.loading, auth.profile, auth.session, router]),
+  );
 
   // Opacity-only entrance (no transform) so the text bounds we measure stay accurate.
   const heroStyle = useAnimatedStyle(() => ({ opacity: enter.value }));
@@ -87,9 +89,7 @@ export default function LandingScreen() {
 
         <CreateAccountCard
           busy={busy || auth.loading}
-          // TODO(B2 auth): Restore the OTP email flow after temporary onboarding testing.
-          // onEmail={() => router.push('/otp' as Href)}
-          onEmail={() => router.push('/receipt-onboarding-test' as Href)}
+          onEmail={() => router.push('/otp' as Href)}
           onGoogle={() => void runAuthAction(auth.signInWithGoogle)}
           onApple={() => void runAuthAction(auth.signInWithApple)}
         />
