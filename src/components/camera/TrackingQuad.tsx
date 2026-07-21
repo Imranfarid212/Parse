@@ -69,6 +69,14 @@ const REJECT_FRAC = 0.3;
 const REJECT_MAX = 6;
 /** How long the quad survives without a fresh detection. */
 const LOST_MS = 260;
+/**
+ * Detection is throttled by FRAME TIMESTAMP, not frame count: run Apple Vision
+ * at most once per DETECT_INTERVAL_S (~7fps) even though the preview streams at
+ * 30. VNDetectDocumentSegmentationRequest is an ML model on the Neural Engine —
+ * the app's main heat/battery cost — and the overlay smoothing makes 7fps
+ * detection look identical to 30. Every skipped frame is still disposed.
+ */
+const DETECT_INTERVAL_S = 0.14; // ~7 detections/sec
 
 const YELLOW = '#FFD60A';
 
@@ -110,6 +118,8 @@ export function useDocumentTracking(): DocumentTracking {
   const frames = useSharedValue(0);
   const hits = useSharedValue(0);
   const lastConf = useSharedValue(0);
+  // Timestamp of the last frame we actually ran detection on (seconds).
+  const lastDetectTs = useSharedValue(0);
   // Lock state carried between detections: the locked centre, the consecutive
   // outlier count, and whether we currently hold a lock.
   const track = useSharedValue({ cx: 0, cy: 0, rejects: 0, active: false });
@@ -123,13 +133,21 @@ export function useDocumentTracking(): DocumentTracking {
   /* eslint-enable react-hooks/rules-of-hooks */
 
   const frameOutput = useFrameOutput({
-    targetResolution: { width: 1280, height: 720 },
+    // Lower than the preview: live edge detection doesn't need 720p, and 540p
+    // means less to copy and less for Vision to chew. The captured PHOTO is a
+    // separate full-res output, so legible receipt text is unaffected.
+    targetResolution: { width: 960, height: 540 },
     pixelFormat: 'yuv',
     dropFramesWhileBusy: true,
     onFrame: (frame: Frame) => {
       'worklet';
       try {
         if (boxed == null) return;
+        // Throttle by presentation timestamp (seconds). A skipped frame falls
+        // straight through to dispose() below — never left undisposed.
+        const ts = frame.timestamp;
+        if (ts <= 0 || ts - lastDetectTs.value < DETECT_INTERVAL_S) return;
+        lastDetectTs.value = ts;
         frames.value += 1;
         const q = boxed.unbox().detect(frame);
         if (q != null) {

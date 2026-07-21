@@ -14,6 +14,11 @@ import Vision
 import VisionCamera
 
 final class HybridDocumentTracker: HybridDocumentTrackerSpec {
+  // One request, reused across frames. The request object is stateless between
+  // performs (its `results` are overwritten each time), so allocating a fresh
+  // one per frame was pure churn — this trims per-frame work on the hot path.
+  private let request = VNDetectDocumentSegmentationRequest()
+
   func detect(frame: any HybridFrameSpec) throws -> DetectedQuad? {
     // The spec protocol exposes width/height/orientation directly; only the
     // raw buffer needs the NativeFrame downcast (VisionCamera's public seam
@@ -26,7 +31,6 @@ final class HybridDocumentTracker: HybridDocumentTrackerSpec {
 
     let orientation = Self.exifOrientation(for: frame.orientation)
     let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
-    let request = VNDetectDocumentSegmentationRequest()
 
     do {
       try handler.perform([request])
