@@ -56,8 +56,12 @@ const MIN_AREA = 0.04;
  */
 const CENTER_X_TOL = 0.36;
 const CENTER_Y_TOL = 0.42;
-/** withTiming toward each accepted detection — this IS the smoothing. */
-const TRACK_MS = 70;
+/**
+ * withTiming toward each accepted detection — this IS the smoothing. Roughly
+ * matched to the detection interval so the box is always gliding toward the
+ * next detection rather than snapping and waiting (which reads as stepping).
+ */
+const TRACK_MS = 100;
 /**
  * Continuity gate. Vision returns SOME rectangle every frame — often the wrong
  * one (screen, keyboard) as the receipt wavers. A detection whose centre jumps
@@ -71,12 +75,13 @@ const REJECT_MAX = 6;
 const LOST_MS = 260;
 /**
  * Detection is throttled by FRAME TIMESTAMP, not frame count: run Apple Vision
- * at most once per DETECT_INTERVAL_S (~7fps) even though the preview streams at
- * 30. VNDetectDocumentSegmentationRequest is an ML model on the Neural Engine —
- * the app's main heat/battery cost — and the overlay smoothing makes 7fps
- * detection look identical to 30. Every skipped frame is still disposed.
+ * at most once per DETECT_INTERVAL_S even though the preview streams at 30fps.
+ * VNDetectDocumentSegmentationRequest on the Neural Engine is the app's main
+ * heat cost. ~7fps was too sparse — the box stepped — so this sits at ~11fps:
+ * still ~1/3 the original per-frame ML work, but smooth. Every skipped frame is
+ * still disposed.
  */
-const DETECT_INTERVAL_S = 0.14; // ~7 detections/sec
+const DETECT_INTERVAL_S = 0.09; // ~11 detections/sec
 
 const YELLOW = '#FFD60A';
 
@@ -133,10 +138,11 @@ export function useDocumentTracking(): DocumentTracking {
   /* eslint-enable react-hooks/rules-of-hooks */
 
   const frameOutput = useFrameOutput({
-    // Lower than the preview: live edge detection doesn't need 720p, and 540p
-    // means less to copy and less for Vision to chew. The captured PHOTO is a
-    // separate full-res output, so legible receipt text is unaffected.
-    targetResolution: { width: 960, height: 540 },
+    // 720p for detection: 540p measurably hurt how reliably Vision found and
+    // placed the document. The heat saving now comes from the ~11fps throttle
+    // (below) and pausing the whole session when idle, not from starving the
+    // detector of pixels. The captured PHOTO is a separate full-res output.
+    targetResolution: { width: 1280, height: 720 },
     pixelFormat: 'yuv',
     dropFramesWhileBusy: true,
     onFrame: (frame: Frame) => {
