@@ -7,19 +7,51 @@
  * nothing upstream knows the difference.
  */
 import { normalizeReceiptDate } from '@/lib/dates';
+import { getFoundationEnv } from '@/lib/foundations/env';
+import { supabase } from '@/lib/auth/supabase';
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   CATEGORIES,
   isCategory,
   isNotAReceipt,
+  type CaptureMode,
   type Category,
   type ExtractResponse,
   type ExtractSuccess,
   type ReceiptFields,
 } from '@/lib/receipts/types';
 
+export type ExtractInput = {
+  captureId: string;
+  imageUri: string;
+  mode: CaptureMode;
+  capturedAt: string;
+  signal?: AbortSignal;
+};
+
+export type ExtractAck = {
+  receiptId: string;
+  response: ExtractResponse;
+};
+
+type ExtractFunctionPayload = {
+  status: 200 | 202;
+  receipt_id: string;
+  result?: {
+    merchant: string;
+    txn_date: string;
+    total: number;
+    suggested_category: string;
+    line_items: { name: string; amount: number }[];
+  };
+  code?: 'PROVIDER_DELAY' | string;
+  error?: string;
+  message?: string;
+};
+
 export interface ExtractClient {
   /** Rejects on transport failure/timeout; resolves for both contract shapes. */
-  extract(imageUri: string, signal?: AbortSignal): Promise<ExtractResponse>;
+  extract(input: ExtractInput): Promise<ExtractAck>;
 }
 
 /** Turn a wire payload into app-side fields: date normalized, category guarded. */
@@ -99,24 +131,78 @@ const wait = (ms: number, signal?: AbortSignal) =>
   });
 
 export const mockExtractClient: ExtractClient = {
-  async extract(_imageUri, signal) {
+  async extract({ captureId, signal }) {
     const { minMs, maxMs, notAReceiptRate, failureRate, sample } = mockConfig;
     await wait(minMs + Math.random() * (maxMs - minMs), signal);
 
     if (Math.random() < failureRate) throw new Error('extract failed (mock)');
-    if (Math.random() < notAReceiptRate) return { error: 'not_a_receipt' };
+    if (Math.random() < notAReceiptRate) return { receiptId: captureId, response: { error: 'not_a_receipt' } };
 
     const s = sample === 'random' ? pick(SAMPLES) : (SAMPLES[sample] ?? SAMPLES[0]);
     // Dates come back AS PRINTED — including the ambiguous forms dates.ts exists
     // to resolve, so the mock exercises that path rather than hiding it.
     const printed = pick(['07-04-2026', '2026-06-28', 'Jul 1, 2026', '05/07/2026']);
     return {
-      date: printed,
-      store: s.store,
-      items: s.items,
-      total: s.total,
-      category: s.category,
-      handwritten_notes: s.notes,
+      receiptId: captureId,
+      response: {
+        date: printed,
+        store: s.store,
+        items: s.items,
+        total: s.total,
+        category: s.category,
+        handwritten_notes: s.notes,
+      },
+    };
+  },
+};
+
+export const supabaseExtractClient: ExtractClient = {
+  async extract({ captureId, imageUri, mode, capturedAt, signal }) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const env = getFoundationEnv();
+    if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) throw sessionError;
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) throw new Error('No active Supabase session');
+
+    if (__DEV__) {
+      console.log('[extract] invoking', { environment: env.environment, mockBackend: env.mockBackend, mode });
+    }
+    const response = await FileSystem.uploadAsync(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
+      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+      httpMethod: 'POST',
+      fieldName: 'image',
+      mimeType: 'image/jpeg',
+      parameters: {
+        capture_id: captureId,
+        mode,
+        captured_at: capturedAt,
+      },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        apikey: env.supabaseAnonKey,
+      },
+    });
+
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const data = JSON.parse(response.body || 'null') as ExtractFunctionPayload | null;
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(data?.message ?? data?.error ?? data?.code ?? `extract failed (${response.status})`);
+    }
+    if (!data) throw new Error('extract returned no data');
+    if (data.status === 202) throw new Error(data.code ?? 'PROVIDER_DELAY');
+
+    return {
+      receiptId: data.receipt_id,
+      response: {
+        date: data.result?.txn_date ?? '',
+        store: data.result?.merchant ?? '',
+        items: data.result?.line_items.map((item) => `${item.name}  ${item.amount.toFixed(2)}`) ?? [],
+        total: data.result?.total ?? 0,
+        category: data.result?.suggested_category ?? 'Miscellaneous',
+        handwritten_notes: '',
+      },
     };
   },
 };
@@ -124,6 +210,6 @@ export const mockExtractClient: ExtractClient = {
 // ── Selection ───────────────────────────────────────────────────────────────
 
 /** The app's client. Swap to a real HTTP client once /extract exists. */
-export const extractClient: ExtractClient = mockExtractClient;
+export const extractClient: ExtractClient = getFoundationEnv().mockBackend ? mockExtractClient : supabaseExtractClient;
 
 export { isNotAReceipt, CATEGORIES };

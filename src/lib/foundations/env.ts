@@ -10,10 +10,12 @@ const normalize = (value: string | undefined) => {
 };
 
 export function getFoundationEnv(): FoundationEnv {
+  const mockBackend = normalize(process.env.EXPO_PUBLIC_MOCK_BACKEND) ?? normalize(process.env.MOCK_BACKEND) ?? '1';
+
   return {
     supabaseUrl: normalize(process.env.EXPO_PUBLIC_SUPABASE_URL),
     supabaseAnonKey: normalize(process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY),
     environment: normalize(process.env.EXPO_PUBLIC_ENV) ?? 'local',
-    mockBackend: (normalize(process.env.MOCK_BACKEND) ?? '1') === '1',
+    mockBackend: mockBackend === '1',
   };
 }

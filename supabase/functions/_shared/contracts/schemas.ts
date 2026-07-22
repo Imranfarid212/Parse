@@ -59,6 +59,13 @@ export const extractRequestSchema = z.object({
   }),
 });
 
+export const extractAckSchema = z.object({
+  status: z.union([z.literal(200), z.literal(202)]),
+  receipt_id: uuidSchema,
+  image_path: z.string().min(1),
+  acked_at: z.string().datetime(),
+});
+
 export const extractionLineItemSchema = z.object({
   name: z.string().min(1).max(160),
   qty: z.number().positive().default(1),
@@ -76,8 +83,8 @@ export const extractionResultSchema = z.object({
 });
 
 export const extractResponseSchema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal(200), receipt_id: uuidSchema, result: extractionResultSchema }),
-  z.object({ status: z.literal(202), receipt_id: uuidSchema, code: z.literal('PROVIDER_DELAY') }),
+  extractAckSchema.extend({ status: z.literal(200), result: extractionResultSchema }),
+  extractAckSchema.extend({ status: z.literal(202), code: z.literal('PROVIDER_DELAY') }),
   z.object({ status: z.literal(402), code: z.literal('QUOTA_EXHAUSTED'), paywall: z.enum(['plus', 'unlimited']) }),
   z.object({ status: z.literal(429), code: z.literal('RATE_LIMITED') }),
 ]);

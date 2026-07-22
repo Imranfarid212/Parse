@@ -22,6 +22,7 @@
     "expo-dev-client": "~57.0.7",
     "expo-device": "~57.0.1",
     "expo-font": "~57.0.0",
+    "expo-file-system": "~57.0.1",
     "expo-glass-effect": "~57.0.1",
     "expo-haptics": "~57.0.1",
     "expo-image": "~57.0.1",
@@ -87,7 +88,11 @@
     "supabase:prod:push": "supabase db push --db-url \"$SUPABASE_DB_URL\"",
     "gate": "node scripts/gate.js",
     "phase-lock": "node scripts/phase-lock.js",
-    "b1:maestro": "JAVA_HOME=/opt/homebrew/opt/openjdk PATH=/opt/homebrew/opt/openjdk/bin:$HOME/.maestro/bin:$PATH maestro test .maestro/b1-app-smoke.yaml"
+    "b1:maestro": "JAVA_HOME=/opt/homebrew/opt/openjdk PATH=/opt/homebrew/opt/openjdk/bin:$HOME/.maestro/bin:$PATH maestro test .maestro/b1-app-smoke.yaml",
+    "b3:app": "npm run typecheck && expo lint --no-cache && node scripts/verify-b3-app.js",
+    "b3:backend": "npm run contracts:sync && node scripts/verify-b3-backend.js",
+    "b3:db:verify": "node scripts/verify-b3-db.js",
+    "b3:all": "npm run b3:app && npm run b3:backend && npm run b3:db:verify"
   },
   "private": true
 }
