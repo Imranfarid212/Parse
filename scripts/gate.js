@@ -5,8 +5,8 @@ const path = require('path');
 const phase = process.argv[2]?.toLowerCase();
 const root = path.resolve(__dirname, '..');
 
-if (!['b1', 'b2'].includes(phase)) {
-  console.error('Usage: npm run gate -- b1|b2');
+if (!['b1', 'b2', 'b3'].includes(phase)) {
+  console.error('Usage: npm run gate -- b1|b2|b3');
   process.exit(1);
 }
 
@@ -48,6 +48,28 @@ const testsByPhase = {
       command: ['npm', ['run', 'b2:db:verify']],
     },
   ],
+  b3: [
+    {
+      id: 'T3.1-compress-orientation',
+      command: ['npm', ['run', 'b3:app']],
+    },
+    {
+      id: 'T3.2-enqueue-all-modes',
+      command: ['npm', ['run', 'b3:app']],
+    },
+    {
+      id: 'T3.3-reconnect-drain',
+      command: ['npm', ['run', 'b3:app']],
+    },
+    {
+      id: 'T3.4-backend-idempotency',
+      command: ['npm', ['run', 'b3:backend']],
+    },
+    {
+      id: 'T3.5-ack-gate-retention',
+      command: ['npm', ['run', 'b3:db:verify']],
+    },
+  ],
 };
 
 const tests = testsByPhase[phase];
@@ -76,7 +98,9 @@ const report = {
   note:
     phase === 'b1'
       ? 'Local B1 app/backend/db checks passed. Official playbook 5/5 still requires device smoke runs and CI lock proof.'
-      : 'Local B2 static/backend/db checks passed. Official playbook 5/5 still requires OTP device flow plus Apple/Google manual evidence.',
+      : phase === 'b2'
+        ? 'Local B2 static/backend/db checks passed. Official playbook 5/5 still requires OTP device flow plus Apple/Google manual evidence.'
+        : 'Local B3 static capture/offline queue checks passed. Official evidence still requires device capture/gallery/offline retry verification.',
   duration_ms: Date.now() - startedAt,
   commit_sha: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
   tests: results,
@@ -90,4 +114,4 @@ if (failed) {
   process.exit(1);
 }
 
-console.log(`GATE ${phase.toUpperCase()} - PASSED local app/backend/db checks; official device/manual evidence still pending`);
+console.log(`GATE ${phase.toUpperCase()} - PASSED local checks; official device/manual evidence still pending`);

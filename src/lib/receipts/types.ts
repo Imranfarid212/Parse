@@ -57,6 +57,8 @@ export type ReceiptFields = {
   handwritten_notes: string;
 };
 
+export type CaptureMode = 'default' | 'one_click';
+
 /**
  * Every photo becomes a row the moment it is taken, so we always know which
  * scans haven't come back yet.
@@ -71,8 +73,13 @@ export type ReceiptStatus = 'pending_extract' | 'extracted' | 'confirmed_local' 
 export type ReceiptRow = {
   id: string;
   imageUri: string;
+  captureMode: CaptureMode;
   status: ReceiptStatus;
   fields: ReceiptFields | null;
+  attempts: number;
+  nextRetryAt: number;
+  receiptId: string | null;
+  ackedAt: number | null;
   createdAt: number;
   updatedAt: number;
 };

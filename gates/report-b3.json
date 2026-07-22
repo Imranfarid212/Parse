@@ -1,0 +1,34 @@
+{
+  "phase": "b3",
+  "status": "passed_local_backend",
+  "note": "Local B3 static capture/offline queue checks passed. Official evidence still requires device capture/gallery/offline retry verification.",
+  "duration_ms": 14785,
+  "commit_sha": "f34acba4b1c686feeb9e832013ab3c68858e5a14",
+  "tests": [
+    {
+      "id": "T3.1-compress-orientation",
+      "status": "passed",
+      "duration_ms": 5398
+    },
+    {
+      "id": "T3.2-enqueue-all-modes",
+      "status": "passed",
+      "duration_ms": 4560
+    },
+    {
+      "id": "T3.3-reconnect-drain",
+      "status": "passed",
+      "duration_ms": 4490
+    },
+    {
+      "id": "T3.4-backend-idempotency",
+      "status": "passed",
+      "duration_ms": 224
+    },
+    {
+      "id": "T3.5-ack-gate-retention",
+      "status": "passed",
+      "duration_ms": 113
+    }
+  ]
+}
