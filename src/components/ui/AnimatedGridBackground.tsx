@@ -1,34 +1,39 @@
 /**
  * AnimatedGridBackground — native Skia recreation of the "animated grid
- * pattern" web component (originally SVG <pattern> + framer-motion, which RN
- * can't run). A faint grid of lines, skewed for a slight side-angle look, with
- * grey squares that fade in/out at random cells and periodically relocate,
- * softened by a radial focus toward center.
+ * pattern" web component. A faint skewed grid with grey squares that fade
+ * in/out at random cells and periodically relocate, softened by a radial focus.
+ *
+ * Split into two layers for power:
+ *   · a STATIC grid layer (memoised, drawn once) — it never animates, so there's
+ *     no reason to redraw it with the twinkle.
+ *   · an ANIMATED layer with only the twinkling squares, driven by a controlled
+ *     ~15fps clock (a cancellable interval, not an unbounded withRepeat that
+ *     redraws at 60–120fps). Slow opacity fades still read smooth at 15fps.
+ *
+ * The whole animation pauses — and its interval is cleared — whenever the
+ * landing route loses focus, the app backgrounds, or Reduce Motion is on. Every
+ * square keeps a STABLE id across relocations, so React never destroys and
+ * recreates its component (and animated value) the way random keys did.
  */
 import React, { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { StyleSheet, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, AppState, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { useIsFocused } from 'expo-router';
 import { Canvas, Fill, Group, Path, RadialGradient, Rect, vec } from '@shopify/react-native-skia';
-import {
-  Easing,
-  useDerivedValue,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-  type SharedValue,
-} from 'react-native-reanimated';
+import { useDerivedValue, useSharedValue, type SharedValue } from 'react-native-reanimated';
 
 import { colors, palette } from '@/theme/tokens';
 
 const GRID = 40; // cell size (px)
-const NUM_SQUARES = 36;
+const NUM_SQUARES = 20; // was 36 — unnecessarily dense; drop to 12–16 if still warm
 const LINE_COLOR = '#D1D5DB'; // gray-300, faint neutral
 const SQUARE_COLOR = '#9CA3AF'; // gray-400, neutral grey highlight (no blue)
 const MAX_OPACITY = 0.28;
 const TWINKLE_MS = 3200;
 const RELOCATE_MS = 2500;
 const SKEW_Y = -0.21; // ~12deg, leaning right-to-left
+const TWINKLE_FPS = 15; // controlled clock rate
 
-type Cell = { px: number; py: number; phase: number; key: number };
+type Cell = { id: number; px: number; py: number; phase: number };
 
 function TwinkleSquare({ cell, size, t }: { cell: Cell; size: number; t: SharedValue<number> }) {
   const opacity = useDerivedValue(() => {
@@ -84,7 +89,7 @@ export function AnimatedGridBackground({
     const y = screenY(px, py);
     return y + GRID > excludeBand.top - GRID && y < excludeBand.bottom + GRID;
   };
-  const randomCell = (): Cell => {
+  const randomPos = () => {
     let px = 0;
     let py = 0;
     for (let tries = 0; tries < 24; tries++) {
@@ -92,53 +97,95 @@ export function AnimatedGridBackground({
       py = Math.floor(Math.random() * rows) * GRID + 1;
       if (!inExcluded(px, py)) break;
     }
-    return { px, py, phase: Math.random(), key: Math.random() };
+    return { px, py, phase: Math.random() };
   };
+  // STABLE id per slot: relocation keeps the id and just moves the square, so
+  // React reuses the same <TwinkleSquare> and its derived value.
+  const makeCell = (id: number): Cell => ({ id, ...randomPos() });
 
-  const [squares, setSquares] = useState<Cell[]>(() => Array.from({ length: NUM_SQUARES }, randomCell));
+  const [squares, setSquares] = useState<Cell[]>(() =>
+    Array.from({ length: NUM_SQUARES }, (_, i) => makeCell(i)),
+  );
 
   useEffect(() => {
-    setSquares(Array.from({ length: NUM_SQUARES }, randomCell));
+    setSquares(Array.from({ length: NUM_SQUARES }, (_, i) => makeCell(i)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cols, rows, excludeBand]);
 
+  // Pause when the route isn't focused, the app is backgrounded, or Reduce
+  // Motion is on. `animate` gates every interval below, so they never run —
+  // and their cleanup clears them — outside those conditions.
+  const isFocused = useIsFocused();
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  const [reduceMotion, setReduceMotion] = useState(false);
   useEffect(() => {
+    void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
+    const app = AppState.addEventListener('change', (s) => setAppActive(s === 'active'));
+    const rm = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    return () => {
+      app.remove();
+      rm.remove();
+    };
+  }, []);
+  const animate = isFocused && appActive && !reduceMotion;
+
+  // Controlled ~15fps twinkle clock. Advancing a shared value on an interval —
+  // instead of withRepeat — is what caps the redraw rate; cleared on pause.
+  const t = useSharedValue(0);
+  useEffect(() => {
+    if (!animate) return undefined;
+    const periodMs = 1000 / TWINKLE_FPS;
+    const step = periodMs / TWINKLE_MS;
+    const id = setInterval(() => {
+      t.value = (t.value + step) % 1;
+    }, periodMs);
+    return () => clearInterval(id);
+  }, [animate, t]);
+
+  // Periodic relocation, also paused with `animate`.
+  useEffect(() => {
+    if (!animate) return undefined;
     const iv = setInterval(() => {
-      setSquares((prev) => prev.map((s) => (Math.random() < 0.3 ? randomCell() : s)));
+      setSquares((prev) =>
+        prev.map((s) => (Math.random() < 0.3 ? { id: s.id, ...randomPos() } : s)),
+      );
     }, RELOCATE_MS);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cols, rows, excludeBand]);
+  }, [animate, cols, rows, excludeBand]);
 
-  const t = useSharedValue(0);
-  useEffect(() => {
-    t.value = withRepeat(withTiming(1, { duration: TWINKLE_MS, easing: Easing.linear }), -1, false);
-  }, [t]);
+  // Static layer: fill + grid. Memoised on geometry alone, so a relocation
+  // (setSquares) can't trigger a redraw of it.
+  const staticLayer = useMemo(
+    () => (
+      <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
+        <Fill color={colors.background} />
+        <Group origin={vec(width / 2, height / 2)} transform={[{ skewY: SKEW_Y }]}>
+          <Path path={gridPath} style="stroke" strokeWidth={1} color={LINE_COLOR} opacity={0.35} />
+        </Group>
+      </Canvas>
+    ),
+    [width, height, gridPath],
+  );
 
   return (
     <View style={styles.root}>
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Fill color={colors.background} />
+      {staticLayer}
 
-        {/* Skewed grid + twinkling squares. */}
+      {/* Animated layer: only the twinkling squares, plus the radial focus on
+          top so it fades BOTH these squares and the static grid beneath. */}
+      <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
         <Group origin={vec(width / 2, height / 2)} transform={[{ skewY: SKEW_Y }]}>
-          <Path path={gridPath} style="stroke" strokeWidth={1} color={LINE_COLOR} opacity={0.35} />
           {squares.map((c) => (
-            <TwinkleSquare key={c.key} cell={c} size={GRID - 2} t={t} />
+            <TwinkleSquare key={c.id} cell={c} size={GRID - 2} t={t} />
           ))}
         </Group>
 
-        {/* Radial focus — grid crisp at center, fading only partway (never fully
-            white) so it stays visible behind the bottom glass card. */}
         <Rect x={0} y={0} width={width} height={height}>
           <RadialGradient
             c={vec(width / 2, height * 0.45)}
             r={Math.max(width, height) * 0.95}
-            colors={[
-              `${palette.canvas}00`,
-              `${palette.canvas}00`,
-              `${palette.canvas}33`,
-            ]}
+            colors={[`${palette.canvas}00`, `${palette.canvas}00`, `${palette.canvas}33`]}
             positions={[0, 0.25, 1]}
           />
         </Rect>

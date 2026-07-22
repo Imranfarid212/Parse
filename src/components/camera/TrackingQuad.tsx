@@ -56,8 +56,12 @@ const MIN_AREA = 0.04;
  */
 const CENTER_X_TOL = 0.36;
 const CENTER_Y_TOL = 0.42;
-/** withTiming toward each accepted detection — this IS the smoothing. */
-const TRACK_MS = 70;
+/**
+ * withTiming toward each accepted detection — this IS the smoothing. Roughly
+ * matched to the detection interval so the box is always gliding toward the
+ * next detection rather than snapping and waiting (which reads as stepping).
+ */
+const TRACK_MS = 100;
 /**
  * Continuity gate. Vision returns SOME rectangle every frame — often the wrong
  * one (screen, keyboard) as the receipt wavers. A detection whose centre jumps
@@ -69,6 +73,15 @@ const REJECT_FRAC = 0.3;
 const REJECT_MAX = 6;
 /** How long the quad survives without a fresh detection. */
 const LOST_MS = 260;
+/**
+ * Detection is throttled by FRAME TIMESTAMP, not frame count: run Apple Vision
+ * at most once per DETECT_INTERVAL_S even though the preview streams at 30fps.
+ * VNDetectDocumentSegmentationRequest on the Neural Engine is the app's main
+ * heat cost. ~7fps was too sparse — the box stepped — so this sits at ~11fps:
+ * still ~1/3 the original per-frame ML work, but smooth. Every skipped frame is
+ * still disposed.
+ */
+const DETECT_INTERVAL_S = 0.09; // ~11 detections/sec
 
 const YELLOW = '#FFD60A';
 
@@ -110,6 +123,8 @@ export function useDocumentTracking(): DocumentTracking {
   const frames = useSharedValue(0);
   const hits = useSharedValue(0);
   const lastConf = useSharedValue(0);
+  // Timestamp of the last frame we actually ran detection on (seconds).
+  const lastDetectTs = useSharedValue(0);
   // Lock state carried between detections: the locked centre, the consecutive
   // outlier count, and whether we currently hold a lock.
   const track = useSharedValue({ cx: 0, cy: 0, rejects: 0, active: false });
@@ -123,6 +138,10 @@ export function useDocumentTracking(): DocumentTracking {
   /* eslint-enable react-hooks/rules-of-hooks */
 
   const frameOutput = useFrameOutput({
+    // 720p for detection: 540p measurably hurt how reliably Vision found and
+    // placed the document. The heat saving now comes from the ~11fps throttle
+    // (below) and pausing the whole session when idle, not from starving the
+    // detector of pixels. The captured PHOTO is a separate full-res output.
     targetResolution: { width: 1280, height: 720 },
     pixelFormat: 'yuv',
     dropFramesWhileBusy: true,
@@ -130,6 +149,11 @@ export function useDocumentTracking(): DocumentTracking {
       'worklet';
       try {
         if (boxed == null) return;
+        // Throttle by presentation timestamp (seconds). A skipped frame falls
+        // straight through to dispose() below — never left undisposed.
+        const ts = frame.timestamp;
+        if (ts <= 0 || ts - lastDetectTs.value < DETECT_INTERVAL_S) return;
+        lastDetectTs.value = ts;
         frames.value += 1;
         const q = boxed.unbox().detect(frame);
         if (q != null) {

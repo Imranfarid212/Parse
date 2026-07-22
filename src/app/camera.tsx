@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { type Href, useRouter } from 'expo-router';
+import { ActivityIndicator, AppState, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { type Href, useIsFocused, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
@@ -90,6 +90,18 @@ export default function CameraScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const focus = useFocusReticle();
   const menuProgress = useSharedValue(0);
+
+  // Camera lifecycle: run the sensor + Vision detection ONLY when it's actually
+  // needed — this route focused, the app foregrounded, the menu closed, and no
+  // capture in flight. Anything else stops the session, which is the single
+  // biggest thermal win (an idle-but-live camera + ML is what cooks the phone).
+  const isFocused = useIsFocused();
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => setAppActive(s === 'active'));
+    return () => sub.remove();
+  }, []);
+  const cameraActive = isFocused && appActive && !menuOpen && phase.k === 'idle';
 
   // One-click's folder: slides in when the mode is chosen and stays; the
   // digest pop fires each time a scan lands.
@@ -319,9 +331,11 @@ export default function CameraScreen() {
   const trackCenter = tracking.center;
   const trackShown = tracking.shown;
   useEffect(() => {
+    if (!cameraActive) return; // nothing to focus when the sensor is stopped
     let last = { x: 0, y: 0, t: 0 };
+    // Poll ~every 800ms (not 350) — the lens still only refocuses at most once
+    // per 1.2s, so faster polling just spun the CPU for nothing.
     const id = setInterval(() => {
-      if (phase.k !== 'idle' || busy || menuOpen) return;
       if (trackShown.value < 0.6) return; // no confident box → leave continuous AF alone
       const c = trackCenter.value;
       const now = Date.now();
@@ -329,9 +343,9 @@ export default function CameraScreen() {
       if (now - last.t < 1200 || moved < width * 0.06) return;
       last = { x: c.x, y: c.y, t: now };
       void cameraRef.current?.focusTo({ x: c.x, y: c.y }).catch(() => {});
-    }, 350);
+    }, 800);
     return () => clearInterval(id);
-  }, [trackCenter, trackShown, phase.k, busy, menuOpen, width]);
+  }, [trackCenter, trackShown, cameraActive, width]);
 
   // Auth still resolving — hold on a spinner before any routing decision.
   if (auth.loading) {
@@ -382,9 +396,13 @@ export default function CameraScreen() {
               style={StyleSheet.absoluteFill}
               device={device}
               outputs={tracking.output ? [photoOutput, tracking.output] : [photoOutput]}
-              // Stays live behind the review overlay — the flight hands the
-              // screen back at 90%, and a stopped session would show black.
-              isActive={!menuOpen}
+              // 30fps is plenty for framing a receipt; 60 just doubles the
+              // detection/preview work for no scanning benefit.
+              constraints={[{ fps: 30 }]}
+              // Live only when actually scanning — see `cameraActive`. Stopping
+              // during review/menu/background is the main thermal saving. The
+              // trade is a short resume when you return to the live preview.
+              isActive={cameraActive}
             />
           )}
 
@@ -394,7 +412,9 @@ export default function CameraScreen() {
 
           {/* Live document outline, riding the tracker's shared values. */}
           <TrackingQuad tracking={tracking} />
-          {__DEV__ && <TrackingDebug tracking={tracking} />}
+          {/* Diagnostics HUD refreshes React state on a timer, so it's opt-in
+              (set EXPO_PUBLIC_TRACKING_HUD=1 in .env), not always-on in dev. */}
+          {__DEV__ && process.env.EXPO_PUBLIC_TRACKING_HUD === '1' && <TrackingDebug tracking={tracking} />}
 
           {/* One-click's folder. Always mounted — it has to stay around to
               animate out when you switch to Default; it just parks off-screen.
