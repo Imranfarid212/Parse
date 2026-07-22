@@ -345,6 +345,7 @@ export type Database = {
       }
       receipts: {
         Row: {
+          acked_at: string | null
           capture_id: string
           capture_mode: Database["public"]["Enums"]["capture_mode"]
           category_id: number | null
@@ -353,6 +354,7 @@ export type Database = {
           currency: string
           deleted_at: string | null
           id: string
+          image_byte_size: number | null
           image_path: string | null
           merchant: string | null
           notes: string | null
@@ -365,6 +367,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          acked_at?: string | null
           capture_id: string
           capture_mode: Database["public"]["Enums"]["capture_mode"]
           category_id?: number | null
@@ -373,6 +376,7 @@ export type Database = {
           currency?: string
           deleted_at?: string | null
           id?: string
+          image_byte_size?: number | null
           image_path?: string | null
           merchant?: string | null
           notes?: string | null
@@ -385,6 +389,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          acked_at?: string | null
           capture_id?: string
           capture_mode?: Database["public"]["Enums"]["capture_mode"]
           category_id?: number | null
@@ -393,6 +398,7 @@ export type Database = {
           currency?: string
           deleted_at?: string | null
           id?: string
+          image_byte_size?: number | null
           image_path?: string | null
           merchant?: string | null
           notes?: string | null
