@@ -8,6 +8,7 @@ import { TOAST_REFERRAL_PROMPT } from '@/../packages/contracts/src/copy';
 import type { Category } from '@/../packages/contracts/src/types';
 import { getBootstrapLocale, type BootstrapLocale } from '@/lib/auth/bootstrap';
 import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
+import { withNetworkRetry } from '@/lib/network/retry';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -27,9 +28,9 @@ type AuthContextValue = {
   categories: Category[];
   selectedCategoryIds: number[];
   bootstrapLocale: BootstrapLocale;
-  refreshProfile: () => Promise<void>;
+  refreshProfile: () => Promise<Profile | null>;
   signInWithOtp: (email: string) => Promise<void>;
-  verifyOtp: (email: string, token: string) => Promise<void>;
+  verifyOtp: (email: string, token: string) => Promise<Profile | null>;
   signInWithGoogle: () => Promise<void>;
   signInWithApple: () => Promise<void>;
   completeOnboarding: (categoryIds: number[], country: string, defaultCurrency: string) => Promise<void>;
@@ -81,40 +82,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const bootstrapLocale = useMemo(() => getBootstrapLocale(), []);
 
   const refreshProfile = useCallback(async () => {
-    const currentSession = (await supabase.auth.getSession()).data.session;
+    const nextState = await withNetworkRetry(
+      async () => {
+        const currentSession = (await supabase.auth.getSession()).data.session;
 
-    const { data: categoryRows, error: categoryError } = await supabase
-      .from('categories')
-      .select('id,name,is_default,is_system')
-      .order('id');
-    if (categoryError) throw categoryError;
+        const { data: categoryRows, error: categoryError } = await supabase
+          .from('categories')
+          .select('id,name,is_default,is_system')
+          .order('id');
+        if (categoryError) throw categoryError;
 
-    if (!currentSession?.user) {
-      setSession(null);
-      setCategories(categoryRows ?? []);
-      setProfile(null);
-      setSelectedCategoryIds([]);
-      return;
-    }
+        if (!currentSession?.user) {
+          return {
+            currentSession: null,
+            categoryRows: categoryRows ?? [],
+            profileRow: null,
+            pickedRows: [],
+          };
+        }
 
-    const { data: profileRow, error: profileError } = await supabase
-      .from('profiles')
-      .select('id,country,default_currency,onboarding_complete')
-      .eq('id', currentSession.user.id)
-      .maybeSingle();
-    if (profileError) throw profileError;
+        const { data: profileRow, error: profileError } = await supabase
+          .from('profiles')
+          .select('id,country,default_currency,onboarding_complete')
+          .eq('id', currentSession.user.id)
+          .maybeSingle();
+        if (profileError) throw profileError;
 
-    const { data: pickedRows, error: pickedError } = await supabase
-      .from('user_categories')
-      .select('category_id')
-      .eq('user_id', currentSession.user.id)
-      .order('sort_order');
-    if (pickedError) throw pickedError;
+        const { data: pickedRows, error: pickedError } = await supabase
+          .from('user_categories')
+          .select('category_id')
+          .eq('user_id', currentSession.user.id)
+          .order('sort_order');
+        if (pickedError) throw pickedError;
 
-    setSession(currentSession);
-    setCategories(categoryRows ?? []);
-    setProfile(profileRow ?? null);
-    setSelectedCategoryIds((pickedRows ?? []).map((row) => row.category_id));
+        return {
+          currentSession,
+          categoryRows: categoryRows ?? [],
+          profileRow: profileRow ?? null,
+          pickedRows: pickedRows ?? [],
+        };
+      },
+      { attempts: 3, label: 'auth.refreshProfile' },
+    );
+
+    setSession(nextState.currentSession);
+    setCategories(nextState.categoryRows);
+    setProfile(nextState.profileRow);
+    setSelectedCategoryIds(nextState.pickedRows.map((row) => row.category_id));
+    return nextState.profileRow;
   }, []);
 
   useEffect(() => {
@@ -181,25 +196,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signInWithOtp = useCallback(
     async (email: string) => {
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          data: {
-            country: bootstrapLocale.country,
-            default_currency: bootstrapLocale.defaultCurrency,
-          },
+      await withNetworkRetry(
+        async () => {
+          const { error } = await supabase.auth.signInWithOtp({
+            email,
+            options: {
+              shouldCreateUser: true,
+              data: {
+                country: bootstrapLocale.country,
+                default_currency: bootstrapLocale.defaultCurrency,
+              },
+            },
+          });
+          if (error) throw error;
         },
-      });
-      if (error) throw error;
+        { attempts: 2, label: 'auth.signInWithOtp' },
+      );
     },
     [bootstrapLocale],
   );
 
   const verifyOtp = useCallback(
     async (email: string, token: string) => {
-      const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
-      if (error) throw error;
-      await refreshProfile();
+      await withNetworkRetry(
+        async () => {
+          const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
+          if (error) throw error;
+        },
+        { attempts: 2, label: 'auth.verifyOtp' },
+      );
+      return refreshProfile();
     },
     [refreshProfile],
   );
@@ -255,12 +281,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const completeOnboarding = useCallback(
     async (categoryIds: number[], country: string, defaultCurrency: string) => {
-      const { error } = await supabase.rpc('complete_onboarding', {
-        selected_category_ids: categoryIds,
-        selected_country: country,
-        selected_default_currency: defaultCurrency,
-      });
-      if (error) throw error;
+      await withNetworkRetry(
+        async () => {
+          const { error } = await supabase.rpc('complete_onboarding', {
+            selected_category_ids: categoryIds,
+            selected_country: country,
+            selected_default_currency: defaultCurrency,
+          });
+          if (error) throw error;
+        },
+        { attempts: 3, label: 'auth.completeOnboarding' },
+      );
       await refreshProfile();
     },
     [refreshProfile],
