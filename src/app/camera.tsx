@@ -47,7 +47,20 @@ type Mode = 'default' | 'oneclick';
  */
 type Phase =
   | { k: 'idle' }
-  | { k: 'review'; photoUri: string; rowId: string | null; fields: ReceiptFields | null; loading: boolean }
+  | {
+      k: 'review';
+      photoUri: string;
+      rowId: string | null;
+      fields: ReceiptFields | null;
+      loading: boolean;
+      /**
+       * When the shutter was pressed. The review card's entrance is choreo-
+       * graphed against THIS, not against its own mount — capture + file write
+       * sit between the two, so anchoring to mount would let the card drift
+       * later on slower captures.
+       */
+      startedAt: number;
+    }
   | { k: 'processing' };
 
 const FOLDER_W = 82;
@@ -101,7 +114,17 @@ export default function CameraScreen() {
     const sub = AppState.addEventListener('change', (s) => setAppActive(s === 'active'));
     return () => sub.remove();
   }, []);
-  const cameraActive = isFocused && appActive && !menuOpen && phase.k === 'idle';
+  /**
+   * Set the moment a review swipe is confirmed, so the sensor comes back while
+   * the card is still flying to the folder instead of after the animation ends.
+   * Without this the frozen frame clears onto a stopped preview and the shutter
+   * is dead until teardown — the session, not just detection, is gated below.
+   *
+   * Costs the tail of the flight (~1s) of camera time per confirmed scan. The
+   * thermal win — sensor off through the whole read — is untouched.
+   */
+  const [wakeEarly, setWakeEarly] = useState(false);
+  const cameraActive = isFocused && appActive && !menuOpen && (phase.k === 'idle' || wakeEarly);
 
   // One-click's folder: slides in when the mode is chosen and stays; the
   // digest pop fires each time a scan lands.
@@ -202,8 +225,10 @@ export default function CameraScreen() {
 
   const onCapture = async () => {
     if (!cameraRef.current || busy) return;
+    const startedAt = Date.now(); // the shutter moment — see Phase.startedAt
     try {
       setBusy(true);
+      setWakeEarly(false); // a new scan re-arms the gate
       // VisionCamera hands back a native Photo object rather than a URI. Spill
       // it to a temp file for the pipeline, then dispose — the underlying
       // buffer is native memory and won't be reclaimed by GC.
@@ -219,11 +244,11 @@ export default function CameraScreen() {
 
       if (mode === 'default') {
         // Card appears immediately as a skeleton; fields fill in when they land.
-        setPhase({ k: 'review', photoUri: photo.uri, rowId: null, fields: null, loading: true });
+        setPhase({ k: 'review', photoUri: photo.uri, rowId: null, fields: null, loading: true, startedAt });
         const out = await processCapture(photo.uri, ac.signal);
 
         if (out.kind === 'extracted') {
-          setPhase({ k: 'review', photoUri: photo.uri, rowId: out.row.id, fields: out.fields, loading: false });
+          setPhase({ k: 'review', photoUri: photo.uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
         } else if (out.kind === 'not_a_receipt') {
           setPhase({ k: 'idle' });
           flashNotice('Please scan only documents and receipts');
@@ -255,10 +280,11 @@ export default function CameraScreen() {
     if (res.canceled || !res.assets[0]?.uri) return;
     const uri = res.assets[0].uri;
 
-    setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true });
+    const startedAt = Date.now();
+    setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true, startedAt });
     const out = await processCapture(uri);
     if (out.kind === 'extracted') {
-      setPhase({ k: 'review', photoUri: uri, rowId: out.row.id, fields: out.fields, loading: false });
+      setPhase({ k: 'review', photoUri: uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
     } else if (out.kind === 'not_a_receipt') {
       setPhase({ k: 'idle' });
       flashNotice('Please scan only documents and receipts');
@@ -285,12 +311,17 @@ export default function CameraScreen() {
 
   /** The flight has finished playing; drop the overlay if it's still ours. */
   const onReviewDone = useCallback(() => {
+    setWakeEarly(false); // phase.k === 'idle' takes over from here
     setPhase((prev) => (prev.k === 'review' ? { k: 'idle' } : prev));
   }, []);
+
+  /** Swipe confirmed — wake the sensor now, mid-flight, not at teardown. */
+  const onReviewRelease = useCallback(() => setWakeEarly(true), []);
 
   /** Retake: cancel any in-flight extract and drop the row. */
   const onRetake = useCallback(async () => {
     abortRef.current?.abort();
+    setWakeEarly(false);
     if (phase.k === 'review' && phase.rowId) await store.remove(phase.rowId);
     setPhase({ k: 'idle' });
   }, [phase]);
@@ -467,7 +498,9 @@ export default function CameraScreen() {
           photoUri={phase.photoUri}
           fields={phase.fields}
           loading={phase.loading}
+          startedAt={phase.startedAt}
           onConfirmed={onConfirmed}
+          onRelease={onReviewRelease}
           onDone={onReviewDone}
           onRetake={onRetake}
           onFieldsChange={onFieldsChange}

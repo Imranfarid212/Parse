@@ -1,21 +1,20 @@
 /**
- * TornEdge — the jagged receipt-bottom row of white teeth (16 downward
- * triangles, bases touching along the top).
+ * TornEdge — the jagged receipt-bottom row of white teeth (28 downward
+ * triangles, bases touching along the top). Same tooth count/height as the
+ * onboarding card's zigzag (ReceiptCard.tsx's `bare` mode) so both cards match.
  *
  * Drawn as a Skia path rather than a row of 0×0 border-triangle views: those
  * render via borders on a zero-size box, and a zero-size layer doesn't reliably
- * inherit an ancestor's scale transform on iOS — so under the card's breathing
- * scale the teeth stayed put while the card pulsed. A Skia canvas is a real
- * layer and scales with the parent like the card does.
+ * inherit an ancestor's scale transform on iOS.
  */
 import React, { useMemo } from 'react';
 import { Canvas, Path, Skia } from '@shopify/react-native-skia';
 
-const ZIG = 16;
+const ZIG = 28;
 
 export function TornEdge({ width, s = 1, color = '#fff' }: { width: number; s?: number; color?: string }) {
   const toothW = width / ZIG;
-  const toothH = 12 * s;
+  const toothH = 8 * s;
 
   const path = useMemo(() => {
     const p = Skia.Path.Make();

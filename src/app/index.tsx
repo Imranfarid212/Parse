@@ -15,8 +15,8 @@ import { CreateAccountCard } from '@/components/CreateAccountCard';
 import { useAuth } from '@/lib/auth/auth-context';
 import { colors, spacing, typography } from '@/theme/tokens';
 
-const HEADLINE = 'Never type an expense again';
-const SUBTITLE = 'One snap. Perfectly structured data';
+const HEADLINE_MAIN = 'Scan one receipt.';
+const HEADLINE_SUB = 'See the magic';
 
 export default function LandingScreen() {
   const router = useRouter();
@@ -34,7 +34,7 @@ export default function LandingScreen() {
   useFocusEffect(
     useCallback(() => {
       if (auth.loading || !auth.session || !auth.profile) return;
-      router.replace((auth.profile.onboarding_complete ? '/camera' : '/onboarding') as Href);
+      router.replace((auth.profile.onboarding_complete ? '/camera' : '/welcome') as Href);
     }, [auth.loading, auth.profile, auth.session, router]),
   );
 
@@ -81,9 +81,10 @@ export default function LandingScreen() {
         <Animated.View style={[styles.heroText, heroStyle]}>
           <View ref={textRef} onLayout={measureText}>
             <Text style={styles.headline} testID="landing-headline">
-              {HEADLINE}
+              {HEADLINE_MAIN}
+              {'\n'}
+              <Text style={styles.headlineSub}>{HEADLINE_SUB}</Text>
             </Text>
-            <Text style={styles.subtitle}>{SUBTITLE}</Text>
           </View>
         </Animated.View>
 
@@ -103,14 +104,16 @@ const styles = StyleSheet.create({
   screen: { width: '100%', height: '100%', paddingHorizontal: 4 },
   heroText: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md },
   headline: {
-    ...typography.display,
-    color: colors.textPrimary,
+    fontFamily: typography.display.fontFamily, // InstrumentSans_700Bold — heaviest sans weight loaded
+    fontSize: typography.display.fontSize - 5,
+    letterSpacing: -0.5,
+    color: '#000000',
     textAlign: 'center',
   },
-  subtitle: {
-    ...typography.subtitle,
-    color: '#41454D',
-    textAlign: 'center',
-    marginTop: spacing.xs,
+  headlineSub: {
+    fontFamily: 'InstrumentSans_600SemiBold_Italic',
+    fontSize: typography.display.fontSize - 13,
+    letterSpacing: -0.5,
+    color: '#555555',
   },
 });

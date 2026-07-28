@@ -67,7 +67,7 @@ export default function OtpScreen() {
       Keyboard.dismiss();
       setBusy(true);
       const profile = await auth.verifyOtp(normalizeEmail(email), nextCode);
-      router.replace((profile?.onboarding_complete ? '/camera' : '/onboarding') as Href);
+      router.replace((profile?.onboarding_complete ? '/camera' : '/welcome') as Href);
     } catch (error) {
       Alert.alert('Code not accepted', getOtpErrorMessage(error));
     } finally {

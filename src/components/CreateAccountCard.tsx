@@ -4,7 +4,7 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 
 import { GoogleLogo } from '@/components/ui/GoogleLogo';
-import { colors, palette, radius, spacing, typography } from '@/theme/tokens';
+import { palette, radius, spacing, typography } from '@/theme/tokens';
 
 const BTN = palette.buttonDark;
 
@@ -26,26 +26,24 @@ export function CreateAccountCard({
         {/* Cool-grey tint over the frost (instead of pure white). */}
         <View style={styles.tintFill} pointerEvents="none" />
 
-        <Text style={styles.title}>Your search ends here</Text>
-
         <Pressable
           style={({ pressed }) => [styles.btn, styles.dark, (pressed || busy) && styles.pressed]}
+          onPress={onApple}
+          disabled={busy}
+          testID="auth-apple-button"
+        >
+          <Ionicons name="logo-apple" size={20} color="#fff" />
+          <Text style={styles.labelLight}>Sign in with Apple</Text>
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [styles.btn, styles.white, (pressed || busy) && styles.pressed]}
           onPress={onGoogle}
           disabled={busy}
           testID="auth-google-button"
         >
           <GoogleLogo size={18} />
-          <Text style={styles.labelLight}>Sign in with Google</Text>
-        </Pressable>
-
-        <Pressable
-          style={({ pressed }) => [styles.btn, styles.white, (pressed || busy) && styles.pressed]}
-          onPress={onApple}
-          disabled={busy}
-          testID="auth-apple-button"
-        >
-          <Ionicons name="logo-apple" size={20} color="#111" />
-          <Text style={styles.labelDark}>Sign in with Apple</Text>
+          <Text style={styles.labelDark}>Sign in with Google</Text>
         </Pressable>
 
         <Pressable
@@ -98,13 +96,6 @@ const styles = StyleSheet.create({
     gap: spacing.sm + 3,
   },
 
-  title: {
-    fontFamily: typography.display.fontFamily,
-    fontSize: 20,
-    color: colors.textPrimary,
-    textAlign: 'center',
-    marginBottom: spacing.xs,
-  },
   btn: {
     flexDirection: 'row',
     alignItems: 'center',
