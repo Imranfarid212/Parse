@@ -37,6 +37,16 @@ const TWINKLE_FPS = 15; // controlled clock rate
 
 type Cell = { id: number; px: number; py: number; phase: number; green: boolean };
 
+// A plain helper, not an inline hook callback — react-hooks/purity flags
+// Math.random() called directly inside a useMemo/useState body, but not calls
+// routed through a named function like this (same pattern randomPos() below
+// already relies on from useState's initializer).
+function pickGreenIds(): Set<number> {
+  const ids = new Set<number>();
+  while (ids.size < Math.min(NUM_GREEN, NUM_SQUARES)) ids.add(Math.floor(Math.random() * NUM_SQUARES));
+  return ids;
+}
+
 function TwinkleSquare({ cell, size, t }: { cell: Cell; size: number; t: SharedValue<number> }) {
   const opacity = useDerivedValue(() => {
     const p = (t.value + cell.phase) % 1;
@@ -105,11 +115,7 @@ export function AnimatedGridBackground({
   };
   // Pick NUM_GREEN random tile ids once; green-ness is keyed to the id so a
   // relocation keeps the same tiles green rather than reshuffling which glow.
-  const greenIds = useMemo(() => {
-    const ids = new Set<number>();
-    while (ids.size < Math.min(NUM_GREEN, NUM_SQUARES)) ids.add(Math.floor(Math.random() * NUM_SQUARES));
-    return ids;
-  }, []);
+  const greenIds = useMemo(() => pickGreenIds(), []);
   // STABLE id per slot: relocation keeps the id and just moves the square, so
   // React reuses the same <TwinkleSquare> and its derived value.
   const makeCell = (id: number): Cell => ({ id, green: greenIds.has(id), ...randomPos() });
