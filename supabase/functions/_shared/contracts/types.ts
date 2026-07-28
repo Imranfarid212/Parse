@@ -18,3 +18,10 @@ export type SessionShape = {
   email: string | null;
   access_token_expires_at: string | null;
 };
+
+export type ExtractAck = {
+  status: 200 | 202;
+  receipt_id: string;
+  image_path: string;
+  acked_at: string;
+};

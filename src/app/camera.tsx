@@ -33,7 +33,7 @@ import { TOAST_REFERRAL_PROMPT, useAuth } from '@/lib/auth/auth-context';
 import { markReferralPromptSeen, shouldShowReferralPrompt } from '@/lib/auth/referralPrompt';
 import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
-import type { ReceiptFields } from '@/lib/receipts/types';
+import type { CaptureMode, ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
 
@@ -61,9 +61,11 @@ type Phase =
        */
       startedAt: number;
     }
-  | { k: 'processing' };
+  | { k: 'processing'; reason?: string };
 
 const FOLDER_W = 82;
+
+const toCaptureMode = (mode: Mode): CaptureMode => (mode === 'oneclick' ? 'one_click' : 'default');
 
 function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
   return (
@@ -218,8 +220,8 @@ export default function CameraScreen() {
     );
   }, [digest]);
 
-  const showProcessing = useCallback(() => {
-    setPhase({ k: 'processing' });
+  const showProcessing = useCallback((reason?: string) => {
+    setPhase({ k: 'processing', reason: __DEV__ ? reason : undefined });
     setTimeout(() => setPhase({ k: 'idle' }), 1800);
   }, []);
 
@@ -245,7 +247,7 @@ export default function CameraScreen() {
       if (mode === 'default') {
         // Card appears immediately as a skeleton; fields fill in when they land.
         setPhase({ k: 'review', photoUri: photo.uri, rowId: null, fields: null, loading: true, startedAt });
-        const out = await processCapture(photo.uri, ac.signal);
+        const out = await processCapture(photo.uri, toCaptureMode(mode), ac.signal);
 
         if (out.kind === 'extracted') {
           setPhase({ k: 'review', photoUri: photo.uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
@@ -253,11 +255,11 @@ export default function CameraScreen() {
           setPhase({ k: 'idle' });
           flashNotice('Please scan only documents and receipts');
         } else {
-          showProcessing();
+          showProcessing(out.reason);
         }
       } else {
         // One-click: no card. The folder digests it and you shoot again.
-        const out = await processCapture(photo.uri, ac.signal);
+        const out = await processCapture(photo.uri, toCaptureMode(mode), ac.signal);
 
         if (out.kind === 'extracted') {
           await confirm(out.row.id, out.fields);
@@ -265,7 +267,7 @@ export default function CameraScreen() {
         } else if (out.kind === 'not_a_receipt') {
           flashNotice('Please scan only documents and receipts');
         } else {
-          showProcessing();
+          showProcessing(out.reason);
         }
       }
     } catch (e) {
@@ -281,15 +283,27 @@ export default function CameraScreen() {
     const uri = res.assets[0].uri;
 
     const startedAt = Date.now();
-    setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true, startedAt });
-    const out = await processCapture(uri);
-    if (out.kind === 'extracted') {
-      setPhase({ k: 'review', photoUri: uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
-    } else if (out.kind === 'not_a_receipt') {
-      setPhase({ k: 'idle' });
-      flashNotice('Please scan only documents and receipts');
+    if (mode === 'default') {
+      setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true, startedAt });
+      const out = await processCapture(uri, 'default');
+      if (out.kind === 'extracted') {
+        setPhase({ k: 'review', photoUri: uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
+      } else if (out.kind === 'not_a_receipt') {
+        setPhase({ k: 'idle' });
+        flashNotice('Please scan only documents and receipts');
+      } else {
+        showProcessing(out.reason);
+      }
     } else {
-      showProcessing();
+      const out = await processCapture(uri, 'one_click');
+      if (out.kind === 'extracted') {
+        await confirm(out.row.id, out.fields);
+        popFolder();
+      } else if (out.kind === 'not_a_receipt') {
+        flashNotice('Please scan only documents and receipts');
+      } else {
+        showProcessing(out.reason);
+      }
     }
   };
 
@@ -510,6 +524,7 @@ export default function CameraScreen() {
       {phase.k === 'processing' && (
         <View style={styles.processing}>
           <Text style={styles.processingText}>Your receipt is being processed</Text>
+          {phase.reason && <Text style={styles.processingReason}>{phase.reason}</Text>}
           <View style={styles.check}>
             <Feather name="check" size={22} color="#fff" />
           </View>
@@ -595,6 +610,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
   processingText: { color: '#fff', fontFamily: fontFamily.semibold, fontSize: 17 },
+  processingReason: {
+    maxWidth: '82%',
+    color: 'rgba(255,255,255,0.78)',
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
+  },
   check: {
     width: 40,
     height: 40,

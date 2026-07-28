@@ -1,0 +1,150 @@
+{
+  "phase": "B3",
+  "name": "Capture + offline queue",
+  "playbook": "ReceiptFlow Build Playbook v1.1",
+  "status": "PASSED",
+  "proven": "5/5",
+  "generated_at": "2026-07-22T18:53:09+05:30",
+  "branch": "feat/b3-capture-offline-queue",
+  "base_commit_sha": "ae0d829d3a874b43338ea96fa42bf0225e74b6eb",
+  "working_tree_note": "Report was generated before the final B3 commit and covers the B3 implementation, migration, Edge Function, env example, gate, and device-test fixes on top of base commit ae0d829.",
+  "summary": "B3 Capture + offline queue is proven 5/5 using local automated B3 gates plus real-device staging and production smoke verification. Device testing found and fixed Expo public env exposure, React Native multipart upload compatibility, and missing receipt_items grants.",
+  "environments": {
+    "staging_supabase_ref": "wfboznibkhsfxteejxco",
+    "production_supabase_ref": "uhiqjbxqhhxjxnbznocc",
+    "device": "iOS physical device via Expo dev client",
+    "production_metro_note": "Production device smoke test used .env.production and Expo dev server on an alternate port because 8081 was already occupied."
+  },
+  "automated_evidence": [
+    {
+      "id": "B3-all",
+      "status": "PASSED",
+      "command": "npm run b3:all",
+      "evidence": [
+        "typecheck completed with no TypeScript errors.",
+        "expo lint completed with 5 pre-existing warnings and no errors.",
+        "scripts/verify-b3-app.js passed T3.1/T3.2/T3.3/T3.5 source checks.",
+        "scripts/verify-b3-backend.js passed extract v0 ack semantics.",
+        "scripts/verify-b3-db.js passed storage policy and receipt ack schema checks."
+      ]
+    },
+    {
+      "id": "B3-gate",
+      "status": "PASSED",
+      "command": "npm run gate -- b3",
+      "report": "gates/report-b3.json",
+      "evidence": [
+        "Gate generated 5 passed B3 test records.",
+        "Gate output note still says official device/manual evidence pending because the script cannot ingest manual device proof automatically; this report records that proof."
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "T3.1",
+      "description": "Capture compresses/orients receipt image to roughly 1024px JPEG before upload.",
+      "status": "PASSED",
+      "type": "E/I",
+      "environments": ["staging", "production"],
+      "evidence": [
+        "Staging storage contained compressed receipt images sized 121382 and 134185 bytes for successful captures.",
+        "Production storage contained compressed receipt image sized 143768 bytes.",
+        "Client path uses document correction when available, Expo ImageManipulator JPEG output, and durable local file persistence before upload."
+      ]
+    },
+    {
+      "id": "T3.2",
+      "description": "Default and One-click capture modes enqueue with unique capture ids and preserve capture mode.",
+      "status": "PASSED",
+      "type": "I/E",
+      "environments": ["staging", "production"],
+      "evidence": [
+        "Automated app verifier found default/gallery/one-click processCapture call paths and queue mode persistence.",
+        "Staging receipt row capture_id 3908cbef-5687-4a06-a209-4343af63daf3 persisted capture_mode default.",
+        "Production receipt row capture_id 718bf984-55e0-4293-af5d-3dd21be14255 persisted capture_mode default."
+      ]
+    },
+    {
+      "id": "T3.3",
+      "description": "Reconnect drains pending extraction queue.",
+      "status": "PASSED",
+      "type": "I",
+      "environments": ["local source", "device behavior"],
+      "evidence": [
+        "Camera screen registers Network.addNetworkStateListener and calls retryPending on mount/reconnect.",
+        "Queued failures were observed during device testing and moved forward after backend/env fixes; subsequent captures reached receipts/storage."
+      ]
+    },
+    {
+      "id": "T3.4",
+      "description": "Backend /extract accepts idempotent capture id, uploads image, and returns v0 extraction ack.",
+      "status": "PASSED",
+      "type": "I/E",
+      "environments": ["staging", "production"],
+      "evidence": [
+        "Extract Edge Function deployed to staging and production.",
+        "Unauthenticated production function call returned expected 401 Missing authorization header, proving endpoint is live and protected.",
+        "Staging receipts rows created with image_path, image_byte_size, acked_at, merchant, total, and status needs_review.",
+        "Production receipt row created with image_path, image_byte_size, acked_at, merchant, total, and status needs_review."
+      ]
+    },
+    {
+      "id": "T3.5",
+      "description": "Ack gate retains local image until server ack, then clears after successful dispatch.",
+      "status": "PASSED",
+      "type": "I/E",
+      "environments": ["local source", "staging", "production"],
+      "evidence": [
+        "Client inserts local captured row before network dispatch and only deletes durable local file after markDispatched ack.",
+        "Failed extract paths remain pending_extract with attempts/next_retry_at for retry.",
+        "Staging and production showed server ack fields and matching storage objects after successful captures."
+      ]
+    }
+  ],
+  "cloud_evidence": {
+    "staging": {
+      "latest_verified_receipt": {
+        "id": "7d4c5573-5eb9-445b-83d5-ccab6e06a1df",
+        "capture_id": "3908cbef-5687-4a06-a209-4343af63daf3",
+        "image_path_shape": "<user_id>/3908cbef-5687-4a06-a209-4343af63daf3.jpg",
+        "image_byte_size": 134185,
+        "status": "needs_review",
+        "merchant": "Whole Foods Market",
+        "total": "73.36",
+        "acked_at": "2026-07-22T13:11:07.901Z"
+      },
+      "storage_objects_observed": 4
+    },
+    "production": {
+      "latest_verified_receipt": {
+        "id": "efe8c7af-aade-4218-9891-3cc90a9454ec",
+        "capture_id": "718bf984-55e0-4293-af5d-3dd21be14255",
+        "image_path_shape": "<user_id>/718bf984-55e0-4293-af5d-3dd21be14255.jpg",
+        "image_byte_size": 143768,
+        "status": "needs_review",
+        "merchant": "Whole Foods Market",
+        "total": "73.36",
+        "acked_at": "2026-07-22T13:20:11.205Z"
+      },
+      "storage_objects_observed": 1
+    }
+  },
+  "fixes_found_during_device_testing": [
+    "Added EXPO_PUBLIC_MOCK_BACKEND support so device bundles can disable mock backend.",
+    "Changed real extract upload from supabase.functions.invoke/FormData to expo-file-system native multipart upload because React Native raised Unsupported formdata part implementation.",
+    "Added migration 20260722000200_b3_receipt_items_grants.sql because receipt search trigger reads receipt_items and authenticated role lacked table privileges.",
+    "Added dev-only queue reason diagnostics to make device failures actionable."
+  ],
+  "known_warnings": [
+    "src/components/camera/TapToFocus.tsx: duplicate React import warnings",
+    "src/components/camera/TrackingQuad.tsx: unused layout warning",
+    "src/components/receipt/ReceiptReview.tsx: unused Pressable warning",
+    "src/components/search/FanCarousel.tsx: unused n warning"
+  ],
+  "known_boundaries": [
+    "receipt_items persistence is not part of current B3 extract v0 implementation; the function returns fixture line_items to the client but only persists the parent receipts row.",
+    "Swipe-up confirmation currently writes local confirmed state; server-side confirmed edit/item sync awaits the later confirm/write endpoint.",
+    "Android device verification was not performed.",
+    "This report was generated before the final B3 commit; check git history for the committed snapshot."
+  ]
+}
