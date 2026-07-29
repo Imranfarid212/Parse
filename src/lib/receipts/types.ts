@@ -29,6 +29,7 @@ export type ExtractSuccess = {
   date: string;
   store: string;
   items: string[];
+  currency?: string;
   total: number;
   category: string;
   handwritten_notes: string;
@@ -36,12 +37,25 @@ export type ExtractSuccess = {
 
 /** The one specified error: the image isn't a receipt. */
 export type ExtractNotAReceipt = { error: 'not_a_receipt' };
+export type ExtractDuplicateReceipt = { error: 'duplicate_receipt' };
+export type DuplicateCandidate = {
+  matchedReceiptId: string;
+  matchRule: string;
+  matchStrength: 'weak' | 'strong';
+  merchant?: string | null;
+  date?: string | null;
+  currency?: string | null;
+  total?: number | null;
+};
 
 export type ExtractResponse = ExtractSuccess | ExtractError;
-export type ExtractError = ExtractNotAReceipt;
+export type ExtractError = ExtractNotAReceipt | ExtractDuplicateReceipt;
 
 export const isNotAReceipt = (r: ExtractResponse): r is ExtractNotAReceipt =>
-  typeof (r as ExtractNotAReceipt).error === 'string';
+  (r as ExtractError).error === 'not_a_receipt';
+
+export const isDuplicateReceipt = (r: ExtractResponse): r is ExtractDuplicateReceipt =>
+  (r as ExtractError).error === 'duplicate_receipt';
 
 /**
  * The normalized, app-side receipt. `date` is YYYY-MM-DD (or null when the
@@ -52,12 +66,14 @@ export type ReceiptFields = {
   date: string | null;
   store: string;
   items: string[];
+  currency: string;
   total: number;
   category: Category;
   handwritten_notes: string;
 };
 
 export type CaptureMode = 'default' | 'one_click';
+export type ExtractionMode = 'balanced' | 'precise';
 
 /**
  * Every photo becomes a row the moment it is taken, so we always know which
@@ -68,14 +84,41 @@ export type CaptureMode = 'default' | 'one_click';
  * confirmed_local — user confirmed (or One-click auto-confirmed); not yet on the server
  * synced          — the server has it
  */
-export type ReceiptStatus = 'pending_extract' | 'extracted' | 'confirmed_local' | 'synced';
+export type ReceiptStatus =
+  | 'local_captured'
+  | 'local_ocr_processing'
+  | 'local_ocr_done'
+  | 'image_upload_pending'
+  | 'image_uploaded'
+  | 'pending_extract'
+  | 'llm_processing'
+  | 'llm_failed_retryable'
+  | 'llm_failed_final'
+  | 'user_confirmation_pending'
+  | 'extracted'
+  | 'confirmed_local'
+  | 'result_sync_pending'
+  | 'synced'
+  | 'delete_pending'
+  | 'deleted';
 
 export type ReceiptRow = {
   id: string;
   imageUri: string;
   captureMode: CaptureMode;
+  extractionMode: ExtractionMode;
   status: ReceiptStatus;
   fields: ReceiptFields | null;
+  localOcrText: string | null;
+  imageSyncStatus:
+    | 'local_only'
+    | 'pending_upload'
+    | 'uploading'
+    | 'uploaded'
+    | 'upload_failed'
+    | 'upload_failed_final'
+    | 'missing_local_file';
+  resultSyncStatus: 'local_only' | 'pending_sync' | 'syncing' | 'synced' | 'sync_failed' | 'sync_failed_final';
   attempts: number;
   nextRetryAt: number;
   receiptId: string | null;

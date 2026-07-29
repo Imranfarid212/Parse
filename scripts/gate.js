@@ -5,8 +5,8 @@ const path = require('path');
 const phase = process.argv[2]?.toLowerCase();
 const root = path.resolve(__dirname, '..');
 
-if (!['b1', 'b2', 'b3'].includes(phase)) {
-  console.error('Usage: npm run gate -- b1|b2|b3');
+if (!['b1', 'b2', 'b3', 'b4'].includes(phase)) {
+  console.error('Usage: npm run gate -- b1|b2|b3|b4');
   process.exit(1);
 }
 
@@ -70,6 +70,28 @@ const testsByPhase = {
       command: ['npm', ['run', 'b3:db:verify']],
     },
   ],
+  b4: [
+    {
+      id: 'T4.1-validate-repair-reject-misc',
+      command: ['npm', ['run', 'b4:backend']],
+    },
+    {
+      id: 'T4.2-golden-latency-source-readiness',
+      command: ['npm', ['run', 'b4:app']],
+    },
+    {
+      id: 'T4.3-quota-idempotency',
+      command: ['npm', ['run', 'b4:backend']],
+    },
+    {
+      id: 'T4.4-ack-gate-server',
+      command: ['npm', ['run', 'b4:backend']],
+    },
+    {
+      id: 'T4.5-mode-e2e-source-readiness',
+      command: ['npm', ['run', 'b4:app']],
+    },
+  ],
 };
 
 const tests = testsByPhase[phase];
@@ -100,7 +122,9 @@ const report = {
       ? 'Local B1 app/backend/db checks passed. Official playbook 5/5 still requires device smoke runs and CI lock proof.'
       : phase === 'b2'
         ? 'Local B2 static/backend/db checks passed. Official playbook 5/5 still requires OTP device flow plus Apple/Google manual evidence.'
-        : 'Local B3 static capture/offline queue checks passed. Official evidence still requires device capture/gallery/offline retry verification.',
+        : phase === 'b3'
+          ? 'Local B3 static capture/offline queue checks passed. Official evidence still requires device capture/gallery/offline retry verification.'
+          : 'Local B4 Grok fast-path source checks passed with dummy provider config. Official evidence still requires live Grok golden/latency and device mode runs.',
   duration_ms: Date.now() - startedAt,
   commit_sha: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
   tests: results,

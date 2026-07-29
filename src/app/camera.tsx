@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { type Href, useIsFocused, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,9 +31,18 @@ import { TrackingDebug, TrackingQuad, useDocumentTracking } from '@/components/c
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { TOAST_REFERRAL_PROMPT, useAuth } from '@/lib/auth/auth-context';
 import { markReferralPromptSeen, shouldShowReferralPrompt } from '@/lib/auth/referralPrompt';
-import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
+import {
+  confirm,
+  flushCaptureMetrics,
+  processCapture,
+  retryPending,
+  syncConfirmed,
+  syncImageBackups,
+  uploadCaptureMetrics,
+} from '@/lib/receipts/capture';
+import { extractClient } from '@/lib/receipts/client';
 import * as store from '@/lib/receipts/store';
-import type { CaptureMode, ReceiptFields } from '@/lib/receipts/types';
+import type { CaptureMode, DuplicateCandidate, ExtractionMode, ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
 
@@ -84,6 +93,42 @@ function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => voi
   );
 }
 
+function ExtractionModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: ExtractionMode;
+  onChange: (m: ExtractionMode) => void;
+}) {
+  return (
+    <View style={styles.extractionToggle}>
+      {(['balanced', 'precise'] as const).map((m) => {
+        const active = mode === m;
+        return (
+          <Pressable key={m} onPress={() => onChange(m)} style={[styles.extractionSeg, active && styles.extractionSegActive]}>
+            <Text style={[styles.extractionText, active && styles.extractionTextActive]}>
+              {m === 'balanced' ? 'Balanced' : 'Precise'}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function confirmPreciseMode(): Promise<boolean> {
+  return new Promise((resolve) => {
+    Alert.alert(
+      'Precise mode',
+      'This can take a little longer because the image is processed for handwritten notes and difficult receipts.',
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Continue', onPress: () => resolve(true) },
+      ],
+    );
+  });
+}
+
 export default function CameraScreen() {
   const router = useRouter();
   const auth = useAuth();
@@ -99,7 +144,9 @@ export default function CameraScreen() {
   // inert everywhere else — `output` is null and the static guide stays).
   const tracking = useDocumentTracking();
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [mode, setMode] = useState<Mode>('default');
+  const [extractionMode, setExtractionMode] = useState<ExtractionMode>('balanced');
   const [menuOpen, setMenuOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>({ k: 'idle' });
   const [notice, setNotice] = useState<string | null>(null);
@@ -134,6 +181,7 @@ export default function CameraScreen() {
   const folderIn = useSharedValue(0);
   const abortRef = useRef<AbortController | null>(null);
   const referralPromptChecked = useRef(false);
+  const balancedWarmupAt = useRef(0);
 
   const folderTop = insets.top + spacing.sm;
   // Parked just past the left edge, at its resting height — it slides straight
@@ -152,13 +200,29 @@ export default function CameraScreen() {
   // Retry queued scans whenever the network comes back — this is what makes
   // "Your receipt is being processed" true rather than a green check over a
   // dropped receipt.
+  const flushBackgroundQueues = useCallback(() => {
+    if (busyRef.current) return;
+    void retryPending();
+    void syncConfirmed();
+    void syncImageBackups();
+    void flushCaptureMetrics();
+  }, []);
+
   useEffect(() => {
     const sub = Network.addNetworkStateListener((s) => {
-      if (s.isInternetReachable) void retryPending();
+      if (s.isInternetReachable) flushBackgroundQueues();
     });
-    void retryPending();
+    flushBackgroundQueues();
     return () => sub.remove();
-  }, []);
+  }, [flushBackgroundQueues]);
+
+  useEffect(() => {
+    if (!isFocused || !appActive || extractionMode !== 'balanced' || !auth.session) return;
+    const now = Date.now();
+    if (now - balancedWarmupAt.current < 30_000) return;
+    balancedWarmupAt.current = now;
+    extractClient.warmUpBalanced?.();
+  }, [appActive, auth.session, extractionMode, isFocused]);
 
   useEffect(() => {
     if (auth.loading) return;
@@ -225,12 +289,58 @@ export default function CameraScreen() {
     setTimeout(() => setPhase({ k: 'idle' }), 1800);
   }, []);
 
+  const defaultCurrency = auth.profile?.default_currency ?? auth.bootstrapLocale.defaultCurrency;
+
+  const showDuplicateCandidatePrompt = useCallback(
+    (candidate: DuplicateCandidate | null | undefined, currentRowId: string, currentPhotoUri: string, startedAt: number) => {
+      if (!candidate || candidate.matchStrength !== 'weak') return;
+      const merchant = candidate.merchant ? `${candidate.merchant}` : 'this merchant';
+      const total =
+        candidate.currency && typeof candidate.total === 'number'
+          ? `${candidate.currency} ${candidate.total.toFixed(2)}`
+          : 'the same total';
+      Alert.alert(
+        'Possible duplicate',
+        `This looks similar to a receipt already saved from ${merchant} for ${total}.`,
+        [
+          {
+            text: 'View Existing',
+            onPress: () => {
+              void (async () => {
+                await store.remove(currentRowId);
+                const existing = await store.getByReceiptId(candidate.matchedReceiptId);
+                if (existing?.fields) {
+                  setPhase({
+                    k: 'review',
+                    photoUri: existing.imageUri || currentPhotoUri,
+                    rowId: existing.id,
+                    fields: existing.fields,
+                    loading: false,
+                    startedAt,
+                  });
+                } else {
+                  setPhase({ k: 'idle' });
+                  flashNotice('Existing receipt is already saved');
+                }
+              })();
+            },
+          },
+          { text: 'Save Anyway', style: 'cancel' },
+        ],
+        { cancelable: true },
+      );
+    },
+    [flashNotice],
+  );
+
   const onCapture = async () => {
     if (!cameraRef.current || busy) return;
     const startedAt = Date.now(); // the shutter moment — see Phase.startedAt
     try {
+      if (extractionMode === 'precise' && !(await confirmPreciseMode())) return;
       setBusy(true);
       setWakeEarly(false); // a new scan re-arms the gate
+      busyRef.current = true;
       // VisionCamera hands back a native Photo object rather than a URI. Spill
       // it to a temp file for the pipeline, then dispose — the underlying
       // buffer is native memory and won't be reclaimed by GC.
@@ -247,25 +357,58 @@ export default function CameraScreen() {
       if (mode === 'default') {
         // Card appears immediately as a skeleton; fields fill in when they land.
         setPhase({ k: 'review', photoUri: photo.uri, rowId: null, fields: null, loading: true, startedAt });
-        const out = await processCapture(photo.uri, toCaptureMode(mode), ac.signal);
+        const out = await processCapture(photo.uri, toCaptureMode(mode), extractionMode, {
+          defaultCurrency,
+          signal: ac.signal,
+          onDraft: (draft, meta) => {
+            setPhase((prev) =>
+              prev.k === 'review' && prev.loading
+                ? { ...prev, rowId: meta.captureId, fields: draft, loading: true, startedAt }
+                : prev,
+            );
+          },
+        });
 
         if (out.kind === 'extracted') {
           setPhase({ k: 'review', photoUri: photo.uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
+          uploadCaptureMetrics({
+            captureId: out.row.id,
+            receiptId: null,
+            captureMode: out.row.captureMode,
+            extractionMode: out.row.extractionMode,
+            metrics: { ...out.metrics, total_to_ui_ms: out.metrics.total_to_response_ms },
+            attempts: out.attempts,
+          });
+          showDuplicateCandidatePrompt(out.duplicateCandidate, out.row.id, photo.uri, startedAt);
         } else if (out.kind === 'not_a_receipt') {
           setPhase({ k: 'idle' });
           flashNotice('Please scan only documents and receipts');
+        } else if (out.kind === 'duplicate') {
+          setPhase({ k: 'idle' });
+          flashNotice('This receipt is already saved');
         } else {
           showProcessing(out.reason);
         }
       } else {
         // One-click: no card. The folder digests it and you shoot again.
-        const out = await processCapture(photo.uri, toCaptureMode(mode), ac.signal);
+        const out = await processCapture(photo.uri, toCaptureMode(mode), extractionMode, { defaultCurrency, signal: ac.signal });
 
         if (out.kind === 'extracted') {
           await confirm(out.row.id, out.fields);
+          uploadCaptureMetrics({
+            captureId: out.row.id,
+            receiptId: null,
+            captureMode: out.row.captureMode,
+            extractionMode: out.row.extractionMode,
+            metrics: { ...out.metrics, total_to_ui_ms: out.metrics.total_to_response_ms },
+            attempts: out.attempts,
+          });
+          showDuplicateCandidatePrompt(out.duplicateCandidate, out.row.id, photo.uri, startedAt);
           popFolder();
         } else if (out.kind === 'not_a_receipt') {
           flashNotice('Please scan only documents and receipts');
+        } else if (out.kind === 'duplicate') {
+          flashNotice('This receipt is already saved');
         } else {
           showProcessing(out.reason);
         }
@@ -273,7 +416,9 @@ export default function CameraScreen() {
     } catch (e) {
       console.warn('[capture] failed', e);
     } finally {
+      busyRef.current = false;
       setBusy(false);
+      setTimeout(flushBackgroundQueues, 600);
     }
   };
 
@@ -281,29 +426,74 @@ export default function CameraScreen() {
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
     if (res.canceled || !res.assets[0]?.uri) return;
     const uri = res.assets[0].uri;
+    if (extractionMode === 'precise' && !(await confirmPreciseMode())) return;
 
     const startedAt = Date.now();
-    if (mode === 'default') {
-      setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true, startedAt });
-      const out = await processCapture(uri, 'default');
-      if (out.kind === 'extracted') {
-        setPhase({ k: 'review', photoUri: uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
-      } else if (out.kind === 'not_a_receipt') {
-        setPhase({ k: 'idle' });
-        flashNotice('Please scan only documents and receipts');
+    try {
+      setBusy(true);
+      busyRef.current = true;
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+      if (mode === 'default') {
+        setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true, startedAt });
+        const out = await processCapture(uri, 'default', extractionMode, {
+          defaultCurrency,
+          signal: ac.signal,
+          onDraft: (draft, meta) => {
+            setPhase((prev) =>
+              prev.k === 'review' && prev.loading
+                ? { ...prev, rowId: meta.captureId, fields: draft, loading: true, startedAt }
+                : prev,
+            );
+          },
+        });
+        if (out.kind === 'extracted') {
+          setPhase({ k: 'review', photoUri: uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
+          uploadCaptureMetrics({
+            captureId: out.row.id,
+            receiptId: null,
+            captureMode: out.row.captureMode,
+            extractionMode: out.row.extractionMode,
+            metrics: { ...out.metrics, total_to_ui_ms: out.metrics.total_to_response_ms },
+            attempts: out.attempts,
+          });
+          showDuplicateCandidatePrompt(out.duplicateCandidate, out.row.id, uri, startedAt);
+        } else if (out.kind === 'not_a_receipt') {
+          setPhase({ k: 'idle' });
+          flashNotice('Please scan only documents and receipts');
+        } else if (out.kind === 'duplicate') {
+          setPhase({ k: 'idle' });
+          flashNotice('This receipt is already saved');
+        } else {
+          showProcessing(out.reason);
+        }
       } else {
-        showProcessing(out.reason);
+        const out = await processCapture(uri, 'one_click', extractionMode, { defaultCurrency, signal: ac.signal });
+        if (out.kind === 'extracted') {
+          await confirm(out.row.id, out.fields);
+          uploadCaptureMetrics({
+            captureId: out.row.id,
+            receiptId: null,
+            captureMode: out.row.captureMode,
+            extractionMode: out.row.extractionMode,
+            metrics: { ...out.metrics, total_to_ui_ms: out.metrics.total_to_response_ms },
+            attempts: out.attempts,
+          });
+          showDuplicateCandidatePrompt(out.duplicateCandidate, out.row.id, uri, startedAt);
+          popFolder();
+        } else if (out.kind === 'not_a_receipt') {
+          flashNotice('Please scan only documents and receipts');
+        } else if (out.kind === 'duplicate') {
+          flashNotice('This receipt is already saved');
+        } else {
+          showProcessing(out.reason);
+        }
       }
-    } else {
-      const out = await processCapture(uri, 'one_click');
-      if (out.kind === 'extracted') {
-        await confirm(out.row.id, out.fields);
-        popFolder();
-      } else if (out.kind === 'not_a_receipt') {
-        flashNotice('Please scan only documents and receipts');
-      } else {
-        showProcessing(out.reason);
-      }
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+      setTimeout(flushBackgroundQueues, 600);
     }
   };
 
@@ -481,6 +671,8 @@ export default function CameraScreen() {
           </Animated.View>
 
           <View style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}>
+            <ExtractionModeToggle mode={extractionMode} onChange={setExtractionMode} />
+
             <Pressable style={[styles.capture, busy && styles.captureBusy]} onPress={onCapture} disabled={busy}>
               <View style={styles.captureInner} />
             </Pressable>
@@ -587,6 +779,19 @@ const styles = StyleSheet.create({
   toggleSegActive: { backgroundColor: 'rgba(255,255,255,0.95)' },
   toggleText: { color: 'rgba(255,255,255,0.8)', fontSize: 13 },
   toggleTextActive: { color: '#111', fontWeight: '600' },
+
+  extractionToggle: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderRadius: radius.pill,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  extractionSeg: { paddingHorizontal: 18, paddingVertical: 8, borderRadius: radius.pill },
+  extractionSegActive: { backgroundColor: '#fff' },
+  extractionText: { color: 'rgba(255,255,255,0.82)', fontSize: 13, fontFamily: fontFamily.semibold },
+  extractionTextActive: { color: '#111' },
 
   notice: {
     position: 'absolute',

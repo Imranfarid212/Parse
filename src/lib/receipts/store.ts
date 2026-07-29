@@ -11,7 +11,8 @@
  */
 import * as SQLite from 'expo-sqlite';
 
-import type { CaptureMode, ReceiptFields, ReceiptRow, ReceiptStatus } from '@/lib/receipts/types';
+import type { CaptureMode, ExtractionMode, ReceiptFields, ReceiptRow, ReceiptStatus } from '@/lib/receipts/types';
+import type { CaptureMetricsPayload } from '@/lib/receipts/client';
 
 const DB_NAME = 'parse.db';
 
@@ -25,8 +26,12 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       id         TEXT PRIMARY KEY NOT NULL,
       image_uri  TEXT NOT NULL,
       capture_mode TEXT NOT NULL DEFAULT 'default',
+      extraction_mode TEXT NOT NULL DEFAULT 'balanced',
       status     TEXT NOT NULL,
       fields     TEXT,
+      local_ocr_text TEXT,
+      image_sync_status TEXT NOT NULL DEFAULT 'local_only',
+      result_sync_status TEXT NOT NULL DEFAULT 'local_only',
       attempts   INTEGER NOT NULL DEFAULT 0,
       next_retry_at INTEGER NOT NULL DEFAULT 0,
       receipt_id TEXT,
@@ -37,8 +42,29 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
     CREATE INDEX IF NOT EXISTS idx_receipts_status  ON receipts (status);
     CREATE INDEX IF NOT EXISTS idx_receipts_retry   ON receipts (status, next_retry_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_receipts_created ON receipts (created_at DESC);
+    CREATE TABLE IF NOT EXISTS receipt_metric_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payload TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_retry_at INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_receipt_metric_queue_retry ON receipt_metric_queue (next_retry_at, created_at);
   `);
   await ensureColumn(db, 'capture_mode', "ALTER TABLE receipts ADD COLUMN capture_mode TEXT NOT NULL DEFAULT 'default'");
+  await ensureColumn(db, 'extraction_mode', "ALTER TABLE receipts ADD COLUMN extraction_mode TEXT NOT NULL DEFAULT 'balanced'");
+  await ensureColumn(db, 'local_ocr_text', 'ALTER TABLE receipts ADD COLUMN local_ocr_text TEXT');
+  await ensureColumn(
+    db,
+    'image_sync_status',
+    "ALTER TABLE receipts ADD COLUMN image_sync_status TEXT NOT NULL DEFAULT 'local_only'",
+  );
+  await ensureColumn(
+    db,
+    'result_sync_status',
+    "ALTER TABLE receipts ADD COLUMN result_sync_status TEXT NOT NULL DEFAULT 'local_only'",
+  );
   await ensureColumn(db, 'attempts', 'ALTER TABLE receipts ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
   await ensureColumn(db, 'next_retry_at', 'ALTER TABLE receipts ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0');
   await ensureColumn(db, 'receipt_id', 'ALTER TABLE receipts ADD COLUMN receipt_id TEXT');
@@ -60,8 +86,12 @@ type Persisted = {
   id: string;
   image_uri: string;
   capture_mode: CaptureMode;
+  extraction_mode: ExtractionMode;
   status: ReceiptStatus;
   fields: string | null;
+  local_ocr_text: string | null;
+  image_sync_status: ReceiptRow['imageSyncStatus'];
+  result_sync_status: ReceiptRow['resultSyncStatus'];
   attempts: number;
   next_retry_at: number;
   receipt_id: string | null;
@@ -70,12 +100,30 @@ type Persisted = {
   updated_at: number;
 };
 
+type MetricQueuePersisted = {
+  id: number;
+  payload: string;
+  attempts: number;
+  next_retry_at: number;
+};
+
+export type QueuedCaptureMetric = {
+  id: number;
+  payload: CaptureMetricsPayload;
+  attempts: number;
+  nextRetryAt: number;
+};
+
 const hydrate = (r: Persisted): ReceiptRow => ({
   id: r.id,
   imageUri: r.image_uri,
   captureMode: r.capture_mode,
+  extractionMode: r.extraction_mode,
   status: r.status,
   fields: r.fields ? (JSON.parse(r.fields) as ReceiptFields) : null,
+  localOcrText: r.local_ocr_text,
+  imageSyncStatus: r.image_sync_status,
+  resultSyncStatus: r.result_sync_status,
   attempts: r.attempts,
   nextRetryAt: r.next_retry_at,
   receiptId: r.receipt_id,
@@ -95,6 +143,7 @@ export const newCaptureId = () =>
 export async function insertCaptured(
   imageUri: string,
   captureMode: CaptureMode,
+  extractionMode: ExtractionMode,
   captureId = newCaptureId(),
 ): Promise<ReceiptRow> {
   const db = await getDb();
@@ -103,8 +152,12 @@ export async function insertCaptured(
     id: captureId,
     imageUri,
     captureMode,
-    status: 'pending_extract',
+    extractionMode,
+    status: 'local_captured',
     fields: null,
+    localOcrText: null,
+    imageSyncStatus: 'local_only',
+    resultSyncStatus: 'local_only',
     attempts: 0,
     nextRetryAt: now,
     receiptId: null,
@@ -113,10 +166,41 @@ export async function insertCaptured(
     updatedAt: now,
   };
   await db.runAsync(
-    'INSERT INTO receipts (id, image_uri, capture_mode, status, fields, attempts, next_retry_at, receipt_id, acked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [row.id, row.imageUri, row.captureMode, row.status, null, row.attempts, row.nextRetryAt, null, null, now, now],
+    'INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, status, fields, local_ocr_text, image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      row.id,
+      row.imageUri,
+      row.captureMode,
+      row.extractionMode,
+      row.status,
+      null,
+      null,
+      row.imageSyncStatus,
+      row.resultSyncStatus,
+      row.attempts,
+      row.nextRetryAt,
+      null,
+      null,
+      now,
+      now,
+    ],
   );
   return row;
+}
+
+export async function setLocalOcr(id: string, text: string | null, status: ReceiptStatus): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE receipts SET local_ocr_text = ?, status = ?, updated_at = ? WHERE id = ?', [
+    text,
+    status,
+    Date.now(),
+    id,
+  ]);
+}
+
+export async function setImageUri(id: string, imageUri: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE receipts SET image_uri = ?, updated_at = ? WHERE id = ?', [imageUri, Date.now(), id]);
 }
 
 export async function setFields(id: string, fields: ReceiptFields, status: ReceiptStatus): Promise<void> {
@@ -148,9 +232,57 @@ export async function markRetry(id: string, attempts: number, nextRetryAt: numbe
   ]);
 }
 
+export async function markFinalFailure(id: string, status: ReceiptStatus): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE receipts SET status = ?, next_retry_at = 0, updated_at = ? WHERE id = ?', [
+    status,
+    Date.now(),
+    id,
+  ]);
+}
+
+export async function markExtractRetry(id: string, attempts: number, nextRetryAt: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE receipts SET status = 'llm_failed_retryable', attempts = ?, next_retry_at = ?, updated_at = ? WHERE id = ?",
+    [attempts, nextRetryAt, Date.now(), id],
+  );
+}
+
 export async function setStatus(id: string, status: ReceiptStatus): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE receipts SET status = ?, updated_at = ? WHERE id = ?', [status, Date.now(), id]);
+}
+
+export async function setSyncStatus(
+  id: string,
+  patch: Partial<Pick<ReceiptRow, 'imageSyncStatus' | 'resultSyncStatus'>>,
+): Promise<void> {
+  const db = await getDb();
+  if (patch.imageSyncStatus && patch.resultSyncStatus) {
+    await db.runAsync('UPDATE receipts SET image_sync_status = ?, result_sync_status = ?, updated_at = ? WHERE id = ?', [
+      patch.imageSyncStatus,
+      patch.resultSyncStatus,
+      Date.now(),
+      id,
+    ]);
+    return;
+  }
+  if (patch.imageSyncStatus) {
+    await db.runAsync('UPDATE receipts SET image_sync_status = ?, updated_at = ? WHERE id = ?', [
+      patch.imageSyncStatus,
+      Date.now(),
+      id,
+    ]);
+    return;
+  }
+  if (patch.resultSyncStatus) {
+    await db.runAsync('UPDATE receipts SET result_sync_status = ?, updated_at = ? WHERE id = ?', [
+      patch.resultSyncStatus,
+      Date.now(),
+      id,
+    ]);
+  }
 }
 
 /** Retake in One-click destroys an already-stored receipt — PM-confirmed. */
@@ -165,11 +297,17 @@ export async function getById(id: string): Promise<ReceiptRow | null> {
   return r ? hydrate(r) : null;
 }
 
+export async function getByReceiptId(receiptId: string): Promise<ReceiptRow | null> {
+  const db = await getDb();
+  const r = await db.getFirstAsync<Persisted>('SELECT * FROM receipts WHERE receipt_id = ? ORDER BY created_at DESC LIMIT 1', [receiptId]);
+  return r ? hydrate(r) : null;
+}
+
 /** Newest first — what the folder's carousel shows. */
 export async function listRecent(limit = 20): Promise<ReceiptRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE status != 'pending_extract' ORDER BY created_at DESC LIMIT ?",
+    "SELECT * FROM receipts WHERE status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing') ORDER BY created_at DESC LIMIT ?",
     [limit],
   );
   return rows.map(hydrate);
@@ -179,7 +317,7 @@ export async function listRecent(limit = 20): Promise<ReceiptRow[]> {
 export async function listPendingExtract(): Promise<ReceiptRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE status = 'pending_extract' AND next_retry_at <= ? ORDER BY created_at ASC",
+    "SELECT * FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'image_upload_pending') AND next_retry_at <= ? ORDER BY created_at ASC",
     [Date.now()],
   );
   return rows.map(hydrate);
@@ -189,7 +327,18 @@ export async function listPendingExtract(): Promise<ReceiptRow[]> {
 export async function listUnsynced(): Promise<ReceiptRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE status = 'confirmed_local' ORDER BY created_at ASC",
+    "SELECT * FROM receipts WHERE status = 'confirmed_local' AND result_sync_status IN ('pending_sync', 'sync_failed') AND next_retry_at <= ? ORDER BY created_at ASC",
+    [Date.now()],
+  );
+  return rows.map(hydrate);
+}
+
+/** Images from text-first Balanced captures that still need Supabase backup. */
+export async function listPendingImageBackups(): Promise<ReceiptRow[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<Persisted>(
+    "SELECT * FROM receipts WHERE image_sync_status IN ('pending_upload', 'upload_failed') AND next_retry_at <= ? ORDER BY created_at ASC",
+    [Date.now()],
   );
   return rows.map(hydrate);
 }
@@ -197,7 +346,46 @@ export async function listUnsynced(): Promise<ReceiptRow[]> {
 export async function countPending(): Promise<number> {
   const db = await getDb();
   const r = await db.getFirstAsync<{ n: number }>(
-    "SELECT COUNT(*) AS n FROM receipts WHERE status IN ('pending_extract', 'confirmed_local')",
+    "SELECT COUNT(*) AS n FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'image_upload_pending', 'confirmed_local', 'result_sync_pending')",
   );
   return r?.n ?? 0;
+}
+
+export async function enqueueCaptureMetric(payload: CaptureMetricsPayload): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    'INSERT INTO receipt_metric_queue (payload, attempts, next_retry_at, created_at, updated_at) VALUES (?, 0, ?, ?, ?)',
+    [JSON.stringify(payload), now, now, now],
+  );
+}
+
+export async function listQueuedCaptureMetrics(limit = 20): Promise<QueuedCaptureMetric[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<MetricQueuePersisted>(
+    'SELECT id, payload, attempts, next_retry_at FROM receipt_metric_queue WHERE next_retry_at <= ? ORDER BY created_at ASC LIMIT ?',
+    [Date.now(), limit],
+  );
+  return rows.flatMap((row) => {
+    try {
+      return [{ id: row.id, payload: JSON.parse(row.payload) as CaptureMetricsPayload, attempts: row.attempts, nextRetryAt: row.next_retry_at }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export async function removeQueuedCaptureMetric(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM receipt_metric_queue WHERE id = ?', [id]);
+}
+
+export async function markCaptureMetricRetry(id: number, attempts: number, nextRetryAt: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE receipt_metric_queue SET attempts = ?, next_retry_at = ?, updated_at = ? WHERE id = ?', [
+    attempts,
+    nextRetryAt,
+    Date.now(),
+    id,
+  ]);
 }

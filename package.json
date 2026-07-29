@@ -92,7 +92,10 @@
     "b3:app": "npm run typecheck && expo lint --no-cache && node scripts/verify-b3-app.js",
     "b3:backend": "npm run contracts:sync && node scripts/verify-b3-backend.js",
     "b3:db:verify": "node scripts/verify-b3-db.js",
-    "b3:all": "npm run b3:app && npm run b3:backend && npm run b3:db:verify"
+    "b3:all": "npm run b3:app && npm run b3:backend && npm run b3:db:verify",
+    "b4:app": "npm run typecheck && expo lint --no-cache && node scripts/verify-b4-app.js",
+    "b4:backend": "npm run contracts:sync && node scripts/verify-b4-backend.js",
+    "b4:all": "npm run b4:app && npm run b4:backend && npm run b3:db:verify"
   },
   "private": true
 }

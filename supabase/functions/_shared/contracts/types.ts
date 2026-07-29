@@ -24,4 +24,21 @@ export type ExtractAck = {
   receipt_id: string;
   image_path: string;
   acked_at: string;
+  extraction_mode?: 'balanced' | 'precise';
+};
+
+export type ExtractionLineItem = {
+  name: string;
+  qty: number;
+  amount: number;
+};
+
+export type ExtractionResult = {
+  merchant: string;
+  txn_date: string;
+  currency: string;
+  total: number;
+  line_items: ExtractionLineItem[];
+  suggested_category: string;
+  is_receipt: boolean;
 };

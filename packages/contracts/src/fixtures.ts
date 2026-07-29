@@ -33,3 +33,26 @@ export const extractionResultFixture = {
   suggested_category: 'Meals & Entertainment',
   is_receipt: true,
 } as const;
+
+export const malformedExtractionFixture =
+  '{"merchant":"Whole Foods Market","txn_date":"2026-07-01","currency":"USD","total":73.36,"line_items":[{"name":"Organic bananas 1.2 lb","qty":1,"amount":1.74}],"suggested_category":"Meals & Entertainment","is_receipt":true';
+
+export const offListCategoryExtractionFixture = {
+  merchant: 'City Hardware',
+  txn_date: '2026-07-01',
+  currency: 'USD',
+  total: 28.42,
+  line_items: [{ name: 'Shelf brackets', qty: 2, amount: 28.42 }],
+  suggested_category: 'Home Improvement',
+  is_receipt: true,
+} as const;
+
+export const nonReceiptExtractionFixture = {
+  merchant: 'Rejected image',
+  txn_date: '2026-07-01',
+  currency: 'USD',
+  total: 0,
+  line_items: [],
+  suggested_category: 'Miscellaneous',
+  is_receipt: false,
+} as const;
