@@ -33,7 +33,7 @@
  * Drag down = edit. Axis is direction-locked on first movement.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { BlurView } from 'expo-blur';
@@ -41,7 +41,6 @@ import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  Easing,
   Extrapolation,
   interpolate,
   runOnJS,
@@ -50,14 +49,13 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withDelay,
-  withRepeat,
   withTiming,
 } from 'react-native-reanimated';
 
 import { EditSheet } from '@/components/receipt/EditSheet';
 import { SHEETS, SPREAD, VIEW_W } from '@/components/receipt/folder/geometry';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
-import { ScannedFace } from '@/components/receipt/ScannedFace';
+import { ScannedFace, scannedFaceHeight } from '@/components/receipt/ScannedFace';
 import type { ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, EMPHASIZED_DECELERATE, FLIGHT_MS, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { fontFamily, spacing } from '@/theme/tokens';
@@ -140,26 +138,54 @@ const FLAP_HOLD_MS = 160;
 const SPREAD_MS = 485;
 
 /**
- * Where the frozen frame lets go: the still, its blur and the scrim fade out
- * across this window, so by BACKDROP_CLEAR_P the live camera is fully visible
- * and usable again — while the receipt and folder finish playing over the top
- * of it. Same 0.9 as the align/magnet handover; the receipt is a sheet in the
- * folder by then, so the review has nothing left to say.
+ * The frozen frame lets go in two stages, deliberately NOT yoked to the whole
+ * flight — tying it to `p` meant it sat untouched through the drag (a swipe
+ * only reaches p ≈ 0.2 of the distance to the folder) and then dissolved on the
+ * flight's own clock, which read as frozen until the card was already home.
+ *
+ *  · DRAG   the still dims progressively under the finger, but only part way.
+ *           Backing off restores it, so an abandoned swipe is fully reversible.
+ *  · COMMIT the instant the swipe is confirmed it clears outright, on its own
+ *           short timing, while the receipt and folder play on over the top.
  */
-const BACKDROP_FADE_FROM = 0.35;
-const BACKDROP_CLEAR_P = 0.9;
+const DRAG_FADE_P = 0.25; // drag progress at which the dimming bottoms out
+const DRAG_FADE_MIN = 0.45; // how far down the drag alone takes it
+const CLEAR_MS = 220; // committed → gone
 /** How far the flap drops, in folder viewbox units. */
 const FLAP_DROP = 5;
 
-/** Resting breath — the card eases ±1% around its true size. */
-const BREATH = 0.01;
-const BREATH_MS = 3600;
+/**
+ * Print feed — the receipt's entrance. A clipping window over the card grows
+ * from zero to its full height, so the sheet is revealed top-down as if fed out
+ * of a thermal printer: header first, barcode last, torn edge tearing off at
+ * the end. One-shot, so unlike a resting loop it costs nothing once settled.
+ *
+ * The clip is dropped entirely when the feed finishes (`fed`), because on iOS
+ * `overflow: hidden` also clips a layer's OWN shadow — leaving it on would
+ * permanently cut the card's drop shadow. Once open, the card's geometry is
+ * pixel-identical to having no entrance at all, which is what the flight
+ * animation's landing math assumes.
+ */
+const FEED_MS = 1000;
+
+/**
+ * Held back this long after the SHUTTER (not after mount) before the feed
+ * starts. Capture + file write already sit between the two, so the wait here is
+ * whatever is left of the 500ms — usually less, and zero on a slow capture.
+ *
+ * The point is to spend the extraction latency (p50 ~2.3s) rather than stare at
+ * it: shutter → 0.5s frozen frame → 1.0s of paper feeding → sheet is out at
+ * ~1.5s, leaving under a second before the fields land.
+ */
+const FEED_DELAY_MS = 500;
 
 export function ReceiptReview({
   photoUri,
   fields,
   loading,
+  startedAt,
   onConfirmed,
+  onRelease,
   onDone,
   onRetake,
   onFieldsChange,
@@ -167,13 +193,21 @@ export function ReceiptReview({
   photoUri: string;
   fields: ReceiptFields | null;
   loading: boolean;
+  /** When the shutter was pressed — the feed is choreographed against this. */
+  startedAt?: number;
   /**
-   * The receipt is in — persist it. Fires at BACKDROP_CLEAR_P, NOT at the end
-   * of the animation, because from that point the camera is live again and a
-   * second capture can remount this component mid-flight. Confirming on unmount
-   * would silently lose the receipt in exactly that case.
+   * Persist the receipt. Fires on COMMIT, NOT at the end of the animation:
+   * from that beat the camera is live again and a second capture can remount
+   * this component mid-flight. Confirming on unmount would silently lose the
+   * receipt in exactly that case.
    */
   onConfirmed: (f: ReceiptFields) => void;
+  /**
+   * The swipe is confirmed and the screen is being handed back. Fires while the
+   * card is still flying, so the camera can wake and the shutter be usable
+   * before the animation finishes.
+   */
+  onRelease?: () => void;
   /** The animation has fully played out and the overlay can be torn down. */
   onDone: () => void;
   onRetake: () => void;
@@ -218,27 +252,40 @@ export function ReceiptReview({
   const folderIn = useSharedValue(0);
   /** 0 → flap shut, 1 → dropped open to receive the card. */
   const flap = useSharedValue(0);
-  /**
-   * 1 once the swipe is past threshold and the flight is playing itself out.
-   * Guards the handover below: a finger CAN drag past BACKDROP_CLEAR_P and then
-   * come back down without ever releasing, and persisting a receipt the user
-   * then pulled back would be a real bug.
-   */
-  const committed = useSharedValue(0);
+  /** 0 → frozen frame still standing, 1 → cleared away after the commit. */
+  const cleared = useSharedValue(0);
   /** Camera is live again; the overlay stops taking touches. */
   const [released, setReleased] = useState(false);
 
-  // Slow floating breath: the card eases between 99% and 101% scale while it
-  // rests. Safe to scale the whole card because the torn edge is a Skia layer —
-  // the old border-triangle teeth wouldn't follow a parent scale on iOS.
-  const breath = useSharedValue(1 - BREATH);
+  /** 0 → nothing fed out yet, 1 → the whole sheet is out. */
+  const reveal = useSharedValue(0);
+  /** The feed has finished; the clip comes off so the shadow isn't cut. */
+  const [fed, setFed] = useState(false);
+
+  /**
+   * Height the feed window opens to. Computed from the width rather than waited
+   * on: gating this on a measurement meant that if `onLayout` ever reported 0
+   * the window stayed shut and the card never appeared at all. The measured
+   * height refines it once it arrives, but is never required.
+   */
+  const feedH = cardH || scannedFaceHeight(cardW);
+
   useEffect(() => {
-    breath.value = withRepeat(
-      withTiming(1 + BREATH, { duration: BREATH_MS, easing: Easing.inOut(Easing.sin) }),
-      -1,
-      true,
+    if (fed) return;
+    // Whatever is left of the 500ms since the shutter — capture and the file
+    // write have already eaten into it, so this is usually well under 500 and
+    // clamps to 0 once they overrun.
+    const spent = startedAt ? Date.now() - startedAt : 0;
+    const wait = Math.max(0, FEED_DELAY_MS - spent);
+    reveal.value = withDelay(
+      wait,
+      withTiming(1, { duration: FEED_MS, easing: EMPHASIZED_DECELERATE }, (done) => {
+        if (done) runOnJS(setFed)(true);
+      }),
     );
-  }, [breath]);
+  }, [fed, reveal, startedAt]);
+
+  const revealStyle = useAnimatedStyle(() => ({ height: feedH * reveal.value }));
 
   // The folder comes in to meet the receipt, and leaves again if the drag is
   // abandoned. Watching p rather than deriving from it, so the entry keeps its
@@ -269,31 +316,25 @@ export function ReceiptReview({
   );
 
   /**
-   * Hand the receipt over and let the camera go. Both happen at the same beat.
+   * Hand the receipt over and give the screen back. Fires on COMMIT — the beat
+   * the swipe is confirmed — not part way through the flight: from here the
+   * receipt is persisted, the overlay stops taking touches, and the camera is
+   * asked to wake so the shutter is usable while the card is still flying.
    *
-   * NB: declared ABOVE the reaction that calls it. A worklet captures its
-   * closure when it is built, during render — referencing a `const` declared
-   * further down the component body reads it in its temporal dead zone.
+   * Safe to run this early precisely because it is keyed to the release of the
+   * finger. The old p-threshold version needed a `committed` guard, since a
+   * finger could cross the threshold and come back down without ever letting
+   * go, which would have persisted a receipt the user then pulled back.
    */
   const release = useCallback(() => {
     setReleased(true);
+    onRelease?.();
     if (fields) onConfirmed(fields);
-  }, [fields, onConfirmed]);
+  }, [fields, onConfirmed, onRelease]);
 
   const finish = useCallback(() => {
     onDone();
   }, [onDone]);
-
-  // The receipt is home enough to hand over: persist it and give the camera
-  // back. One-way — once released the flight is committed, so there's nothing
-  // to undo.
-  useAnimatedReaction(
-    () => committed.value === 1 && p.value >= BACKDROP_CLEAR_P,
-    (out, prev) => {
-      if (prev === null || out === prev || !out) return;
-      runOnJS(release)();
-    },
-  );
 
   const openEdit = useCallback(() => {
     setEditing(true);
@@ -322,6 +363,13 @@ export function ReceiptReview({
     .activeOffsetY([-12, 12])
     .failOffsetX([-24, 24])
     .onUpdate((e) => {
+      // A finger can beat the feed. Complete it outright rather than flying a
+      // half-revealed sheet: assigning cancels the timing, and the guard means
+      // this fires once, on the first frame of the drag.
+      if (reveal.value < 1) {
+        reveal.value = 1;
+        runOnJS(setFed)(true);
+      }
       if (e.translationY < 0) {
         p.value = Math.min(1, -e.translationY / flightDist);
         dragY.value = 0;
@@ -336,7 +384,11 @@ export function ReceiptReview({
 
       if (up) {
         runOnJS(buzz)();
-        committed.value = 1;
+        // Hand over and clear the frozen frame at the same beat, both on their
+        // own clock rather than the flight's — the card carries on flying to
+        // the folder over a live camera.
+        runOnJS(release)();
+        cleared.value = withTiming(1, { duration: CLEAR_MS });
         spread.value = withTiming(1, { duration: SPREAD_MS });
         p.value = withTiming(1, { duration: FLIGHT_MS, easing: EMPHASIZED_DECELERATE }, (done) => {
           if (!done) return;
@@ -405,11 +457,6 @@ export function ReceiptReview({
       tPath * tPath * tPath * endY +
       dragY.value * 0.4;
 
-    // Resting breath, eased out the instant the flight begins so it never
-    // fights the shrink into the folder.
-    const restFade = interpolate(t, [0, 0.15], [1, 0], Extrapolation.CLAMP);
-    const breathScale = 1 + (breath.value - 1) * restFade;
-
     // ALIGN: the tumble stops growing at ALIGN_FROM and unwinds from whatever
     // angle it had reached to the sheet's — flat, quarter-turned — by
     // ALIGNED_BY. Freezing `tumbleT` is what makes it "from wherever it is"
@@ -440,8 +487,8 @@ export function ReceiptReview({
       transform: [
         { translateX: translateX + carry },
         { translateY },
-        { scaleX: sx * breathScale },
-        { scaleY: sy * breathScale },
+        { scaleX: sx },
+        { scaleY: sy },
         // perspective must precede the rotations for them to read as 3D.
         { perspective: 900 },
         { rotateX: `${rx}deg` },
@@ -458,26 +505,27 @@ export function ReceiptReview({
 
   const hintStyle = useAnimatedStyle(() => ({ opacity: interpolate(p.value, [0, 0.08], [1, 0], 'clamp') }));
 
-  // The frozen frame releases the screen back to the live camera behind it.
-  const backdropStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(p.value, [BACKDROP_FADE_FROM, BACKDROP_CLEAR_P], [1, 0], Extrapolation.CLAMP),
-  }));
+  /**
+   * How much of the frozen frame is left: dimmed by the drag, then wiped out by
+   * the commit. The two multiply, so backing off a swipe restores it and a
+   * confirmed swipe takes it away regardless of where the drag had got to.
+   */
+  const framePresence = () => {
+    'worklet';
+    const drag = interpolate(p.value, [0, DRAG_FADE_P], [1, DRAG_FADE_MIN], Extrapolation.CLAMP);
+    return drag * (1 - cleared.value);
+  };
+
+  const backdropStyle = useAnimatedStyle(() => ({ opacity: framePresence() }));
   // ...and the blur goes with it, via intensity rather than alpha (see above).
-  const blurProps = useAnimatedProps(() => ({
-    intensity: interpolate(
-      p.value,
-      [BACKDROP_FADE_FROM, BACKDROP_CLEAR_P],
-      [BLUR_INTENSITY, 0],
-      Extrapolation.CLAMP,
-    ),
-  }));
+  const blurProps = useAnimatedProps(() => ({ intensity: BLUR_INTENSITY * framePresence() }));
 
   return (
     // Once released the overlay is pure decoration playing out over a live
     // camera, so it must stop swallowing taps on the shutter beneath it.
     <View style={styles.root} pointerEvents={released ? 'none' : 'auto'}>
       {/* Frozen frame, blurred back so the card is the only thing in focus —
-          and faded out entirely by BACKDROP_CLEAR_P, handing the screen back to
+          dimmed by the drag, then cleared on commit, handing the screen back to
           the live camera underneath. The opaque black lives here, not on the
           root, or it would keep the camera hidden after the fade. */}
       <View style={styles.backdrop} pointerEvents="none">
@@ -501,8 +549,10 @@ export function ReceiptReview({
       <View style={styles.centre} pointerEvents="box-none">
         <GestureDetector gesture={pan}>
           <Animated.View
-            style={[{ width: cardW }, cardStyle]}
-            onLayout={(e) => setCardH(e.nativeEvent.layout.height)}
+            // Height is pinned so the feed grows DOWN from a fixed top edge.
+            // Left to size itself, the sheet would swell outward from the
+            // centre as the window opened.
+            style={[{ width: cardW, height: feedH, justifyContent: 'flex-start' }, cardStyle]}
             accessible
             accessibilityRole="summary"
             accessibilityLabel={
@@ -518,7 +568,14 @@ export function ReceiptReview({
               if (e.nativeEvent.actionName === 'edit') openEdit();
             }}
           >
-            <ScannedFace width={cardW} fields={fields} loading={loading} />
+            <Animated.View style={[fed ? styles.feedOpen : styles.feedClip, revealStyle]}>
+              {/* Measurement only refines `feedH` and the flight's landing
+                  size — the feed no longer depends on it, so a 0 here can't
+                  leave the card invisible. */}
+              <View onLayout={(e) => setCardH(e.nativeEvent.layout.height)}>
+                <ScannedFace width={cardW} fields={fields} loading={loading} />
+              </View>
+            </Animated.View>
           </Animated.View>
         </GestureDetector>
 
@@ -566,6 +623,10 @@ const styles = StyleSheet.create({
   // Z-order is the whole trick: folder back (4) → receipt (5) → flap (6), so
   // the receipt lands as the FRONT card in the folder, under the flap.
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', zIndex: 5 },
+  // The feed window. `hidden` while the sheet is coming out; dropped to
+  // `visible` once it is, or iOS would keep clipping the card's own shadow.
+  feedClip: { overflow: 'hidden' },
+  feedOpen: { overflow: 'visible' },
   folderBack: { position: 'absolute', zIndex: 4 },
   folderFront: { position: 'absolute', zIndex: 6 },
   hints: { position: 'absolute', bottom: 70, flexDirection: 'row', alignItems: 'center', gap: 6 },

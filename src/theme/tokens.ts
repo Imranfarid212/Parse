@@ -59,6 +59,7 @@ export const radius = {
 export const fontFamily = {
   display: 'InstrumentSans_700Bold',
   semibold: 'InstrumentSans_600SemiBold',
+  medium: 'InstrumentSans_500Medium',
   regular: 'InstrumentSans_400Regular',
 } as const;
 

@@ -27,21 +27,35 @@ const GRID = 40; // cell size (px)
 const NUM_SQUARES = 20; // was 36 — unnecessarily dense; drop to 12–16 if still warm
 const LINE_COLOR = '#D1D5DB'; // gray-300, faint neutral
 const SQUARE_COLOR = '#9CA3AF'; // gray-400, neutral grey highlight (no blue)
+const GREEN_TILE = 'rgba(14, 107, 80, 0.25)'; // accent tint for a few scattered tiles
+const NUM_GREEN = 4; // how many of the tiles twinkle green instead of grey
 const MAX_OPACITY = 0.28;
 const TWINKLE_MS = 3200;
 const RELOCATE_MS = 2500;
 const SKEW_Y = -0.21; // ~12deg, leaning right-to-left
 const TWINKLE_FPS = 15; // controlled clock rate
 
-type Cell = { id: number; px: number; py: number; phase: number };
+type Cell = { id: number; px: number; py: number; phase: number; green: boolean };
+
+// A plain helper, not an inline hook callback — react-hooks/purity flags
+// Math.random() called directly inside a useMemo/useState body, but not calls
+// routed through a named function like this (same pattern randomPos() below
+// already relies on from useState's initializer).
+function pickGreenIds(): Set<number> {
+  const ids = new Set<number>();
+  while (ids.size < Math.min(NUM_GREEN, NUM_SQUARES)) ids.add(Math.floor(Math.random() * NUM_SQUARES));
+  return ids;
+}
 
 function TwinkleSquare({ cell, size, t }: { cell: Cell; size: number; t: SharedValue<number> }) {
   const opacity = useDerivedValue(() => {
     const p = (t.value + cell.phase) % 1;
     const tri = p < 0.5 ? p * 2 : (1 - p) * 2; // 0 -> 1 -> 0
-    return tri * MAX_OPACITY;
+    // Green tiles carry their own alpha in the colour (rgba .12), so let their
+    // twinkle peak at 1.0 — otherwise it compounds with MAX_OPACITY and vanishes.
+    return cell.green ? tri : tri * MAX_OPACITY;
   });
-  return <Rect x={cell.px} y={cell.py} width={size} height={size} color={SQUARE_COLOR} opacity={opacity} />;
+  return <Rect x={cell.px} y={cell.py} width={size} height={size} color={cell.green ? GREEN_TILE : SQUARE_COLOR} opacity={opacity} />;
 }
 
 export function AnimatedGridBackground({
@@ -99,9 +113,12 @@ export function AnimatedGridBackground({
     }
     return { px, py, phase: Math.random() };
   };
+  // Pick NUM_GREEN random tile ids once; green-ness is keyed to the id so a
+  // relocation keeps the same tiles green rather than reshuffling which glow.
+  const greenIds = useMemo(() => pickGreenIds(), []);
   // STABLE id per slot: relocation keeps the id and just moves the square, so
   // React reuses the same <TwinkleSquare> and its derived value.
-  const makeCell = (id: number): Cell => ({ id, ...randomPos() });
+  const makeCell = (id: number): Cell => ({ id, green: greenIds.has(id), ...randomPos() });
 
   const [squares, setSquares] = useState<Cell[]>(() =>
     Array.from({ length: NUM_SQUARES }, (_, i) => makeCell(i)),
@@ -147,7 +164,7 @@ export function AnimatedGridBackground({
     if (!animate) return undefined;
     const iv = setInterval(() => {
       setSquares((prev) =>
-        prev.map((s) => (Math.random() < 0.3 ? { id: s.id, ...randomPos() } : s)),
+        prev.map((s) => (Math.random() < 0.3 ? { id: s.id, green: s.green, ...randomPos() } : s)),
       );
     }, RELOCATE_MS);
     return () => clearInterval(iv);
@@ -161,7 +178,7 @@ export function AnimatedGridBackground({
       <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
         <Fill color={colors.background} />
         <Group origin={vec(width / 2, height / 2)} transform={[{ skewY: SKEW_Y }]}>
-          <Path path={gridPath} style="stroke" strokeWidth={1} color={LINE_COLOR} opacity={0.35} />
+          <Path path={gridPath} style="stroke" strokeWidth={1} color={LINE_COLOR} opacity={0.245} />
         </Group>
       </Canvas>
     ),

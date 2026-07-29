@@ -43,23 +43,41 @@ export function ReceiptCard({
     </View>
   );
 
+  if (bare && children) {
+    // Figma "Main Receipt Card" (node 422:239): a 340-wide design. Scale by
+    // k = width/340 so every child pixel value maps 1:1, and the card's body
+    // height comes out to 538*k — exactly what CategoryChecklist renders.
+    const k = width / 340;
+    const zigH = 8 * k; // Figma zigzag is 8px tall
+    const teeth = 28; // 340 / ~12px per tooth
+    const half = width / teeth / 2;
+    return (
+      <View
+        style={[
+          styles.card,
+          { width, shadowOpacity: 0.084, shadowRadius: 24 * k, shadowOffset: { width: 0, height: 12 } },
+        ]}
+      >
+        <View style={[styles.body, { height: height - zigH, borderTopLeftRadius: 18 * k, borderTopRightRadius: 18 * k }]}>
+          {children(k)}
+        </View>
+        <View style={styles.zigzag}>
+          {Array.from({ length: teeth }).map((_, i) => (
+            <View
+              key={i}
+              style={{ width: 0, height: 0, borderLeftWidth: half, borderRightWidth: half, borderTopWidth: zigH, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#fff' }}
+            />
+          ))}
+        </View>
+      </View>
+    );
+  }
+
   if (bare) {
     return (
       <View style={[styles.card, { width, shadowRadius: 20 * s }]}>
-        <View
-          style={[
-            styles.body,
-            { height: height - toothH, borderTopLeftRadius: 8 * s, borderTopRightRadius: 8 * s },
-            children
-              ? { paddingHorizontal: 18 * s, paddingVertical: 16 * s }
-              : { padding: pad },
-          ]}
-        >
-          {children ? (
-            children(s)
-          ) : (
-            <View style={{ flex: 1, borderRadius: 8 * s, backgroundColor: 'rgba(17,17,17,0.03)' }} />
-          )}
+        <View style={[styles.body, { height: height - toothH, borderTopLeftRadius: 18 * s, borderTopRightRadius: 18 * s, padding: pad }]}>
+          <View style={{ flex: 1, borderRadius: 8 * s, backgroundColor: 'rgba(17,17,17,0.03)' }} />
         </View>
 
         {tornEdge}

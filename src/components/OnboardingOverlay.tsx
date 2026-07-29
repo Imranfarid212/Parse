@@ -5,29 +5,27 @@
  * third (last) receipt. The fancier tear/crush exit is a later polish — this is
  * the plain toss motion + the gating behaviour.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  Easing,
   interpolate,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
-  withRepeat,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { BlurView } from 'expo-blur';
 import { Feather } from '@expo/vector-icons';
 
 import { CategoryChecklist } from '@/components/ui/CategoryChecklist';
 import { ReceiptCard } from '@/components/ui/ReceiptCard';
-import { colors, radius, spacing, typography } from '@/theme/tokens';
+import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const NUM = 3;
 const SWIPE_THRESHOLD = 70;
+const SCREEN_BG = '#E0E4E8'; // background behind the receipt stack
 
 // Static offset for a card sitting `depth` layers behind the top card.
 const behindStyle = (depth: number) => ({
@@ -98,23 +96,27 @@ export function OnboardingOverlay({
 }) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const CARD_SCALE = 1.035;
-  const cardW = Math.min(width * 0.74, 300) * CARD_SCALE;
-  const cardH = height * 0.54 * CARD_SCALE;
+  // Card aspect ratio: 340 wide × 529 tall (97 header + 335.6 rows + 88.4 footer
+  // + 8 zigzag). Keep it exact so the card is the natural height of its content —
+  // otherwise the checklist overflows and clips. Fall back to a height-driven
+  // width when the ratio-derived card is taller than the screen.
+  const DESIGN_W = 340;
+  const DESIGN_H = 529;
+  const maxCardH = height - insets.top - insets.bottom - 150;
+  let cardW = Math.min(width * 0.8, 330);
+  let cardH = (cardW * DESIGN_H) / DESIGN_W;
+  if (cardH > maxCardH) {
+    cardH = maxCardH;
+    cardW = (cardH * DESIGN_W) / DESIGN_H;
+  }
 
   const [index, setIndex] = useState(0); // which receipt is on top
   const isLast = index === NUM - 1;
 
-  // Slow "floating" breath: the whole stack eases between 99% and 101% scale.
-  const breath = useSharedValue(0.99);
-  useEffect(() => {
-    breath.value = withRepeat(withTiming(1.01, { duration: 3600, easing: Easing.inOut(Easing.sin) }), -1, true);
-  }, [breath]);
-  const breathStyle = useAnimatedStyle(() => ({ transform: [{ scale: breath.value }] }));
-
   return (
-    <View style={StyleSheet.absoluteFill}>
-      <BlurView intensity={22} tint="light" style={styles.fill} />
+    <View style={[StyleSheet.absoluteFill, { backgroundColor: SCREEN_BG }]}>
+      {/* Screen background behind the receipt stack — solid colour, just enough
+          to separate the white sheets and their shadows from the backdrop. */}
       <Pressable style={styles.fill} onPress={onClose} />
 
       <Pressable onPress={onClose} hitSlop={16} style={[styles.close, { top: insets.top + spacing.md }]}>
@@ -122,15 +124,16 @@ export function OnboardingOverlay({
       </Pressable>
 
       <View style={styles.center} pointerEvents="box-none">
-        <Animated.View style={[{ width: cardW, height: cardH }, breathStyle]}>
+        <View style={{ width: cardW, height: cardH }}>
           {/* Deepest first so the top card paints last. */}
           {[2, 1, 0]
             .filter((i) => i >= index)
             .map((i) => {
               const depth = i - index;
-              // The first receipt carries the categories checklist; 2 and 3 are
-              // still blank pending their content.
-              const content = i === 0 ? (s: number) => <CategoryChecklist s={s} /> : undefined;
+              // All three receipts share the same header + footer chrome. The
+              // first carries the categories checklist; 2 and 3 keep an empty
+              // white body pending their content.
+              const content = (s: number) => <CategoryChecklist s={s} empty={i !== 0} />;
 
               if (i === index && !isLast) {
                 return (
@@ -154,7 +157,7 @@ export function OnboardingOverlay({
               <Text style={styles.hintLabel}>Swipe left</Text>
             </View>
           )}
-        </Animated.View>
+        </View>
       </View>
 
       {/* "Let's go" appears only on the third receipt. */}
@@ -182,7 +185,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   cardWrap: { position: 'absolute' },
   hint: { position: 'absolute', bottom: -34, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6 },
-  hintLabel: { color: colors.textSecondary, fontSize: 15 },
+  hintLabel: { color: colors.textSecondary, fontSize: 15, fontFamily: fontFamily.medium },
   cta: {
     position: 'absolute',
     alignSelf: 'center',

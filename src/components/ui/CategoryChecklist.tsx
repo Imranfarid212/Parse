@@ -1,145 +1,143 @@
 /**
- * CategoryChecklist — the printed face of the FIRST onboarding receipt. Styled
- * as a real receipt (brand line, torn dividers, a "PROGRESS" barcode footer)
- * wrapping an "Expense categories" checklist of the buckets Parse files under.
+ * CategoryChecklist — the printed face of the FIRST onboarding receipt, a 1:1
+ * build of the "Main Receipt Card" Figma component (node 422:239). Everything
+ * is a Figma pixel value multiplied by the receipt scale `s` (= card width /
+ * 340, the design width), so the layout tracks the card at any size.
  *
- * Purely illustrative: the first two rows read as done and the third as the
- * current step, so the receipt looks like an onboarding in progress. All sizes
- * take the receipt's scale `s` (= card width / 300) so the face tracks the card.
+ * Bands: Header (114) + Category Checklist (335.6) + Footer (88.4) = 538, which
+ * equals ReceiptCard's body height for this card. Purely illustrative — the
+ * first two rows read done, the third is the active step.
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
-import { Barcode } from '@/components/ui/Barcode';
-import { colors, fontFamily } from '@/theme/tokens';
+import { BandFill, DashedLine, headerKeylinePath, ReceiptFooter, SEAM } from '@/components/ui/receiptTheme';
+import { fontFamily } from '@/theme/tokens';
 
-// Miscellaneous kept last as the catch-all bucket.
-const ITEMS = [
-  'Travel & Gas',
-  'Meals and Entertainment',
-  'Office & Software',
-  'Professional Fees',
-  'Marketing Expenses',
-  'Miscellaneous',
-];
-const DONE = 2; // rows shown complete; DONE is the current (active) row
-const SEGMENTS = 18;
+const DESIGN_W = 340;
 
-function Bullet({ index, state, s }: { index: number; state: 'done' | 'active' | 'todo'; s: number }) {
-  const d = 22 * s;
-  const base = { width: d, height: d, borderRadius: d / 2, alignItems: 'center', justifyContent: 'center' } as const;
+// Content colours specific to the onboarding card (the band chrome — gradient,
+// seam, dash, keyline — lives in receiptTheme so it stays in sync with the
+// review card).
+const GREEN = '#0e7043'; // selected check circle, filled progress dots
+const GREEN_TEXT = '#1b5e3b'; // "YOUR CATEGORIES"
+const SPARKLE = '#4d4742'; // ✦ glyphs
+const TITLE_INK = '#1a1714'; // "Expense categories"
+const MUTED = '#8a877e'; // counts
+const SELECTED_TEXT = '#111827'; // selected row label — dark, bold, draws the eye
+const UNSELECTED_TEXT = '#6b7280'; // unselected row label — subtle grey
+const OUTLINE = '#d1d5db'; // empty (unselected) circle outline
+const ROW_BORDER = '#f0eeeb'; // row dividers
 
-  if (state === 'done') {
+const ITEMS = ['Travel & Gas', 'Meals and Entertainment', 'Office & Software', 'Professional Fees', 'Marketing Expenses', 'Miscellaneous'];
+const DONE = 3; // first 3 rows selected (checked green); rest unselected
+const NUM_DOTS = 18;
+const FILLED_DOTS = Math.round((DONE / ITEMS.length) * NUM_DOTS); // meter tracks DONE (3/6 → 9)
+const ROW_H = 335.6 / 6; // 55.933
+
+function Circle({ selected, s }: { selected: boolean; s: number }) {
+  const d = 23.8 * s;
+  const base = { width: d, height: d, borderRadius: 11.9 * s, alignItems: 'center', justifyContent: 'center' } as const;
+
+  if (selected) {
     return (
-      <View style={[base, { backgroundColor: colors.accent }]}>
+      <View style={[base, { backgroundColor: GREEN }]}>
         <Feather name="check" size={13 * s} color="#fff" />
       </View>
     );
   }
-
-  const active = state === 'active';
-  return (
-    <View
-      style={[
-        base,
-        active
-          ? { backgroundColor: colors.accent }
-          : { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
-      ]}
-    >
-      <Text style={{ fontFamily: fontFamily.semibold, fontSize: 11 * s, color: active ? colors.ctaText : colors.textFaint }}>
-        {index + 1}
-      </Text>
-    </View>
-  );
+  // Unselected: a clean empty grey outline — no number, so the list reads as a
+  // multi-select pick list rather than a ranked sequence.
+  return <View style={[base, { borderWidth: 1.4 * s, borderColor: OUTLINE }]} />;
 }
 
-export function CategoryChecklist({ s }: { s: number }) {
-  const filled = Math.round((DONE / ITEMS.length) * SEGMENTS);
+export function CategoryChecklist({ s, empty = false }: { s: number; empty?: boolean }) {
+  const bandW = DESIGN_W * s; // equals the card width in px
+  const headerH = 97 * s; // tightened after moving the progress meter inline
+  const footerH = 88.4 * s;
+
+  const keyline = headerKeylinePath(bandW, headerH, 18 * s);
 
   return (
     <View style={styles.root}>
-      {/* Brand line */}
-      <Text style={[styles.brand, { fontSize: 12.1 * s, letterSpacing: 2.5 * s }]}>✦  CHOOSE ONCE  ✦</Text>
-      <View style={[styles.dash, { marginTop: 12 * s }]} />
+      {/* Header Area — silver band gradient + keyline; overflow hidden keeps the
+          Skia layer strictly inside the band so the body below stays white. */}
+      <View style={{ height: headerH, paddingHorizontal: 24 * s, paddingTop: 24 * s, paddingBottom: 12 * s, gap: 12 * s, overflow: 'hidden' }}>
+        <BandFill w={bandW} h={headerH} keyline={keyline} />
 
-      {/* Header: title + count */}
-      <View style={[styles.headerRow, { marginTop: 12 * s }]}>
-        <Feather name="chevron-up" size={16 * s} color={colors.textPrimary} />
-        <Text style={{ marginLeft: 6 * s, fontFamily: fontFamily.display, fontSize: 14.5 * s, color: colors.textPrimary }}>
-          Expense categories
+        <Text style={{ textAlign: 'center', fontFamily: fontFamily.semibold, fontSize: 13 * s, letterSpacing: 0.8 * s, textTransform: 'uppercase' }}>
+          <Text style={{ color: SPARKLE }}>✦ </Text>
+          <Text style={{ color: GREEN_TEXT }}>YOUR CATEGORIES</Text>
+          <Text style={{ color: SPARKLE }}> ✦</Text>
         </Text>
-        <View style={styles.spacer} />
-        <Text style={{ fontFamily: fontFamily.regular, fontSize: 12 * s, color: colors.textFaint }}>
-          {DONE}/{ITEMS.length}
-        </Text>
+
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={{ fontFamily: fontFamily.medium, fontSize: 16 * s, color: TITLE_INK }}>Expense categories</Text>
+          {/* Modern segmented progress meter — thin vertical bars, inline to the
+              right of the label and left of the count. */}
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginHorizontal: 10 * s }}>
+            {Array.from({ length: NUM_DOTS }).map((_, i) => (
+              <View
+                key={i}
+                style={{ width: 2 * s, height: 13 * s, marginRight: i < NUM_DOTS - 1 ? 2 * s : 0, borderRadius: 1 * s, backgroundColor: i < FILLED_DOTS ? GREEN : '#ffffff' }}
+              />
+            ))}
+          </View>
+          <Text style={{ fontFamily: fontFamily.semibold, fontSize: 13 * s, color: MUTED }}>
+            {DONE}/{ITEMS.length}
+          </Text>
+        </View>
+
+        {/* Dashed perforation ("line break") on the grey header, just above its
+            bottom edge — mirrors the footer's dashed line. */}
+        <View style={{ paddingHorizontal: 24 * s }}>
+          <DashedLine s={s} />
+        </View>
       </View>
 
-      {/* Segmented progress bar */}
-      <View style={[styles.segments, { marginTop: 10 * s }]}>
-        {Array.from({ length: SEGMENTS }).map((_, i) => (
-          <View
-            key={i}
-            style={{
-              flex: 1,
-              height: 10 * s,
-              marginRight: i < SEGMENTS - 1 ? 2 * s : 0,
-              borderRadius: 1.5 * s,
-              backgroundColor: i < filled ? colors.accent : colors.border,
-            }}
-          />
-        ))}
-      </View>
-      <View style={[styles.dash, { marginTop: 12 * s }]} />
+      {/* Continuous grey line: the header's clean bottom edge. With the dashed
+          line above it, this mirrors the body/footer seam so the header reads as
+          a clean block above the white body. */}
+      <View style={{ height: 1, backgroundColor: SEAM }} />
 
-      {/* The rows fill the middle of the receipt. */}
-      <View style={styles.list}>
-        {ITEMS.map((label, i) => {
-          const state = i < DONE ? 'done' : i === DONE ? 'active' : 'todo';
-          return (
-            <View
-              key={label}
-              style={[styles.row, { height: 44 * s }, i > 0 && { borderTopWidth: 1, borderTopColor: colors.border }]}
-            >
-              <Bullet index={i} state={state} s={s} />
-              <Text
-                numberOfLines={1}
-                style={{
-                  flex: 1,
-                  marginLeft: 10 * s,
-                  fontFamily: state === 'done' ? fontFamily.regular : fontFamily.semibold,
-                  fontSize: 13 * s,
-                  color: state === 'done' ? colors.textFaint : colors.textPrimary,
-                  transform: i === ITEMS.length - 1 ? [{ translateY: 4 }] : undefined,
-                }}
-              >
-                {label}
-              </Text>
-              {state !== 'done' && <Feather name="chevron-right" size={14 * s} color={colors.textFaint} />}
-            </View>
-          );
-        })}
-      </View>
+      {/* Category Checklist — full-bleed rows on a pure-white body. `empty`
+          renders just the white body (same size) for the not-yet-authored
+          cards, which reuse this card's header + footer chrome. */}
+      {empty ? (
+        <View style={[styles.body, { flex: 1 }]} />
+      ) : (
+        <View style={styles.body}>
+          {ITEMS.map((label, i) => {
+            const selected = i < DONE;
+            return (
+              <View key={label} style={{ height: ROW_H * s, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 * s, borderBottomWidth: 1, borderBottomColor: ROW_BORDER }}>
+                <Circle selected={selected} s={s} />
+                <Text
+                  numberOfLines={1}
+                  style={{
+                    flex: 1,
+                    marginLeft: 14 * s,
+                    fontFamily: selected ? fontFamily.semibold : fontFamily.regular,
+                    fontSize: 13.5 * s,
+                    color: selected ? SELECTED_TEXT : UNSELECTED_TEXT,
+                  }}
+                >
+                  {label}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
 
-      {/* Watermark barcode footer */}
-      <View style={[styles.dash, { marginTop: 14 * s, marginBottom: 14 * s }]} />
-      <Barcode s={s} height={26} subtle />
-      <Text style={[styles.footerCaption, { marginTop: 8 * s, fontSize: 8 * s, letterSpacing: 1.5 * s }]}>
-        PARSE · GO PAPERLESS · 2026
-      </Text>
+      {/* Receipt Footer — shared silver band with barcode + brand line. */}
+      <ReceiptFooter s={s} bandW={bandW} footerH={footerH} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
-  brand: { textAlign: 'center', color: colors.textFaint, fontFamily: fontFamily.semibold },
-  dash: { borderBottomWidth: 1, borderStyle: 'dashed', borderColor: colors.border },
-  headerRow: { flexDirection: 'row', alignItems: 'center' },
-  spacer: { flex: 1 },
-  segments: { flexDirection: 'row', alignItems: 'center' },
-  list: { flex: 1, justifyContent: 'center' },
-  row: { flexDirection: 'row', alignItems: 'center' },
-  footerCaption: { textAlign: 'center', color: colors.textFaint, fontFamily: fontFamily.regular },
+  root: { flex: 1, backgroundColor: '#fff' },
+  body: { backgroundColor: '#ffffff' },
 });

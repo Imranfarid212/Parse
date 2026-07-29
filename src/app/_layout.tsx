@@ -10,8 +10,8 @@ import {
   InstrumentSans_500Medium,
   InstrumentSans_600SemiBold,
   InstrumentSans_700Bold,
+  InstrumentSans_600SemiBold_Italic,
 } from '@expo-google-fonts/instrument-sans';
-
 import { AuthProvider } from '@/lib/auth/auth-context';
 import { colors } from '@/theme/tokens';
 
@@ -23,6 +23,7 @@ export default function RootLayout() {
     InstrumentSans_500Medium,
     InstrumentSans_600SemiBold,
     InstrumentSans_700Bold,
+    InstrumentSans_600SemiBold_Italic,
   });
 
   useEffect(() => {
