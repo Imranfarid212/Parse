@@ -125,6 +125,49 @@ public class DocumentScanModule: Module {
         }
       }
     }
+
+    /**
+     * Run Apple Vision OCR locally. Balanced mode uses this text-first path so
+     * the user can see results quickly while image backup syncs independently.
+     */
+    AsyncFunction("recognizeText") { (uri: String, promise: Promise) in
+      guard #available(iOS 13.0, *) else {
+        promise.resolve(nil)
+        return
+      }
+      guard let url = URL(string: uri) ?? URL(string: "file://\(uri)") else {
+        promise.reject("ERR_BAD_URI", "Could not parse \(uri)")
+        return
+      }
+
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          guard let data = try? Data(contentsOf: url),
+                let uiImage = UIImage(data: data),
+                let cgImage = uiImage.cgImage else {
+            promise.reject("ERR_LOAD", "Could not decode image at \(uri)")
+            return
+          }
+
+          let orientation = Self.propertyOrientation(from: uiImage.imageOrientation)
+          let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
+          let request = VNRecognizeTextRequest()
+          request.recognitionLevel = .accurate
+          request.usesLanguageCorrection = true
+          request.minimumTextHeight = 0.01
+
+          try handler.perform([request])
+
+          let lines = (request.results ?? [])
+            .compactMap { $0.topCandidates(1).first?.string.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+          promise.resolve(lines.isEmpty ? nil : lines.joined(separator: "\n"))
+        } catch {
+          promise.reject("ERR_OCR", error.localizedDescription)
+        }
+      }
+    }
   }
 
   private static func propertyOrientation(from orientation: UIImage.Orientation) -> CGImagePropertyOrientation {

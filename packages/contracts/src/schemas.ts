@@ -4,6 +4,7 @@ import {
   captureModes,
   confirmedVia,
   exportFormats,
+  extractionModes,
   jobStatuses,
   ledgerReasons,
   providers,
@@ -19,6 +20,7 @@ export const currencySchema = z.string().length(3).regex(/^[A-Z]{3}$/);
 export const receiptStatusSchema = z.enum(receiptStatuses);
 export const confirmedViaSchema = z.enum(confirmedVia);
 export const captureModeSchema = z.enum(captureModes);
+export const extractionModeSchema = z.enum(extractionModes);
 export const providerSchema = z.enum(providers);
 export const jobStatusSchema = z.enum(jobStatuses);
 export const ledgerReasonSchema = z.enum(ledgerReasons);
@@ -51,6 +53,8 @@ export const onboardingStateSchema = z.object({
 export const extractRequestSchema = z.object({
   capture_id: uuidSchema,
   mode: captureModeSchema,
+  extraction_mode: extractionModeSchema.default('precise'),
+  extracted_text: z.string().max(12_000).optional(),
   captured_at: z.string().datetime(),
   image: z.object({
     uri: z.string().min(1),
@@ -82,8 +86,16 @@ export const extractionResultSchema = z.object({
   is_receipt: z.boolean(),
 });
 
-export const extractResponseSchema = z.discriminatedUnion('status', [
+export const extractResponseSchema = z.union([
   extractAckSchema.extend({ status: z.literal(200), result: extractionResultSchema }),
+  extractAckSchema.extend({
+    status: z.literal(200),
+    rejected: z.literal(true),
+    result: extractionResultSchema.extend({
+      is_receipt: z.literal(false),
+      line_items: z.array(extractionLineItemSchema).length(0),
+    }),
+  }),
   extractAckSchema.extend({ status: z.literal(202), code: z.literal('PROVIDER_DELAY') }),
   z.object({ status: z.literal(402), code: z.literal('QUOTA_EXHAUSTED'), paywall: z.enum(['plus', 'unlimited']) }),
   z.object({ status: z.literal(429), code: z.literal('RATE_LIMITED') }),

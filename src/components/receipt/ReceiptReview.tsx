@@ -582,7 +582,9 @@ export function ReceiptReview({
         {!editing && (
           <Animated.View style={[styles.hints, hintStyle]} pointerEvents="none">
             <Feather name="arrow-up" size={15} color="rgba(255,255,255,0.9)" />
-            <Text style={styles.hintText}>{loading ? 'Reading receipt…' : 'Swipe up to confirm · down to edit'}</Text>
+            <Text style={styles.hintText}>
+              {loading ? (fields ? 'Finalizing receipt…' : 'Reading receipt…') : 'Swipe up to confirm · down to edit'}
+            </Text>
           </Animated.View>
         )}
       </View>

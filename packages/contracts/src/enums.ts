@@ -7,6 +7,9 @@ export type ConfirmedVia = (typeof confirmedVia)[number];
 export const captureModes = ['default', 'one_click'] as const;
 export type CaptureMode = (typeof captureModes)[number];
 
+export const extractionModes = ['balanced', 'precise'] as const;
+export type ExtractionMode = (typeof extractionModes)[number];
+
 export const providers = ['grok', 'gemini'] as const;
 export type Provider = (typeof providers)[number];
 

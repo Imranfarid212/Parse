@@ -23,6 +23,7 @@ export type DocumentScanResult = {
 declare class DocumentScanNativeModule extends NativeModule<{}> {
   isAvailable(): boolean;
   detectAndCorrect(uri: string): Promise<DocumentScanResult | null>;
+  recognizeText(uri: string): Promise<string | null>;
 }
 
 const DocumentScan = requireNativeModule<DocumentScanNativeModule>('DocumentScan');
@@ -47,6 +48,14 @@ export function isDocumentScanAvailable(): boolean {
 export async function detectAndCorrect(uri: string): Promise<DocumentScanResult | null> {
   try {
     return await DocumentScan.detectAndCorrect(uri);
+  } catch {
+    return null;
+  }
+}
+
+export async function recognizeText(uri: string): Promise<string | null> {
+  try {
+    return await DocumentScan.recognizeText(uri);
   } catch {
     return null;
   }

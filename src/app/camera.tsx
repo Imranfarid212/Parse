@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { type Href, useIsFocused, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,13 +31,31 @@ import { TrackingDebug, TrackingQuad, useDocumentTracking } from '@/components/c
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { TOAST_REFERRAL_PROMPT, useAuth } from '@/lib/auth/auth-context';
 import { markReferralPromptSeen, shouldShowReferralPrompt } from '@/lib/auth/referralPrompt';
-import { confirm, processCapture, retryPending } from '@/lib/receipts/capture';
+import {
+  confirm,
+  flushCaptureMetrics,
+  processCapture,
+  retryPending,
+  syncConfirmed,
+  syncImageBackups,
+  uploadCaptureMetrics,
+  type CaptureOutcome,
+  type PrecisePreflightWarning,
+} from '@/lib/receipts/capture';
+import { extractClient } from '@/lib/receipts/client';
 import * as store from '@/lib/receipts/store';
-import type { CaptureMode, ReceiptFields } from '@/lib/receipts/types';
+import type { CaptureMode, DuplicateCandidate, ExtractionMode, LocalDuplicateCandidate, ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
 
 type Mode = 'default' | 'oneclick';
+const PRECISE_SCREEN_VISIBLE_DEADLINE_MS = 4500;
+
+function waitForVisibleDeadline(ms: number): Promise<'visible_deadline'> {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve('visible_deadline'), ms);
+  });
+}
 
 /**
  * Post-shutter phases.
@@ -84,6 +102,33 @@ function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => voi
   );
 }
 
+function ExtractionModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: ExtractionMode;
+  onChange: (m: ExtractionMode) => void;
+}) {
+  return (
+    <View style={styles.extractionToggle}>
+      {(['balanced', 'precise'] as const).map((m) => {
+        const active = mode === m;
+        return (
+          <Pressable key={m} onPress={() => onChange(m)} style={[styles.extractionSeg, active && styles.extractionSegActive]}>
+            <Text style={[styles.extractionText, active && styles.extractionTextActive]}>
+              {m === 'balanced' ? 'Balanced' : 'Precise'}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function showNotReceiptAlert(message = 'This image does not look like a receipt, invoice, or bill.'): void {
+  Alert.alert('Could not read a receipt', message, [{ text: 'OK' }]);
+}
+
 export default function CameraScreen() {
   const router = useRouter();
   const auth = useAuth();
@@ -99,8 +144,11 @@ export default function CameraScreen() {
   // inert everywhere else — `output` is null and the static guide stays).
   const tracking = useDocumentTracking();
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [mode, setMode] = useState<Mode>('default');
+  const [extractionMode, setExtractionMode] = useState<ExtractionMode>('balanced');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuInitialTab, setMenuInitialTab] = useState(0);
   const [phase, setPhase] = useState<Phase>({ k: 'idle' });
   const [notice, setNotice] = useState<string | null>(null);
   const focus = useFocusReticle();
@@ -134,6 +182,8 @@ export default function CameraScreen() {
   const folderIn = useSharedValue(0);
   const abortRef = useRef<AbortController | null>(null);
   const referralPromptChecked = useRef(false);
+  const balancedWarmupAt = useRef(0);
+  const preciseWarmupAt = useRef(0);
 
   const folderTop = insets.top + spacing.sm;
   // Parked just past the left edge, at its resting height — it slides straight
@@ -152,13 +202,35 @@ export default function CameraScreen() {
   // Retry queued scans whenever the network comes back — this is what makes
   // "Your receipt is being processed" true rather than a green check over a
   // dropped receipt.
+  const flushBackgroundQueues = useCallback(() => {
+    if (busyRef.current) return;
+    void retryPending();
+    void syncConfirmed();
+    void syncImageBackups();
+    void flushCaptureMetrics();
+  }, []);
+
   useEffect(() => {
     const sub = Network.addNetworkStateListener((s) => {
-      if (s.isInternetReachable) void retryPending();
+      if (s.isInternetReachable) flushBackgroundQueues();
     });
-    void retryPending();
+    flushBackgroundQueues();
     return () => sub.remove();
-  }, []);
+  }, [flushBackgroundQueues]);
+
+  useEffect(() => {
+    if (!isFocused || !appActive || !auth.session) return;
+    const now = Date.now();
+    if (extractionMode === 'balanced') {
+      if (now - balancedWarmupAt.current < 30_000) return;
+      balancedWarmupAt.current = now;
+      extractClient.warmUpBalanced?.();
+      return;
+    }
+    if (now - preciseWarmupAt.current < 30_000) return;
+    preciseWarmupAt.current = now;
+    extractClient.warmUpPrecise?.();
+  }, [appActive, auth.session, extractionMode, isFocused]);
 
   useEffect(() => {
     if (auth.loading) return;
@@ -169,10 +241,12 @@ export default function CameraScreen() {
     if (auth.profile && !auth.profile.onboarding_complete) router.replace('/onboarding' as Href);
   }, [auth.loading, auth.profile, auth.session, router]);
 
-  const openMenu = () => {
+  const openMenu = (initialTab = 0) => {
+    setMenuInitialTab(initialTab);
     setMenuOpen(true);
     menuProgress.value = withTiming(1, { duration: 620, easing: EMPHASIZED_SETTLE });
   };
+  const openRecents = () => openMenu(1);
   const closeMenu = () => {
     menuProgress.value = withTiming(0, { duration: 560, easing: EMPHASIZED_SETTLE }, (f) => {
       if (f) runOnJS(setMenuOpen)(false);
@@ -222,8 +296,228 @@ export default function CameraScreen() {
 
   const showProcessing = useCallback((reason?: string) => {
     setPhase({ k: 'processing', reason: __DEV__ ? reason : undefined });
-    setTimeout(() => setPhase({ k: 'idle' }), 1800);
+    setTimeout(() => {
+      setPhase((prev) => (prev.k === 'processing' ? { k: 'idle' } : prev));
+    }, 1800);
   }, []);
+
+  const showPreciseProcessingAlert = useCallback(() => {
+    setPhase({ k: 'idle' });
+    Alert.alert(
+      'Receipt is being processed',
+      "This receipt may take a little longer. We'll finish processing it in the background and it will appear in Recents when ready.",
+      [{ text: 'OK' }],
+    );
+  }, []);
+
+  const defaultCurrency = auth.profile?.default_currency ?? auth.bootstrapLocale.defaultCurrency;
+
+  const showExistingLocalReceipt = useCallback((candidate: LocalDuplicateCandidate, fallbackPhotoUri: string, startedAt: number) => {
+    setPhase({
+      k: 'review',
+      photoUri: candidate.matchedImageUri || fallbackPhotoUri,
+      rowId: candidate.matchedLocalRowId,
+      fields: candidate.fields,
+      loading: false,
+      startedAt,
+    });
+  }, []);
+
+  const promptLocalDuplicateCandidate = useCallback(
+    (candidate: LocalDuplicateCandidate, draft: ReceiptFields, fallbackPhotoUri: string, startedAt: number) =>
+      new Promise<'view_existing' | 'save_anyway'>((resolve) => {
+        let settled = false;
+        const settle = (decision: 'view_existing' | 'save_anyway') => {
+          if (settled) return;
+          settled = true;
+          resolve(decision);
+        };
+        setPhase({
+          k: 'review',
+          photoUri: fallbackPhotoUri,
+          rowId: null,
+          fields: draft,
+          loading: false,
+          startedAt,
+        });
+        const total =
+          candidate.currency && typeof candidate.total === 'number'
+            ? `${candidate.currency} ${candidate.total.toFixed(2)}`
+            : 'the same total';
+        setTimeout(() => {
+          Alert.alert(
+            'Possible duplicate',
+            `This looks similar to a receipt already saved from ${candidate.merchant ?? 'this merchant'} for ${total}.`,
+            [
+              {
+                text: 'View Existing',
+                onPress: () => {
+                  showExistingLocalReceipt(candidate, fallbackPhotoUri, startedAt);
+                  settle('view_existing');
+                },
+              },
+              {
+                text: 'Save Anyway',
+                style: 'cancel',
+                onPress: () => settle('save_anyway'),
+              },
+            ],
+            { cancelable: true, onDismiss: () => settle('save_anyway') },
+          );
+        }, 120);
+      }),
+    [showExistingLocalReceipt],
+  );
+
+  const promptPrecisePreflightWarning = useCallback(
+    (warning: PrecisePreflightWarning) =>
+      new Promise<'continue' | 'cancel'>((resolve) => {
+        const detail =
+          warning.confidence === 'low'
+            ? 'We could not find enough receipt-like text or amounts in this image.'
+            : 'This image has weak receipt signals, so extraction may be inaccurate.';
+        Alert.alert(
+          'This may not be a receipt',
+          `${detail}\n\nContinue anyway if the receipt is handwritten, blurry, or unusual. Precise processing can take a little longer.`,
+          [
+            { text: 'Retake', style: 'cancel', onPress: () => resolve('cancel') },
+            { text: 'Continue Anyway', onPress: () => resolve('continue') },
+          ],
+          { cancelable: true, onDismiss: () => resolve('cancel') },
+        );
+      }),
+    [],
+  );
+
+  const showDuplicateCandidatePrompt = useCallback(
+    (candidate: DuplicateCandidate | null | undefined, currentRowId: string, currentPhotoUri: string, startedAt: number) => {
+      if (!candidate || candidate.matchStrength !== 'weak') return;
+      const merchant = candidate.merchant ? `${candidate.merchant}` : 'this merchant';
+      const total =
+        candidate.currency && typeof candidate.total === 'number'
+          ? `${candidate.currency} ${candidate.total.toFixed(2)}`
+          : 'the same total';
+      Alert.alert(
+        'Possible duplicate',
+        `This looks similar to a receipt already saved from ${merchant} for ${total}.`,
+        [
+          {
+            text: 'View Existing',
+            onPress: () => {
+              void (async () => {
+                await store.remove(currentRowId);
+                const existing = await store.getByReceiptId(candidate.matchedReceiptId);
+                if (existing?.fields) {
+                  showExistingLocalReceipt(
+                    {
+                      ...candidate,
+                      matchedLocalRowId: existing.id,
+                      matchedImageUri: existing.imageUri,
+                      fields: existing.fields,
+                    },
+                    currentPhotoUri,
+                    startedAt,
+                  );
+                } else {
+                  setPhase({ k: 'idle' });
+                  flashNotice('Existing receipt is already saved');
+                }
+              })();
+            },
+          },
+          { text: 'Save Anyway', style: 'cancel' },
+        ],
+        { cancelable: true },
+      );
+    },
+    [flashNotice, showExistingLocalReceipt],
+  );
+
+  const handleDefaultCaptureOutcome = useCallback(
+    (out: CaptureOutcome, photoUri: string, startedAt: number) => {
+      if (out.kind === 'extracted') {
+        if (out.row.extractionMode === 'precise') {
+          setPhase((prev) => (prev.k === 'review' || prev.k === 'processing' ? { k: 'idle' } : prev));
+          flashNotice('Receipt saved to Recents');
+          return;
+        }
+        setPhase({ k: 'review', photoUri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
+        uploadCaptureMetrics({
+          captureId: out.row.id,
+          receiptId: null,
+          captureMode: out.row.captureMode,
+          extractionMode: out.row.extractionMode,
+          metrics: { ...out.metrics, total_to_ui_ms: out.metrics.total_to_response_ms },
+          attempts: out.attempts,
+        });
+        showDuplicateCandidatePrompt(out.duplicateCandidate, out.row.id, photoUri, startedAt);
+      } else if (out.kind === 'not_a_receipt') {
+        setPhase({ k: 'idle' });
+        showNotReceiptAlert();
+      } else if (out.kind === 'duplicate') {
+        setPhase({ k: 'idle' });
+        flashNotice('This receipt is already saved');
+      } else if (out.kind === 'local_duplicate') {
+        // The prompt already opened the existing local receipt.
+      } else if (out.kind === 'preflight_rejected') {
+        setPhase({ k: 'idle' });
+      } else {
+        if (out.row.extractionMode !== 'precise') showProcessing(out.reason);
+        if (out.deferred) {
+          void out.deferred.then((finalOut) => {
+            if (__DEV__) console.log('[camera] queued deferred outcome ready', { kind: finalOut.kind });
+            handleDefaultCaptureOutcome(finalOut, photoUri, startedAt);
+          });
+        }
+      }
+    },
+    [flashNotice, showDuplicateCandidatePrompt, showProcessing],
+  );
+
+  const handleOneClickCaptureOutcome = useCallback(
+    (out: CaptureOutcome, photoUri: string, startedAt: number) => {
+      if (out.kind === 'extracted') {
+        void (async () => {
+          await confirm(out.row.id, out.fields, auth.user?.id);
+          uploadCaptureMetrics({
+            captureId: out.row.id,
+            receiptId: null,
+            captureMode: out.row.captureMode,
+            extractionMode: out.row.extractionMode,
+            metrics: { ...out.metrics, total_to_ui_ms: out.metrics.total_to_response_ms },
+            attempts: out.attempts,
+          });
+          showDuplicateCandidatePrompt(out.duplicateCandidate, out.row.id, photoUri, startedAt);
+          setPhase({ k: 'idle' });
+          popFolder();
+          flashNotice('Receipt saved to Recents');
+        })();
+      } else if (out.kind === 'not_a_receipt') {
+        setPhase({ k: 'idle' });
+        showNotReceiptAlert();
+      } else if (out.kind === 'duplicate') {
+        setPhase({ k: 'idle' });
+        flashNotice('This receipt is already saved');
+      } else if (out.kind === 'local_duplicate') {
+        // The prompt already opened the existing local receipt.
+      } else if (out.kind === 'preflight_rejected') {
+        setPhase({ k: 'idle' });
+      } else {
+        if (out.row.extractionMode !== 'precise') {
+          showProcessing(out.reason);
+          return;
+        }
+        setPhase({ k: 'idle' });
+        if (out.deferred) {
+          void out.deferred.then((finalOut) => {
+            if (__DEV__) console.log('[camera] one-click precise deferred outcome ready', { kind: finalOut.kind });
+            handleOneClickCaptureOutcome(finalOut, photoUri, startedAt);
+          });
+        }
+      }
+    },
+    [auth.user?.id, flashNotice, popFolder, showDuplicateCandidatePrompt, showProcessing],
+  );
 
   const onCapture = async () => {
     if (!cameraRef.current || busy) return;
@@ -231,6 +525,8 @@ export default function CameraScreen() {
     try {
       setBusy(true);
       setWakeEarly(false); // a new scan re-arms the gate
+      busyRef.current = true;
+      if (extractionMode === 'precise') extractClient.warmUpPrecise?.();
       // VisionCamera hands back a native Photo object rather than a URI. Spill
       // it to a temp file for the pipeline, then dispose — the underlying
       // buffer is native memory and won't be reclaimed by GC.
@@ -245,65 +541,157 @@ export default function CameraScreen() {
       abortRef.current = ac;
 
       if (mode === 'default') {
-        // Card appears immediately as a skeleton; fields fill in when they land.
-        setPhase({ k: 'review', photoUri: photo.uri, rowId: null, fields: null, loading: true, startedAt });
-        const out = await processCapture(photo.uri, toCaptureMode(mode), ac.signal);
-
-        if (out.kind === 'extracted') {
-          setPhase({ k: 'review', photoUri: photo.uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
-        } else if (out.kind === 'not_a_receipt') {
-          setPhase({ k: 'idle' });
-          flashNotice('Please scan only documents and receipts');
-        } else {
-          showProcessing(out.reason);
+        if (extractionMode === 'balanced') {
+          // Card appears immediately as a skeleton; fields fill in when they land.
+          setPhase({ k: 'review', photoUri: photo.uri, rowId: null, fields: null, loading: true, startedAt });
         }
+        const outPromise = processCapture(photo.uri, toCaptureMode(mode), extractionMode, {
+          defaultCurrency,
+          userId: auth.user?.id,
+          signal: ac.signal,
+          onDraft: (draft, meta) => {
+            setPhase((prev) =>
+              prev.k === 'review' && prev.loading
+                ? { ...prev, rowId: meta.captureId, fields: draft, loading: true, startedAt }
+                : prev,
+            );
+          },
+          onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, photo.uri, startedAt),
+          onPrecisePreflightWarning: promptPrecisePreflightWarning,
+          onPrecisePreflightAccepted: showPreciseProcessingAlert,
+        });
+        const out =
+          extractionMode === 'precise'
+            ? await Promise.race([outPromise, waitForVisibleDeadline(PRECISE_SCREEN_VISIBLE_DEADLINE_MS)])
+            : await outPromise;
+
+        if (out === 'visible_deadline') {
+          if (__DEV__) {
+            console.warn('[camera] precise screen deadline reached; capture continues in background', {
+              visibleDeadlineMs: PRECISE_SCREEN_VISIBLE_DEADLINE_MS,
+            });
+          }
+          setPhase({ k: 'idle' });
+          void outPromise
+            .then((lateOut) => {
+              if (__DEV__) console.log('[camera] precise background capture completed', { kind: lateOut.kind });
+              if (lateOut.kind === 'queued' && lateOut.deferred) {
+                void lateOut.deferred.then((finalOut) => {
+                  if (__DEV__) console.log('[camera] precise deferred outcome ready', { kind: finalOut.kind });
+                  handleDefaultCaptureOutcome(finalOut, photo.uri, startedAt);
+                });
+                return;
+              }
+              if (lateOut.kind !== 'queued') handleDefaultCaptureOutcome(lateOut, photo.uri, startedAt);
+            })
+            .catch((error) => {
+              if (__DEV__) console.warn('[camera] precise background capture stayed queued', error instanceof Error ? error.message : String(error));
+            });
+          return;
+        }
+        handleDefaultCaptureOutcome(out, photo.uri, startedAt);
       } else {
         // One-click: no card. The folder digests it and you shoot again.
-        const out = await processCapture(photo.uri, toCaptureMode(mode), ac.signal);
+        const outPromise = processCapture(photo.uri, toCaptureMode(mode), extractionMode, {
+          defaultCurrency,
+          userId: auth.user?.id,
+          signal: ac.signal,
+          onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, photo.uri, startedAt),
+          onPrecisePreflightWarning: promptPrecisePreflightWarning,
+          onPrecisePreflightAccepted: showPreciseProcessingAlert,
+        });
+        const out =
+          extractionMode === 'precise'
+            ? await Promise.race([outPromise, waitForVisibleDeadline(PRECISE_SCREEN_VISIBLE_DEADLINE_MS)])
+            : await outPromise;
 
-        if (out.kind === 'extracted') {
-          await confirm(out.row.id, out.fields);
-          popFolder();
-        } else if (out.kind === 'not_a_receipt') {
-          flashNotice('Please scan only documents and receipts');
-        } else {
-          showProcessing(out.reason);
+        if (out === 'visible_deadline') {
+          setPhase({ k: 'idle' });
+          void outPromise
+            .then((lateOut) => handleOneClickCaptureOutcome(lateOut, photo.uri, startedAt))
+            .catch((error) => {
+              if (__DEV__) console.warn('[camera] one-click precise background capture stayed queued', error instanceof Error ? error.message : String(error));
+            });
+          return;
         }
+        handleOneClickCaptureOutcome(out, photo.uri, startedAt);
       }
     } catch (e) {
       console.warn('[capture] failed', e);
     } finally {
+      busyRef.current = false;
       setBusy(false);
+      setTimeout(flushBackgroundQueues, 600);
     }
   };
 
   const onPickFromGallery = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      flashNotice('Photo library access is needed to choose a receipt');
+      return;
+    }
+
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
     if (res.canceled || !res.assets[0]?.uri) return;
     const uri = res.assets[0].uri;
 
     const startedAt = Date.now();
-    if (mode === 'default') {
-      setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true, startedAt });
-      const out = await processCapture(uri, 'default');
-      if (out.kind === 'extracted') {
-        setPhase({ k: 'review', photoUri: uri, rowId: out.row.id, fields: out.fields, loading: false, startedAt });
-      } else if (out.kind === 'not_a_receipt') {
-        setPhase({ k: 'idle' });
-        flashNotice('Please scan only documents and receipts');
+    try {
+      setBusy(true);
+      busyRef.current = true;
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+      if (mode === 'default') {
+        if (extractionMode === 'balanced') {
+          setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true, startedAt });
+        }
+        const out = await processCapture(uri, 'default', extractionMode, {
+          defaultCurrency,
+          userId: auth.user?.id,
+          signal: ac.signal,
+          onDraft: (draft, meta) => {
+            setPhase((prev) =>
+              prev.k === 'review' && prev.loading
+                ? { ...prev, rowId: meta.captureId, fields: draft, loading: true, startedAt }
+                : prev,
+            );
+          },
+          onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
+          onPrecisePreflightWarning: promptPrecisePreflightWarning,
+          onPrecisePreflightAccepted: showPreciseProcessingAlert,
+        });
+        handleDefaultCaptureOutcome(out, uri, startedAt);
       } else {
-        showProcessing(out.reason);
+        const outPromise = processCapture(uri, 'one_click', extractionMode, {
+          defaultCurrency,
+          userId: auth.user?.id,
+          signal: ac.signal,
+          onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
+          onPrecisePreflightWarning: promptPrecisePreflightWarning,
+          onPrecisePreflightAccepted: showPreciseProcessingAlert,
+        });
+        const out =
+          extractionMode === 'precise'
+            ? await Promise.race([outPromise, waitForVisibleDeadline(PRECISE_SCREEN_VISIBLE_DEADLINE_MS)])
+            : await outPromise;
+
+        if (out === 'visible_deadline') {
+          setPhase({ k: 'idle' });
+          void outPromise
+            .then((lateOut) => handleOneClickCaptureOutcome(lateOut, uri, startedAt))
+            .catch((error) => {
+              if (__DEV__) console.warn('[camera] one-click gallery precise background capture stayed queued', error instanceof Error ? error.message : String(error));
+            });
+          return;
+        }
+        handleOneClickCaptureOutcome(out, uri, startedAt);
       }
-    } else {
-      const out = await processCapture(uri, 'one_click');
-      if (out.kind === 'extracted') {
-        await confirm(out.row.id, out.fields);
-        popFolder();
-      } else if (out.kind === 'not_a_receipt') {
-        flashNotice('Please scan only documents and receipts');
-      } else {
-        showProcessing(out.reason);
-      }
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+      setTimeout(flushBackgroundQueues, 600);
     }
   };
 
@@ -317,10 +705,10 @@ export default function CameraScreen() {
    */
   const onConfirmed = useCallback(
     async (fields: ReceiptFields) => {
-      if (phase.k === 'review' && phase.rowId) await confirm(phase.rowId, fields);
+      if (phase.k === 'review' && phase.rowId) await confirm(phase.rowId, fields, auth.user?.id);
       popFolder();
     },
-    [phase, popFolder],
+    [auth.user?.id, phase, popFolder],
   );
 
   /** The flight has finished playing; drop the overlay if it's still ours. */
@@ -464,11 +852,13 @@ export default function CameraScreen() {
           {/* One-click's folder. Always mounted — it has to stay around to
               animate out when you switch to Default; it just parks off-screen.
               Default's own folder lives in the review overlay. */}
-          <Animated.View style={[styles.folder, { left: spacing.lg, top: folderTop }, folderStyle]} pointerEvents="none">
-            <RecentsFolder width={FOLDER_W} />
+          <Animated.View style={[styles.folder, { left: spacing.lg, top: folderTop }, folderStyle]}>
+            <Pressable onPress={openRecents} hitSlop={12}>
+              <RecentsFolder width={FOLDER_W} />
+            </Pressable>
           </Animated.View>
 
-          <Pressable style={[styles.menuCard, { top: insets.top + spacing.sm }]} onPress={openMenu}>
+          <Pressable style={[styles.menuCard, { top: insets.top + spacing.sm }]} onPress={() => openMenu()}>
             <Ionicons name="menu" size={22} color="#fff" />
             <Text style={styles.menuLabel}>Menu</Text>
           </Pressable>
@@ -481,6 +871,8 @@ export default function CameraScreen() {
           </Animated.View>
 
           <View style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}>
+            <ExtractionModeToggle mode={extractionMode} onChange={setExtractionMode} />
+
             <Pressable style={[styles.capture, busy && styles.captureBusy]} onPress={onCapture} disabled={busy}>
               <View style={styles.captureInner} />
             </Pressable>
@@ -504,7 +896,7 @@ export default function CameraScreen() {
         </View>
 
         {/* ── Menu half ── */}
-        <View style={{ width }}>{menuOpen && <MenuPanel onClose={closeMenu} />}</View>
+        <View style={{ width }}>{menuOpen && <MenuPanel onClose={closeMenu} initialTab={menuInitialTab} />}</View>
       </Animated.View>
 
       {phase.k === 'review' && (
@@ -587,6 +979,19 @@ const styles = StyleSheet.create({
   toggleSegActive: { backgroundColor: 'rgba(255,255,255,0.95)' },
   toggleText: { color: 'rgba(255,255,255,0.8)', fontSize: 13 },
   toggleTextActive: { color: '#111', fontWeight: '600' },
+
+  extractionToggle: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderRadius: radius.pill,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  extractionSeg: { paddingHorizontal: 18, paddingVertical: 8, borderRadius: radius.pill },
+  extractionSegActive: { backgroundColor: '#fff' },
+  extractionText: { color: 'rgba(255,255,255,0.82)', fontSize: 13, fontFamily: fontFamily.semibold },
+  extractionTextActive: { color: '#111' },
 
   notice: {
     position: 'absolute',

@@ -27,5 +27,9 @@ class DocumentScanModule : Module() {
     AsyncFunction("detectAndCorrect") { _: String ->
       null
     }
+
+    AsyncFunction("recognizeText") { _: String ->
+      null
+    }
   }
 }
