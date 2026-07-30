@@ -1,7 +1,7 @@
 /**
  * FanCarousel — native Reanimated rebuild of the web GSAP "social cards" fan.
  * Receipt cards fan out around a centered card. Tapping a side card swaps it to
- * the centre; chevrons rotate the fan; dots track the centre. Up to 7 cards.
+ * the centre; chevrons rotate the fan; dots track the centre.
  */
 import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
@@ -11,16 +11,15 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-na
 import { ReceiptCard } from '@/components/ui/ReceiptCard';
 import { colors } from '@/theme/tokens';
 
-export type FanItem = { id: number; total: string };
+export type FanItem = { id: string; total: string };
 
 const CARD_W = 168;
 const CARD_H = 280;
-const CENTER = 3; // slot index of the centred card (0..6)
 const SPRING = { damping: 15, stiffness: 130 };
 
-// Fan transform for a given slot (0..6), derived from distance to centre.
-function slotConfig(slot: number) {
-  const d = slot - CENTER; // -3..3
+// Fan transform for a given slot, derived from distance to the visible centre.
+function slotConfig(slot: number, center: number) {
+  const d = slot - center;
   const ad = Math.abs(d);
   return {
     x: d * CARD_W * 0.3,
@@ -33,37 +32,39 @@ function slotConfig(slot: number) {
 
 function FanCard({
   slot,
+  center,
   left,
   top,
   item,
   onPress,
 }: {
   slot: number;
+  center: number;
   left: number;
   top: number;
   item: FanItem;
   onPress: () => void;
 }) {
-  const c = slotConfig(slot);
+  const c = slotConfig(slot, center);
   const x = useSharedValue(c.x);
   const y = useSharedValue(c.y);
   const rot = useSharedValue(c.rot);
   const sc = useSharedValue(c.scale);
 
   useEffect(() => {
-    const t = slotConfig(slot);
+    const t = slotConfig(slot, center);
     x.value = withSpring(t.x, SPRING);
     y.value = withSpring(t.y, SPRING);
     rot.value = withSpring(t.rot, SPRING);
     sc.value = withSpring(t.scale, SPRING);
-  }, [slot, x, y, rot, sc]);
+  }, [center, slot, x, y, rot, sc]);
 
   const style = useAnimatedStyle(() => ({
     transform: [{ translateX: x.value }, { translateY: y.value }, { rotate: `${rot.value}deg` }, { scale: sc.value }],
   }));
 
   return (
-    <Animated.View style={[styles.card, { left, top, width: CARD_W, height: CARD_H, zIndex: slotConfig(slot).z }, style]}>
+    <Animated.View style={[styles.card, { left, top, width: CARD_W, height: CARD_H, zIndex: slotConfig(slot, center).z }, style]}>
       <Pressable onPress={onPress} style={StyleSheet.absoluteFill}>
         <ReceiptCard width={CARD_W} height={CARD_H} total={item.total} />
       </Pressable>
@@ -74,6 +75,7 @@ function FanCard({
 export function FanCarousel({ items }: { items: FanItem[] }) {
   const { width } = useWindowDimensions();
   const n = items.length;
+  const center = Math.floor((n - 1) / 2);
   // `order[slot] = index into items`. Starts centered on the middle item.
   const [order, setOrder] = useState<number[]>(() => items.map((_, i) => i));
 
@@ -86,10 +88,10 @@ export function FanCarousel({ items }: { items: FanItem[] }) {
 
   const tapItem = (itemIdx: number) => {
     const slot = slotOfItem(itemIdx);
-    if (slot === CENTER) return;
+    if (slot === center) return;
     setOrder((prev) => {
       const next = [...prev];
-      [next[slot], next[CENTER]] = [next[CENTER], next[slot]];
+      [next[slot], next[center]] = [next[center], next[slot]];
       return next;
     });
   };
@@ -99,7 +101,7 @@ export function FanCarousel({ items }: { items: FanItem[] }) {
   };
 
   const centerLeft = (width - CARD_W) / 2;
-  const centerItem = order[CENTER];
+  const centerItem = order[center];
 
   return (
     <View style={styles.root}>
@@ -108,6 +110,7 @@ export function FanCarousel({ items }: { items: FanItem[] }) {
           <FanCard
             key={item.id}
             slot={slotOfItem(itemIdx)}
+            center={center}
             left={centerLeft}
             top={20}
             item={item}

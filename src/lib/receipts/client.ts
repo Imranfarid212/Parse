@@ -32,6 +32,9 @@ export type ExtractInput = {
   extractionMode: ExtractionMode;
   defaultCurrency?: string;
   localOcrText?: string | null;
+  duplicateOverride?: boolean;
+  duplicateOfReceiptId?: string | null;
+  duplicateMatchStrength?: 'weak' | 'strong' | null;
   capturedAt: string;
   signal?: AbortSignal;
 };
@@ -95,7 +98,14 @@ export type CaptureAttemptTrace = {
   abort_reason?: 'visible_deadline' | 'hard_timeout' | 'user_cancel' | 'screen_unmount' | 'winner_cancelled' | null;
 };
 
-type ConfirmReceiptErrorPayload = { message?: string; error?: string; code?: string };
+type ConfirmReceiptErrorPayload = {
+  message?: string;
+  error?: string;
+  code?: string;
+  model_parse_stage?: string;
+  model_preview?: string;
+  model_preview_length?: number;
+};
 
 type ExtractFunctionPayload = {
   status: 200 | 202;
@@ -120,6 +130,29 @@ type ExtractFunctionPayload = {
     grok_ms?: number;
     storage_ms?: number;
     db_ms?: number;
+    existing_lookup_ms?: number;
+    profile_ms?: number;
+    categories_ms?: number;
+    quota_ms?: number;
+    image_read_ms?: number;
+    image_bytes?: number;
+    base64_ms?: number;
+    duplicate_check_ms?: number;
+    duplicate_hydrate_ms?: number;
+    duplicate_cleanup_ms?: number;
+    receipt_upsert_ms?: number;
+    items_delete_ms?: number;
+    items_insert_ms?: number;
+    ledger_ms?: number;
+    model_storage_wall_ms?: number;
+    server_unaccounted_ms?: number;
+    auth_method?: string;
+    auth_reason?: string | null;
+    jwks_fetch_ms?: number;
+    jwks_source?: 'env' | 'fetched' | null;
+    boot_id?: string;
+    req_count?: number;
+    isolate_age_ms?: number;
   };
   result?: {
     merchant?: string;
@@ -128,11 +161,15 @@ type ExtractFunctionPayload = {
     total?: number;
     suggested_category?: string;
     line_items: { name: string; qty?: number; amount: number }[];
+    handwritten_notes?: string | null;
     is_receipt?: boolean;
   };
   code?: 'PROVIDER_DELAY' | string;
   error?: string;
   message?: string;
+  model_parse_stage?: string;
+  model_preview?: string;
+  model_preview_length?: number;
 };
 
 export interface ExtractClient {
@@ -140,6 +177,7 @@ export interface ExtractClient {
   extract(input: ExtractInput): Promise<ExtractAck>;
   /** Best-effort preflight to warm the function isolate and connection. */
   warmUpBalanced?(): Promise<void>;
+  warmUpPrecise?(): Promise<void>;
 }
 
 export interface ConfirmReceiptClient {
@@ -160,9 +198,13 @@ const BALANCED_HEDGE_DELAY_MS = 2000;
 const BALANCED_VISIBLE_DEADLINE_MS = 3800;
 const BALANCED_HARD_DEADLINE_MS = 15_000;
 const BALANCED_WARMUP_TIMEOUT_MS = 5000;
+const PRECISE_VISIBLE_DEADLINE_MS = 4500;
+const PRECISE_WARMUP_TIMEOUT_MS = 5000;
 const AUTH_REFRESH_WINDOW_MS = 30_000;
 let balancedWarmupInFlight: Promise<void> | null = null;
+let preciseWarmupInFlight: Promise<void> | null = null;
 let lastBalancedWarmupCompletedAt: number | null = null;
+let lastPreciseWarmupCompletedAt: number | null = null;
 
 const assertNotAborted = (signal?: AbortSignal) => {
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -256,7 +298,7 @@ function extractPayloadToAck(data: ExtractFunctionPayload, attempts?: CaptureAtt
       currency: data.result?.currency ?? 'USD',
       total: data.result?.total ?? 0,
       category: data.result?.suggested_category ?? 'Miscellaneous',
-      handwritten_notes: '',
+      handwritten_notes: data.result?.handwritten_notes ?? '',
     },
   };
 }
@@ -343,6 +385,9 @@ export const mockExtractClient: ExtractClient = {
   async warmUpBalanced() {
     // No-op: the mock has no network path to warm.
   },
+  async warmUpPrecise() {
+    // No-op: the mock has no network path to warm.
+  },
   async extract({ captureId, signal }) {
     const { minMs, maxMs, notAReceiptRate, failureRate, sample } = mockConfig;
     await wait(minMs + Math.random() * (maxMs - minMs), signal);
@@ -411,7 +456,60 @@ export const supabaseExtractClient: ExtractClient = {
     return balancedWarmupInFlight;
   },
 
-  async extract({ captureId, imageUri, mode, extractionMode, defaultCurrency, localOcrText, capturedAt, signal }) {
+  warmUpPrecise() {
+    if (preciseWarmupInFlight) return preciseWarmupInFlight;
+    const env = getFoundationEnv();
+    if (!env.supabaseUrl || !env.supabaseAnonKey) return Promise.resolve();
+    const supabaseUrl = env.supabaseUrl;
+    const supabaseAnonKey = env.supabaseAnonKey;
+    const requestStartedAt = Date.now();
+    preciseWarmupInFlight = getAccessTokenForRequest()
+      .then(async (accessToken) => {
+        const warmupSignal = childTimeoutSignal(undefined, PRECISE_WARMUP_TIMEOUT_MS);
+        const response = await fetch(`${supabaseUrl}/functions/v1/extract`, {
+          method: 'POST',
+          signal: warmupSignal.signal,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            apikey: supabaseAnonKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ warm_up: true }),
+        });
+        warmupSignal.dispose();
+        const payload = await response.json().catch(() => null) as { timing?: ExtractFunctionPayload['timing'] } | null;
+        if (__DEV__) {
+          console.log('[extract] precise warm-up completed', {
+            status: response.status,
+            request_ms: Date.now() - requestStartedAt,
+            server: payload?.timing ?? null,
+          });
+        }
+        if (!response.ok) throw new Error(`precise warm-up failed (${response.status})`);
+        lastPreciseWarmupCompletedAt = Date.now();
+      })
+      .catch((error) => {
+        if (__DEV__) console.warn('[extract] precise warm-up failed', error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        preciseWarmupInFlight = null;
+      });
+    return preciseWarmupInFlight;
+  },
+
+  async extract({
+    captureId,
+    imageUri,
+    mode,
+    extractionMode,
+    defaultCurrency,
+    localOcrText,
+    duplicateOverride,
+    duplicateOfReceiptId,
+    duplicateMatchStrength,
+    capturedAt,
+    signal,
+  }) {
     assertNotAborted(signal);
     const env = getFoundationEnv();
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
@@ -479,6 +577,9 @@ export const supabaseExtractClient: ExtractClient = {
               extraction_mode: extractionMode,
               default_currency: defaultCurrency,
               extracted_text: localOcrText,
+              duplicate_override: duplicateOverride === true,
+              ...(duplicateOfReceiptId ? { duplicate_of: duplicateOfReceiptId } : {}),
+              ...(duplicateMatchStrength ? { duplicate_match_strength: duplicateMatchStrength } : {}),
               captured_at: capturedAt,
             }),
           });
@@ -609,67 +710,99 @@ export const supabaseExtractClient: ExtractClient = {
         requestedExtractionMode: extractionMode,
         hasLocalOcrText: Boolean(localOcrText),
         reason: 'primary',
+        ms_since_warmup: lastPreciseWarmupCompletedAt == null ? null : Date.now() - lastPreciseWarmupCompletedAt,
       });
     }
-    const response = await FileSystem.uploadAsync(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
-      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-      httpMethod: 'POST',
-      fieldName: 'image',
-      mimeType: 'image/jpeg',
-      parameters: {
-        capture_id: captureId,
-        mode,
-        extraction_mode: extractionMode,
-        ...(localOcrText ? { extracted_text: localOcrText } : {}),
-        captured_at: capturedAt,
-      },
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        apikey: env.supabaseAnonKey,
-      },
+    const completion = (async (): Promise<ExtractCompletedAck> => {
+      const response = await FileSystem.uploadAsync(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        httpMethod: 'POST',
+        fieldName: 'image',
+        mimeType: 'image/jpeg',
+        parameters: {
+          capture_id: captureId,
+          mode,
+          extraction_mode: extractionMode,
+          duplicate_override: duplicateOverride === true ? '1' : '0',
+          ...(localOcrText ? { extracted_text: localOcrText } : {}),
+          ...(duplicateOfReceiptId ? { duplicate_of: duplicateOfReceiptId } : {}),
+          ...(duplicateMatchStrength ? { duplicate_match_strength: duplicateMatchStrength } : {}),
+          captured_at: capturedAt,
+        },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          apikey: supabaseAnonKey,
+        },
+      });
+
+      assertNotAborted(signal);
+      let data: ExtractFunctionPayload | null = null;
+      try {
+        data = JSON.parse(response.body || 'null') as ExtractFunctionPayload | null;
+      } catch {
+        const preview = response.body ? response.body.slice(0, 160).trim() : '';
+        throw new Error(preview || `extract returned non-JSON (${response.status})`);
+      }
+      if (response.status < 200 || response.status >= 300) {
+        if (__DEV__ && (data?.model_preview || data?.model_parse_stage)) {
+          console.warn('[extract] model JSON failure preview', {
+            stage: data.model_parse_stage,
+            preview: data.model_preview,
+            previewLength: data.model_preview_length,
+          });
+        }
+        throw new Error(data?.message ?? data?.error ?? data?.code ?? `extract failed (${response.status})`);
+      }
+      if (!data) throw new Error('extract returned no data');
+      const requestMs = Date.now() - requestStartedAt;
+      const serverMs = data.timing?.total_ms ?? null;
+      if (__DEV__) {
+        console.log('[extract] completed', {
+          status: response.status,
+          request_ms: requestMs,
+          transfer_gap_ms: serverMs == null ? null : Math.max(0, requestMs - serverMs),
+          image_bytes: data.timing?.image_bytes ?? null,
+          server: data.timing,
+          duplicate: data.duplicate === true,
+          rejected: data.rejected === true,
+        });
+      }
+      if (data.status === 202) throw new Error(data.code ?? 'PROVIDER_DELAY');
+      if (data.rejected || data.result?.is_receipt === false) {
+        return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' } };
+      }
+      if (data.duplicate) {
+        return { receiptId: data.receipt_id, response: { error: 'duplicate_receipt' } };
+      }
+
+      return {
+        receiptId: data.receipt_id,
+        response: {
+          date: data.result?.txn_date ?? '',
+          store: data.result?.merchant ?? '',
+          items: data.result?.line_items.map((item) => `${item.name}  ${(Number(item.amount) || 0).toFixed(2)}`) ?? [],
+          currency: data.result?.currency ?? 'USD',
+          total: data.result?.total ?? 0,
+          category: data.result?.suggested_category ?? 'Miscellaneous',
+          handwritten_notes: data.result?.handwritten_notes ?? '',
+        },
+      };
+    })();
+
+    const visibleDeadline = new Promise<'visible_deadline'>((resolve) => {
+      setTimeout(() => resolve('visible_deadline'), PRECISE_VISIBLE_DEADLINE_MS);
     });
-
-    assertNotAborted(signal);
-    let data: ExtractFunctionPayload | null = null;
-    try {
-      data = JSON.parse(response.body || 'null') as ExtractFunctionPayload | null;
-    } catch {
-      const preview = response.body ? response.body.slice(0, 160).trim() : '';
-      throw new Error(preview || `extract returned non-JSON (${response.status})`);
+    const result = await Promise.race([completion, visibleDeadline]);
+    if (result === 'visible_deadline') {
+      if (__DEV__) {
+        console.warn('[extract] precise visible deadline reached; request continues in background', {
+          captureId,
+          visibleDeadlineMs: PRECISE_VISIBLE_DEADLINE_MS,
+        });
+      }
+      return { state: 'visible_deadline', attempts: [], deferred: completion };
     }
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(data?.message ?? data?.error ?? data?.code ?? `extract failed (${response.status})`);
-    }
-    if (!data) throw new Error('extract returned no data');
-    if (__DEV__) {
-      console.log('[extract] completed', {
-        status: response.status,
-        request_ms: Date.now() - requestStartedAt,
-        server: data.timing,
-        duplicate: data.duplicate === true,
-        rejected: data.rejected === true,
-      });
-    }
-    if (data.status === 202) throw new Error(data.code ?? 'PROVIDER_DELAY');
-    if (data.rejected || data.result?.is_receipt === false) {
-      return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' } };
-    }
-    if (data.duplicate) {
-      return { receiptId: data.receipt_id, response: { error: 'duplicate_receipt' } };
-    }
-
-    return {
-      receiptId: data.receipt_id,
-      response: {
-        date: data.result?.txn_date ?? '',
-        store: data.result?.merchant ?? '',
-        items: data.result?.line_items.map((item) => `${item.name}  ${(Number(item.amount) || 0).toFixed(2)}`) ?? [],
-        currency: data.result?.currency ?? 'USD',
-        total: data.result?.total ?? 0,
-        category: data.result?.suggested_category ?? 'Miscellaneous',
-        handwritten_notes: '',
-      },
-    };
+    return result;
   },
 
 };

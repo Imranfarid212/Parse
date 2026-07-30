@@ -48,6 +48,12 @@ export type DuplicateCandidate = {
   total?: number | null;
 };
 
+export type LocalDuplicateCandidate = DuplicateCandidate & {
+  matchedLocalRowId: string;
+  matchedImageUri: string;
+  fields: ReceiptFields;
+};
+
 export type ExtractResponse = ExtractSuccess | ExtractError;
 export type ExtractError = ExtractNotAReceipt | ExtractDuplicateReceipt;
 
@@ -110,6 +116,10 @@ export type ReceiptRow = {
   status: ReceiptStatus;
   fields: ReceiptFields | null;
   localOcrText: string | null;
+  dedupeKey: string | null;
+  ocrFingerprint: string | null;
+  duplicateOf: string | null;
+  duplicateMatchStrength: 'weak' | 'strong' | null;
   imageSyncStatus:
     | 'local_only'
     | 'pending_upload'

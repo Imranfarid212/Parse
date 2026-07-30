@@ -653,6 +653,8 @@ async function persistResult({
   captureMode,
   extraction,
   ackedAt,
+  duplicateOf,
+  duplicateMatchStrength,
 }: {
   admin: ReturnType<typeof createClient>;
   userId: string;
@@ -661,6 +663,8 @@ async function persistResult({
   captureMode: CaptureMode;
   extraction: ExtractionResult;
   ackedAt: string;
+  duplicateOf?: string | null;
+  duplicateMatchStrength?: 'weak' | 'strong' | null;
 }) {
   const persistStartedAt = performance.now();
   const status = extraction.is_receipt ? (captureMode === 'one_click' ? 'confirmed' : 'needs_review') : 'rejected';
@@ -684,6 +688,8 @@ async function persistResult({
       total: extraction.is_receipt ? extraction.total : null,
       category_id: 10,
       notes: null,
+      duplicate_of: duplicateOf ?? null,
+      duplicate_match_strength: duplicateOf ? duplicateMatchStrength ?? null : null,
       acked_at: ackedAt,
     },
     { onConflict: 'capture_id' },
@@ -723,12 +729,14 @@ async function logDuplicateShadowEvent({
   receiptId,
   captureId,
   extraction,
+  duplicateOverride = false,
 }: {
   admin: ReturnType<typeof createClient>;
   userId: string;
   receiptId: string;
   captureId: string;
   extraction: ExtractionResult;
+  duplicateOverride?: boolean;
 }) {
   if (!extraction.is_receipt) return;
 
@@ -762,7 +770,7 @@ async function logDuplicateShadowEvent({
       matched_receipt_id: duplicate.id,
       match_rule: 'merchant_date_currency_total',
       match_strength: 'weak',
-      action: 'shadow_logged',
+      action: duplicateOverride ? 'save_anyway' : 'shadow_logged',
       merchant: extraction.merchant,
       merchant_key: merchantKey,
       matched_merchant: duplicate.merchant,
@@ -837,8 +845,22 @@ async function persistResultWithJob(args: {
   captureMode: CaptureMode;
   extraction: ExtractionResult;
   ackedAt: string;
+  duplicateOverride?: boolean;
+  duplicateOf?: string | null;
+  duplicateMatchStrength?: 'weak' | 'strong' | null;
 }) {
-  const { admin, userId, receiptId, captureId, captureMode, extraction, ackedAt } = args;
+  const {
+    admin,
+    userId,
+    receiptId,
+    captureId,
+    captureMode,
+    extraction,
+    ackedAt,
+    duplicateOverride = false,
+    duplicateOf = null,
+    duplicateMatchStrength = null,
+  } = args;
   const payload = {
     user_id: userId,
     receipt_id: receiptId,
@@ -846,6 +868,9 @@ async function persistResultWithJob(args: {
     capture_mode: captureMode,
     extraction,
     acked_at: ackedAt,
+    duplicate_override: duplicateOverride,
+    duplicate_of: duplicateOf,
+    duplicate_match_strength: duplicateMatchStrength,
   };
   const startedAt = new Date().toISOString();
   try {
@@ -971,6 +996,13 @@ Deno.serve(async (req) => {
     const captureMode = String(body?.mode ?? body?.capture_mode ?? 'default') as CaptureMode;
     const capturedAt = String(body?.captured_at ?? body?.capturedAt ?? '');
     const extractedText = String(body?.extracted_text ?? body?.extractedText ?? '').trim();
+    const duplicateOverride = body?.duplicate_override === true || body?.duplicateOverride === true;
+    const duplicateOf = isUuid(String(body?.duplicate_of ?? body?.duplicateOf ?? ''))
+      ? String(body?.duplicate_of ?? body?.duplicateOf)
+      : null;
+    const duplicateMatchStrengthRaw = String(body?.duplicate_match_strength ?? body?.duplicateMatchStrength ?? '');
+    const duplicateMatchStrength =
+      duplicateMatchStrengthRaw === 'weak' || duplicateMatchStrengthRaw === 'strong' ? duplicateMatchStrengthRaw : null;
     let defaultCurrency = isCurrency(body?.default_currency) ? String(body.default_currency) : null;
     if (!isUuid(captureId)) {
       return json(400, {
@@ -1002,7 +1034,7 @@ Deno.serve(async (req) => {
     const receiptId = crypto.randomUUID();
     const ackedAt = new Date().toISOString();
     const duplicateStartedAt = performance.now();
-    const duplicateCandidate = await findDuplicateCandidate({ admin, userId, captureId, extraction });
+    const duplicateCandidate = duplicateOverride ? null : await findDuplicateCandidate({ admin, userId, captureId, extraction });
     timing.duplicate_ms = Math.round(performance.now() - duplicateStartedAt);
     timing.total_ms = Math.round(performance.now() - startedAt);
     waitUntil(
@@ -1014,6 +1046,9 @@ Deno.serve(async (req) => {
         captureMode,
         extraction,
         ackedAt,
+        duplicateOverride,
+        duplicateOf,
+        duplicateMatchStrength,
       }),
     );
 

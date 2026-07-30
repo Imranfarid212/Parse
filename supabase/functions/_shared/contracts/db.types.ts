@@ -90,6 +90,91 @@ export type Database = {
           },
         ]
       }
+      duplicate_shadow_events: {
+        Row: {
+          action: string
+          capture_id: string
+          created_at: string
+          currency: string | null
+          id: string
+          match_rule: string
+          match_strength: string
+          matched_merchant: string | null
+          matched_merchant_key: string | null
+          matched_receipt_id: string | null
+          matched_total: number | null
+          merchant: string | null
+          merchant_key: string | null
+          receipt_id: string | null
+          total: number | null
+          total_minor_units: number | null
+          txn_date: string | null
+          user_id: string
+        }
+        Insert: {
+          action?: string
+          capture_id: string
+          created_at?: string
+          currency?: string | null
+          id?: string
+          match_rule: string
+          match_strength: string
+          matched_merchant?: string | null
+          matched_merchant_key?: string | null
+          matched_receipt_id?: string | null
+          matched_total?: number | null
+          merchant?: string | null
+          merchant_key?: string | null
+          receipt_id?: string | null
+          total?: number | null
+          total_minor_units?: number | null
+          txn_date?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          capture_id?: string
+          created_at?: string
+          currency?: string | null
+          id?: string
+          match_rule?: string
+          match_strength?: string
+          matched_merchant?: string | null
+          matched_merchant_key?: string | null
+          matched_receipt_id?: string | null
+          matched_total?: number | null
+          merchant?: string | null
+          merchant_key?: string | null
+          receipt_id?: string | null
+          total?: number | null
+          total_minor_units?: number | null
+          txn_date?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "duplicate_shadow_events_matched_receipt_id_fkey"
+            columns: ["matched_receipt_id"]
+            isOneToOne: false
+            referencedRelation: "receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "duplicate_shadow_events_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "duplicate_shadow_events_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       export_jobs: {
         Row: {
           created_at: string
@@ -180,6 +265,59 @@ export type Database = {
             columns: ["receipt_id"]
             isOneToOne: true
             referencedRelation: "receipts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      extraction_persist_jobs: {
+        Row: {
+          attempts: number
+          capture_id: string
+          created_at: string
+          finished_at: string | null
+          id: string
+          last_error: string | null
+          payload: Json
+          receipt_id: string | null
+          started_at: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          capture_id: string
+          created_at?: string
+          finished_at?: string | null
+          id?: string
+          last_error?: string | null
+          payload: Json
+          receipt_id?: string | null
+          started_at?: string | null
+          status: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          capture_id?: string
+          created_at?: string
+          finished_at?: string | null
+          id?: string
+          last_error?: string | null
+          payload?: Json
+          receipt_id?: string | null
+          started_at?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "extraction_persist_jobs_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -311,6 +449,195 @@ export type Database = {
           },
         ]
       }
+      receipt_capture_attempts: {
+        Row: {
+          app_state: string | null
+          attempt_number: number
+          attempt_timeout_ms: number | null
+          capture_id: string
+          created_at: string
+          duration_ms: number | null
+          ended_at: string | null
+          error_message: string | null
+          id: string
+          ms_since_warmup: number | null
+          network_gap_ms: number | null
+          receipt_id: string | null
+          retry_delay_ms: number | null
+          server_auth_ms: number | null
+          server_body_ms: number | null
+          server_model_ms: number | null
+          server_normalize_ms: number | null
+          server_total_ms: number | null
+          started_at: string | null
+          status_code: number | null
+          timed_out: number | null
+          transport: string
+          transport_error: number | null
+          user_id: string
+        }
+        Insert: {
+          app_state?: string | null
+          attempt_number: number
+          attempt_timeout_ms?: number | null
+          capture_id: string
+          created_at?: string
+          duration_ms?: number | null
+          ended_at?: string | null
+          error_message?: string | null
+          id?: string
+          ms_since_warmup?: number | null
+          network_gap_ms?: number | null
+          receipt_id?: string | null
+          retry_delay_ms?: number | null
+          server_auth_ms?: number | null
+          server_body_ms?: number | null
+          server_model_ms?: number | null
+          server_normalize_ms?: number | null
+          server_total_ms?: number | null
+          started_at?: string | null
+          status_code?: number | null
+          timed_out?: number | null
+          transport?: string
+          transport_error?: number | null
+          user_id: string
+        }
+        Update: {
+          app_state?: string | null
+          attempt_number?: number
+          attempt_timeout_ms?: number | null
+          capture_id?: string
+          created_at?: string
+          duration_ms?: number | null
+          ended_at?: string | null
+          error_message?: string | null
+          id?: string
+          ms_since_warmup?: number | null
+          network_gap_ms?: number | null
+          receipt_id?: string | null
+          retry_delay_ms?: number | null
+          server_auth_ms?: number | null
+          server_body_ms?: number | null
+          server_model_ms?: number | null
+          server_normalize_ms?: number | null
+          server_total_ms?: number | null
+          started_at?: string | null
+          status_code?: number | null
+          timed_out?: number | null
+          transport?: string
+          transport_error?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "receipt_capture_attempts_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipt_capture_attempts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      receipt_capture_metrics: {
+        Row: {
+          backend_extract_ms: number | null
+          capture_id: string
+          capture_mode: string
+          compression_ms: number | null
+          created_at: string
+          document_correction_ms: number | null
+          extraction_mode: string
+          id: string
+          image_backup_ms: number | null
+          local_file_ms: number | null
+          local_ocr_ms: number | null
+          local_ocr_timed_out: number | null
+          local_row_ms: number | null
+          metrics_upload_ms: number | null
+          ocr_image_resize_ms: number | null
+          ocr_input_height: number | null
+          ocr_input_width: number | null
+          ocr_timeout_ms: number | null
+          receipt_id: string | null
+          total_to_response_ms: number | null
+          total_to_ui_ms: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          backend_extract_ms?: number | null
+          capture_id: string
+          capture_mode: string
+          compression_ms?: number | null
+          created_at?: string
+          document_correction_ms?: number | null
+          extraction_mode: string
+          id?: string
+          image_backup_ms?: number | null
+          local_file_ms?: number | null
+          local_ocr_ms?: number | null
+          local_ocr_timed_out?: number | null
+          local_row_ms?: number | null
+          metrics_upload_ms?: number | null
+          ocr_image_resize_ms?: number | null
+          ocr_input_height?: number | null
+          ocr_input_width?: number | null
+          ocr_timeout_ms?: number | null
+          receipt_id?: string | null
+          total_to_response_ms?: number | null
+          total_to_ui_ms?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          backend_extract_ms?: number | null
+          capture_id?: string
+          capture_mode?: string
+          compression_ms?: number | null
+          created_at?: string
+          document_correction_ms?: number | null
+          extraction_mode?: string
+          id?: string
+          image_backup_ms?: number | null
+          local_file_ms?: number | null
+          local_ocr_ms?: number | null
+          local_ocr_timed_out?: number | null
+          local_row_ms?: number | null
+          metrics_upload_ms?: number | null
+          ocr_image_resize_ms?: number | null
+          ocr_input_height?: number | null
+          ocr_input_width?: number | null
+          ocr_timeout_ms?: number | null
+          receipt_id?: string | null
+          total_to_response_ms?: number | null
+          total_to_ui_ms?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "receipt_capture_metrics_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipt_capture_metrics_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       receipt_items: {
         Row: {
           amount: number
@@ -353,6 +680,9 @@ export type Database = {
           created_at: string
           currency: string
           deleted_at: string | null
+          duplicate_match_strength: string | null
+          duplicate_of: string | null
+          extraction_mode: string
           id: string
           image_byte_size: number | null
           image_path: string | null
@@ -375,6 +705,9 @@ export type Database = {
           created_at?: string
           currency?: string
           deleted_at?: string | null
+          duplicate_match_strength?: string | null
+          duplicate_of?: string | null
+          extraction_mode?: string
           id?: string
           image_byte_size?: number | null
           image_path?: string | null
@@ -397,6 +730,9 @@ export type Database = {
           created_at?: string
           currency?: string
           deleted_at?: string | null
+          duplicate_match_strength?: string | null
+          duplicate_of?: string | null
+          extraction_mode?: string
           id?: string
           image_byte_size?: number | null
           image_path?: string | null
@@ -416,6 +752,13 @@ export type Database = {
             columns: ["category_id"]
             isOneToOne: false
             referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipts_duplicate_of_fkey"
+            columns: ["duplicate_of"]
+            isOneToOne: false
+            referencedRelation: "receipts"
             referencedColumns: ["id"]
           },
           {
@@ -1372,4 +1715,3 @@ export const Constants = {
     },
   },
 } as const
-

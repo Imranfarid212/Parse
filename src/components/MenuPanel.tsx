@@ -75,10 +75,10 @@ function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: 
   );
 }
 
-export function MenuPanel({ onClose }: { onClose: () => void }) {
+export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; initialTab?: number }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(initialTab);
 
   return (
     <View style={[styles.panel, { paddingTop: insets.top + spacing.sm }]}>

@@ -11,7 +11,14 @@
  */
 import * as SQLite from 'expo-sqlite';
 
-import type { CaptureMode, ExtractionMode, ReceiptFields, ReceiptRow, ReceiptStatus } from '@/lib/receipts/types';
+import type {
+  CaptureMode,
+  ExtractionMode,
+  LocalDuplicateCandidate,
+  ReceiptFields,
+  ReceiptRow,
+  ReceiptStatus,
+} from '@/lib/receipts/types';
 import type { CaptureMetricsPayload } from '@/lib/receipts/client';
 
 const DB_NAME = 'parse.db';
@@ -30,6 +37,10 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       status     TEXT NOT NULL,
       fields     TEXT,
       local_ocr_text TEXT,
+      dedupe_key TEXT,
+      ocr_fingerprint TEXT,
+      duplicate_of TEXT,
+      duplicate_match_strength TEXT,
       image_sync_status TEXT NOT NULL DEFAULT 'local_only',
       result_sync_status TEXT NOT NULL DEFAULT 'local_only',
       attempts   INTEGER NOT NULL DEFAULT 0,
@@ -55,6 +66,10 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   await ensureColumn(db, 'capture_mode', "ALTER TABLE receipts ADD COLUMN capture_mode TEXT NOT NULL DEFAULT 'default'");
   await ensureColumn(db, 'extraction_mode', "ALTER TABLE receipts ADD COLUMN extraction_mode TEXT NOT NULL DEFAULT 'balanced'");
   await ensureColumn(db, 'local_ocr_text', 'ALTER TABLE receipts ADD COLUMN local_ocr_text TEXT');
+  await ensureColumn(db, 'dedupe_key', 'ALTER TABLE receipts ADD COLUMN dedupe_key TEXT');
+  await ensureColumn(db, 'ocr_fingerprint', 'ALTER TABLE receipts ADD COLUMN ocr_fingerprint TEXT');
+  await ensureColumn(db, 'duplicate_of', 'ALTER TABLE receipts ADD COLUMN duplicate_of TEXT');
+  await ensureColumn(db, 'duplicate_match_strength', 'ALTER TABLE receipts ADD COLUMN duplicate_match_strength TEXT');
   await ensureColumn(
     db,
     'image_sync_status',
@@ -69,6 +84,8 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   await ensureColumn(db, 'next_retry_at', 'ALTER TABLE receipts ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0');
   await ensureColumn(db, 'receipt_id', 'ALTER TABLE receipts ADD COLUMN receipt_id TEXT');
   await ensureColumn(db, 'acked_at', 'ALTER TABLE receipts ADD COLUMN acked_at INTEGER');
+  await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_dedupe ON receipts (dedupe_key, created_at DESC)');
+  await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_duplicate_of ON receipts (duplicate_of, created_at DESC)');
   return db;
 }
 
@@ -90,6 +107,10 @@ type Persisted = {
   status: ReceiptStatus;
   fields: string | null;
   local_ocr_text: string | null;
+  dedupe_key: string | null;
+  ocr_fingerprint: string | null;
+  duplicate_of: string | null;
+  duplicate_match_strength: 'weak' | 'strong' | null;
   image_sync_status: ReceiptRow['imageSyncStatus'];
   result_sync_status: ReceiptRow['resultSyncStatus'];
   attempts: number;
@@ -122,6 +143,10 @@ const hydrate = (r: Persisted): ReceiptRow => ({
   status: r.status,
   fields: r.fields ? (JSON.parse(r.fields) as ReceiptFields) : null,
   localOcrText: r.local_ocr_text,
+  dedupeKey: r.dedupe_key,
+  ocrFingerprint: r.ocr_fingerprint,
+  duplicateOf: r.duplicate_of,
+  duplicateMatchStrength: r.duplicate_match_strength,
   imageSyncStatus: r.image_sync_status,
   resultSyncStatus: r.result_sync_status,
   attempts: r.attempts,
@@ -131,6 +156,97 @@ const hydrate = (r: Persisted): ReceiptRow => ({
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
+
+const normalizeMerchantKey = (value: unknown) =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(pvt|private|ltd|limited|inc|llc|store|market)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const merchantsMatch = (a: string, b: string) => {
+  const left = normalizeMerchantKey(a);
+  const right = normalizeMerchantKey(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return Math.min(left.length, right.length) >= 5 && (left.includes(right) || right.includes(left));
+};
+
+const DEDUPE_STOP_WORDS = new Set([
+  'and',
+  'the',
+  'for',
+  'with',
+  'bill',
+  'invoice',
+  'receipt',
+  'total',
+  'amount',
+  'cash',
+  'card',
+  'gst',
+  'cgst',
+  'sgst',
+  'igst',
+  'tax',
+  'qty',
+  'rate',
+  'item',
+  'name',
+  'phone',
+]);
+
+function hashToken(token: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < token.length; i += 1) {
+    hash ^= token.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function buildDedupeKey(fields: ReceiptFields, userId?: string | null): string | null {
+  if (!userId || !fields.date || !fields.currency || fields.total <= 0) return null;
+  const totalMinor = Math.round(fields.total * 100);
+  if (!Number.isFinite(totalMinor) || totalMinor <= 0) return null;
+  return ['v1', userId, fields.date, fields.currency.toUpperCase(), String(totalMinor)].join('|');
+}
+
+export function buildOcrFingerprint(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length >= 3 && token.length <= 32 && !DEDUPE_STOP_WORDS.has(token));
+  const uniqueHashes = [...new Set(tokens.map(hashToken))].sort().slice(0, 160);
+  return uniqueHashes.length > 0 ? JSON.stringify(uniqueHashes) : null;
+}
+
+function parseFingerprint(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((token): token is string => typeof token === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function fingerprintSimilarity(leftValue: string | null | undefined, rightValue: string | null | undefined): number {
+  const left = parseFingerprint(leftValue);
+  const right = parseFingerprint(rightValue);
+  if (left.length === 0 || right.length === 0) return 0;
+  const rightSet = new Set(right);
+  let intersection = 0;
+  for (const token of left) {
+    if (rightSet.has(token)) intersection += 1;
+  }
+  const union = new Set([...left, ...right]).size;
+  return union > 0 ? intersection / union : 0;
+}
 
 export const newCaptureId = () =>
   'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -156,6 +272,10 @@ export async function insertCaptured(
     status: 'local_captured',
     fields: null,
     localOcrText: null,
+    dedupeKey: null,
+    ocrFingerprint: null,
+    duplicateOf: null,
+    duplicateMatchStrength: null,
     imageSyncStatus: 'local_only',
     resultSyncStatus: 'local_only',
     attempts: 0,
@@ -166,13 +286,17 @@ export async function insertCaptured(
     updatedAt: now,
   };
   await db.runAsync(
-    'INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, status, fields, local_ocr_text, image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, status, fields, local_ocr_text, dedupe_key, ocr_fingerprint, duplicate_of, duplicate_match_strength, image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [
       row.id,
       row.imageUri,
       row.captureMode,
       row.extractionMode,
       row.status,
+      null,
+      null,
+      null,
+      null,
       null,
       null,
       row.imageSyncStatus,
@@ -188,11 +312,35 @@ export async function insertCaptured(
   return row;
 }
 
+export async function setDuplicateRelation(
+  id: string,
+  duplicateOf: string | null,
+  matchStrength: 'weak' | 'strong' | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE receipts SET duplicate_of = ?, duplicate_match_strength = ?, updated_at = ? WHERE id = ?', [
+    duplicateOf,
+    matchStrength,
+    Date.now(),
+    id,
+  ]);
+}
+
 export async function setLocalOcr(id: string, text: string | null, status: ReceiptStatus): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE receipts SET local_ocr_text = ?, status = ?, updated_at = ? WHERE id = ?', [
     text,
     status,
+    Date.now(),
+    id,
+  ]);
+}
+
+export async function setDedupeSignals(id: string, dedupeKey: string | null, ocrFingerprint: string | null): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE receipts SET dedupe_key = ?, ocr_fingerprint = ?, updated_at = ? WHERE id = ?', [
+    dedupeKey,
+    ocrFingerprint,
     Date.now(),
     id,
   ]);
@@ -217,7 +365,7 @@ export async function markDispatched(id: string, receiptId: string, fields: Rece
   const db = await getDb();
   const now = Date.now();
   await db.runAsync(
-    "UPDATE receipts SET fields = ?, status = 'extracted', receipt_id = ?, acked_at = ?, updated_at = ? WHERE id = ?",
+    "UPDATE receipts SET fields = ?, local_ocr_text = NULL, status = 'extracted', receipt_id = ?, acked_at = ?, updated_at = ? WHERE id = ?",
     [JSON.stringify(fields), receiptId, now, now, id],
   );
 }
@@ -311,6 +459,39 @@ export async function listRecent(limit = 20): Promise<ReceiptRow[]> {
     [limit],
   );
   return rows.map(hydrate);
+}
+
+export async function findLocalDuplicateCandidate(
+  fields: ReceiptFields,
+  input?: { userId?: string | null; ocrText?: string | null },
+): Promise<LocalDuplicateCandidate | null> {
+  const dedupeKey = buildDedupeKey(fields, input?.userId);
+  if (!dedupeKey) return null;
+  const db = await getDb();
+  const currentFingerprint = buildOcrFingerprint(input?.ocrText);
+  const rows = await db.getAllAsync<Persisted>(
+    "SELECT * FROM receipts WHERE dedupe_key = ? AND fields IS NOT NULL AND status NOT IN ('deleted', 'delete_pending') ORDER BY created_at DESC LIMIT 8",
+    [dedupeKey],
+  );
+  for (const row of rows.map(hydrate)) {
+    if (!row.fields) continue;
+    const similarity = fingerprintSimilarity(currentFingerprint, row.ocrFingerprint);
+    const merchantFallback = similarity === 0 && merchantsMatch(row.fields.store, fields.store);
+    if (similarity < 0.55 && !merchantFallback) continue;
+    return {
+      matchedReceiptId: row.receiptId ?? row.id,
+      matchedLocalRowId: row.id,
+      matchedImageUri: row.imageUri,
+      matchRule: similarity >= 0.55 ? 'local_dedupe_key_ocr_fingerprint' : 'local_dedupe_key_merchant_fallback',
+      matchStrength: similarity >= 0.8 ? 'strong' : 'weak',
+      merchant: row.fields.store,
+      date: row.fields.date,
+      currency: row.fields.currency,
+      total: row.fields.total,
+      fields: row.fields,
+    };
+  }
+  return null;
 }
 
 /** Scans whose extraction never landed — the retry queue's work list. */

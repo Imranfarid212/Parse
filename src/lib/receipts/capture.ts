@@ -31,6 +31,7 @@ import {
   type Category,
   type DuplicateCandidate,
   type ExtractionMode,
+  type LocalDuplicateCandidate,
   type ReceiptFields,
   type ReceiptRow,
 } from '@/lib/receipts/types';
@@ -41,6 +42,7 @@ const JPEG_QUALITY = 0.55;
 const OCR_TARGET_LONG_EDGE = 1600;
 const OCR_JPEG_QUALITY = 0.9;
 const OCR_TIMEOUT_MS = 2500;
+const PRECISE_PREFLIGHT_OCR_TIMEOUT_MS = 1200;
 const CAPTURE_DIR = `${FileSystem.documentDirectory ?? ''}captures/`;
 const MAX_BACKOFF_MS = 60_000;
 const MAX_EXTRACT_ATTEMPTS = 5;
@@ -174,6 +176,32 @@ function parseDraftMerchant(lines: string[]): string {
   return merchant?.slice(0, 80) ?? '';
 }
 
+function amountFromText(value: string): number | null {
+  const normalized = value.replace(/,/g, '');
+  const matches = [...normalized.matchAll(/(?:rs\.?|inr|₹|\$)?\s*(-?\d{1,7}(?:\.\d{1,2})?)/gi)];
+  for (let i = matches.length - 1; i >= 0; i -= 1) {
+    const amount = Number(matches[i][1]);
+    if (Number.isFinite(amount) && amount > 0) return Math.round(amount * 100) / 100;
+  }
+  return null;
+}
+
+function parseDraftTotal(lines: string[]): number {
+  const totalLine = /\b(grand\s*total|net\s*amount|amount\s*paid|balance\s*due|total)\b/i;
+  const excluded = /\b(sub\s*total|subtotal|tax|gst|cgst|sgst|igst|change|round\s*off|saving|discount)\b/i;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (!totalLine.test(line) || excluded.test(line)) continue;
+    const amount = amountFromText(line);
+    if (amount != null) return amount;
+  }
+
+  const amounts = lines
+    .flatMap((line) => (excluded.test(line) ? [] : [amountFromText(line)]))
+    .filter((amount): amount is number => amount != null && amount < 1_000_000);
+  return amounts.length > 0 ? Math.max(...amounts) : 0;
+}
+
 function draftFromOcr(text: string, defaultCurrency: string): ReceiptFields | null {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const store = parseDraftMerchant(lines);
@@ -183,10 +211,40 @@ function draftFromOcr(text: string, defaultCurrency: string): ReceiptFields | nu
     store,
     items: [],
     currency: inferCurrencyFromText(text, defaultCurrency),
-    total: 0,
+    total: parseDraftTotal(lines),
     category: isCategory(DRAFT_CATEGORY) ? DRAFT_CATEGORY : 'Miscellaneous',
     handwritten_notes: '',
   };
+}
+
+export type LocalDuplicateDecision = 'view_existing' | 'save_anyway';
+export type PrecisePreflightDecision = 'continue' | 'cancel';
+export type PrecisePreflightWarning = {
+  confidence: 'low' | 'uncertain';
+  textLength: number;
+  amountCount: number;
+  keywordCount: number;
+  hasDocument: boolean;
+  timedOut: boolean;
+};
+
+function scoreReceiptPreflight(text: string | null, hasDocument: boolean, timedOut: boolean): PrecisePreflightWarning | null {
+  const normalized = text ?? '';
+  const amountCount = [...normalized.matchAll(/(?:rs\.?|inr|₹|\$|cad|usd)?\s*\d{1,7}(?:[.,]\d{2})/gi)].length;
+  const keywordCount = [...normalized.matchAll(/\b(receipt|invoice|bill|total|subtotal|tax|gst|vat|paid|cash|card|debit|credit|amount|qty|item|change|balance)\b/gi)].length;
+  const textLength = normalized.trim().length;
+  const likelyReceipt = amountCount >= 2 || (amountCount >= 1 && keywordCount >= 1) || keywordCount >= 3;
+  if (likelyReceipt) return null;
+  if (!hasDocument && textLength < 40) {
+    return { confidence: 'low', textLength, amountCount, keywordCount, hasDocument, timedOut };
+  }
+  if (textLength < 80 && amountCount === 0 && keywordCount === 0) {
+    return { confidence: 'low', textLength, amountCount, keywordCount, hasDocument, timedOut };
+  }
+  if (textLength < 180 && amountCount === 0 && keywordCount <= 1) {
+    return { confidence: 'uncertain', textLength, amountCount, keywordCount, hasDocument, timedOut };
+  }
+  return null;
 }
 
 export type CaptureOutcome =
@@ -202,8 +260,12 @@ export type CaptureOutcome =
   | { kind: 'not_a_receipt'; row: ReceiptRow }
   /** Same user already has this merchant/date/currency/total receipt. */
   | { kind: 'duplicate'; row: ReceiptRow }
+  /** Same device already has a likely matching receipt and the user chose it. */
+  | { kind: 'local_duplicate'; candidate: LocalDuplicateCandidate }
+  /** Precise preflight was rejected by the user before backend/model work. */
+  | { kind: 'preflight_rejected' }
   /** Anything else. The row stays `pending_extract` and the queue retries it. */
-  | { kind: 'queued'; row: ReceiptRow; reason?: string; attempts?: CaptureAttemptTrace[] };
+  | { kind: 'queued'; row: ReceiptRow; reason?: string; attempts?: CaptureAttemptTrace[]; deferred?: Promise<CaptureOutcome> };
 
 /**
  * Runs a captured photo through the pipeline. Never throws for transport
@@ -221,7 +283,14 @@ export async function processCapture(
   options?: {
     signal?: AbortSignal;
     defaultCurrency?: string;
+    userId?: string | null;
     onDraft?: (draft: ReceiptFields, meta: { captureId: string; elapsedMs: number }) => void;
+    onLocalDuplicateCandidate?: (
+      candidate: LocalDuplicateCandidate,
+      draft: ReceiptFields,
+    ) => Promise<LocalDuplicateDecision>;
+    onPrecisePreflightWarning?: (warning: PrecisePreflightWarning) => Promise<PrecisePreflightDecision>;
+    onPrecisePreflightAccepted?: () => void;
   },
 ): Promise<CaptureOutcome> {
   const signal = options?.signal;
@@ -265,6 +334,10 @@ export async function processCapture(
   let localOcrText: string | null = null;
   let rowImageUri = sourceImageUri;
   let backupSourceImageUri = sourceImageUri;
+  let duplicateOverride = false;
+  let duplicateOfLocalRowId: string | null = null;
+  let duplicateOfReceiptId: string | null = null;
+  let duplicateMatchStrength: 'weak' | 'strong' | null = null;
 
   if (extractionMode === 'balanced') {
     const ocrResizeStartedAt = Date.now();
@@ -292,8 +365,28 @@ export async function processCapture(
     });
     const draft = localOcrText ? draftFromOcr(localOcrText, options?.defaultCurrency ?? 'USD') : null;
     if (draft) {
-      logLatency('local_draft_ready', { captureId, merchant: draft.store });
+      logLatency('local_draft_ready', { captureId, merchant: draft.store, total: draft.total });
       options?.onDraft?.(draft, { captureId, elapsedMs: Date.now() - captureStartedAt });
+      const localDuplicate = await store.findLocalDuplicateCandidate(draft, {
+        userId: options?.userId,
+        ocrText: localOcrText,
+      });
+      if (localDuplicate) {
+        logLatency('local_duplicate_candidate', {
+          captureId,
+          matchedReceiptId: localDuplicate.matchedReceiptId,
+          matchedLocalRowId: localDuplicate.matchedLocalRowId,
+        });
+        const decision = await options?.onLocalDuplicateCandidate?.(localDuplicate, draft);
+        if (decision === 'view_existing') return { kind: 'local_duplicate', candidate: localDuplicate };
+        if (decision === 'save_anyway') {
+          duplicateOverride = true;
+          duplicateOfLocalRowId = localDuplicate.matchedLocalRowId;
+          duplicateOfReceiptId =
+            localDuplicate.matchedReceiptId !== localDuplicate.matchedLocalRowId ? localDuplicate.matchedReceiptId : null;
+          duplicateMatchStrength = localDuplicate.matchStrength;
+        }
+      }
     }
     if (__DEV__) {
       console.log('[capture] local OCR completed', {
@@ -303,18 +396,58 @@ export async function processCapture(
         preview: localOcrText?.slice(0, 120),
       });
     }
+  } else {
+    const ocrResizeStartedAt = Date.now();
+    const ocrImage = await prepareForOcr(sourceImageUri);
+    metrics.ocr_image_resize_ms = Date.now() - ocrResizeStartedAt;
+    metrics.ocr_input_width = ocrImage.width;
+    metrics.ocr_input_height = ocrImage.height;
+    metrics.ocr_timeout_ms = PRECISE_PREFLIGHT_OCR_TIMEOUT_MS;
+    logLatency('precise_preflight_ocr_image_ready', {
+      resized: ocrImage.resized,
+      width: ocrImage.width,
+      height: ocrImage.height,
+    });
+    const preflightStartedAt = Date.now();
+    const preflightOcr = await recognizeTextWithDeadline(ocrImage.uri, PRECISE_PREFLIGHT_OCR_TIMEOUT_MS);
+    metrics.local_ocr_ms = Date.now() - preflightStartedAt;
+    metrics.local_ocr_timed_out = preflightOcr.timedOut ? 1 : 0;
+    const warning = scoreReceiptPreflight(preflightOcr.text, Boolean(corrected), preflightOcr.timedOut);
+    logLatency('precise_preflight_done', {
+      textLength: preflightOcr.text?.length ?? 0,
+      timedOut: preflightOcr.timedOut,
+      warning: warning?.confidence ?? null,
+      amountCount: warning?.amountCount ?? null,
+      keywordCount: warning?.keywordCount ?? null,
+    });
+    if (warning) {
+      const decision = await options?.onPrecisePreflightWarning?.(warning);
+      if (decision !== 'continue') return { kind: 'preflight_rejected' };
+    }
+    options?.onPrecisePreflightAccepted?.();
   }
 
   // The row exists before the network is touched, so a crash/kill mid-request
   // still leaves the scan recoverable.
   const localRowStartedAt = Date.now();
   const row = await store.insertCaptured(rowImageUri, captureMode, extractionMode, captureId);
+  if (duplicateOfLocalRowId) {
+    await store.setDuplicateRelation(row.id, duplicateOfLocalRowId, duplicateMatchStrength);
+  }
   metrics.local_row_ms = Date.now() - localRowStartedAt;
   logLatency('local_row_inserted', { captureId: row.id });
 
   if (extractionMode === 'balanced') {
     await store.setStatus(row.id, 'local_ocr_processing');
     await store.setLocalOcr(row.id, localOcrText, localOcrText ? 'local_ocr_done' : 'image_upload_pending');
+    const draft = localOcrText ? draftFromOcr(localOcrText, options?.defaultCurrency ?? 'USD') : null;
+    if (draft) {
+      await store.setDedupeSignals(
+        row.id,
+        store.buildDedupeKey(draft, options?.userId),
+        store.buildOcrFingerprint(localOcrText),
+      );
+    }
   } else {
     await store.setStatus(row.id, 'image_upload_pending');
   }
@@ -324,35 +457,54 @@ export async function processCapture(
   let durableImagePromise: Promise<string> | null = null;
   try {
     await store.setStatus(row.id, 'llm_processing');
+    let requestImageUri = row.imageUri;
+    if (!localOcrText) {
+      const compressionStartedAt = Date.now();
+      const compressed = await compressForUpload(backupSourceImageUri);
+      metrics.compression_ms = Date.now() - compressionStartedAt;
+      logLatency('compression_done');
+      const persistStartedAt = Date.now();
+      durableImageUri = await persistCaptureFile(compressed, captureId);
+      metrics.local_file_ms = Date.now() - persistStartedAt;
+      await store.setImageUri(row.id, durableImageUri);
+      requestImageUri = durableImageUri;
+      durableImagePromise = Promise.resolve(durableImageUri);
+      logLatency('local_file_persisted', { captureId });
+    }
     logLatency('extract_request_start', { textOnly: Boolean(localOcrText) });
     extractStartedAt = Date.now();
     const ackPromise = extractClient.extract({
       captureId: row.id,
-      imageUri: row.imageUri,
+      imageUri: requestImageUri,
       mode: row.captureMode,
       extractionMode: localOcrText ? extractionMode : 'precise',
       defaultCurrency: options?.defaultCurrency,
       localOcrText,
+      duplicateOverride,
+      duplicateOfReceiptId,
+      duplicateMatchStrength,
       capturedAt: new Date(row.createdAt).toISOString(),
       signal,
     });
-    const compressionStartedAt = Date.now();
-    durableImagePromise = compressForUpload(backupSourceImageUri)
-      .then(async (compressed) => {
-        metrics.compression_ms = Date.now() - compressionStartedAt;
-        logLatency('compression_done');
-        const persistStartedAt = Date.now();
-        const persisted = await persistCaptureFile(compressed, captureId);
-        metrics.local_file_ms = Date.now() - persistStartedAt;
-        durableImageUri = persisted;
-        await store.setImageUri(row.id, persisted);
-        logLatency('local_file_persisted', { captureId });
-        return persisted;
-      })
-      .catch((error) => {
-        if (__DEV__) console.warn('[capture] image file persistence queued', describeError(error));
-        return row.imageUri;
-    });
+    if (localOcrText) {
+      const compressionStartedAt = Date.now();
+      durableImagePromise = compressForUpload(backupSourceImageUri)
+        .then(async (compressed) => {
+          metrics.compression_ms = Date.now() - compressionStartedAt;
+          logLatency('compression_done');
+          const persistStartedAt = Date.now();
+          const persisted = await persistCaptureFile(compressed, captureId);
+          metrics.local_file_ms = Date.now() - persistStartedAt;
+          durableImageUri = persisted;
+          await store.setImageUri(row.id, persisted);
+          logLatency('local_file_persisted', { captureId });
+          return persisted;
+        })
+        .catch((error) => {
+          if (__DEV__) console.warn('[capture] image file persistence queued', describeError(error));
+          return row.imageUri;
+        });
+    }
     const ack = await ackPromise;
     if (isVisibleDeadlineAck(ack)) {
       metrics.backend_extract_ms = Date.now() - extractStartedAt;
@@ -368,27 +520,67 @@ export async function processCapture(
       logLatency('extract_visible_deadline_queued', { captureId: row.id });
       await store.setStatus(row.id, 'llm_failed_retryable');
       await store.markRetry(row.id, 1, Date.now() + VISIBLE_DEADLINE_RETRY_DELAY_MS);
-      void ack.deferred
-        .then(async (lateAck) => {
-          if (isVisibleDeadlineAck(lateAck) || isNotAReceipt(lateAck.response) || isDuplicateReceipt(lateAck.response)) return;
+      const deferred = ack.deferred
+        .then(async (lateAck): Promise<CaptureOutcome> => {
+          if (isVisibleDeadlineAck(lateAck)) return { kind: 'queued', row, attempts: lateAck.attempts };
+          if (isNotAReceipt(lateAck.response)) {
+            await store.remove(row.id);
+            await deleteLocalFile(durableImageUri);
+            void durableImagePromise?.then(deleteLocalFile);
+            return { kind: 'not_a_receipt', row };
+          }
+          if (isDuplicateReceipt(lateAck.response)) {
+            await store.remove(row.id);
+            await deleteLocalFile(durableImageUri);
+            void durableImagePromise?.then(deleteLocalFile);
+            return { kind: 'duplicate', row };
+          }
           const fields = toReceiptFields(lateAck.response);
+          const receiptId = lateAck.receiptId;
+          const lateMetrics = { ...metrics, backend_extract_ms: Date.now() - extractStartedAt };
           await store.markDispatched(row.id, lateAck.receiptId, fields);
-          await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
-          void durableImagePromise?.then(() => syncImageBackups());
+          await store.setDedupeSignals(
+            row.id,
+            store.buildDedupeKey(fields, options?.userId),
+            store.buildOcrFingerprint(localOcrText),
+          );
+          const imageSyncStatus = row.extractionMode === 'balanced' && localOcrText ? 'pending_upload' : 'uploaded';
+          await store.setSyncStatus(row.id, { imageSyncStatus });
+          if (imageSyncStatus === 'pending_upload') void durableImagePromise?.then(() => syncImageBackups());
+          else void durableImagePromise?.then(deleteLocalFile);
           uploadCaptureMetrics({
             captureId: row.id,
-            receiptId: lateAck.receiptId,
+            receiptId,
             captureMode: row.captureMode,
             extractionMode: row.extractionMode,
-            metrics: { ...metrics, backend_extract_ms: Date.now() - extractStartedAt },
+            metrics: lateMetrics,
             attempts: lateAck.attempts,
           });
           if (__DEV__) console.log('[capture] visible-deadline request completed in background', { captureId: row.id });
+          return {
+            kind: 'extracted',
+            row: {
+              ...row,
+              fields,
+              receiptId,
+              status: 'extracted',
+              localOcrText: null,
+              dedupeKey: store.buildDedupeKey(fields, options?.userId),
+              ocrFingerprint: store.buildOcrFingerprint(localOcrText),
+              imageSyncStatus,
+              imageUri: durableImageUri,
+            },
+            fields,
+            metrics: lateMetrics,
+            attempts: lateAck.attempts,
+            duplicateCandidate: lateAck.duplicateCandidate,
+          };
         })
         .catch((error) => {
           if (__DEV__) console.warn('[capture] visible-deadline request stayed queued', describeError(error));
+          return { kind: 'queued' as const, row, reason: __DEV__ ? describeError(error) : undefined, attempts: ack.attempts };
         });
-      return { kind: 'queued', row, reason: undefined, attempts: ack.attempts };
+      return { kind: 'queued', row, reason: undefined, attempts: ack.attempts, deferred };
     }
     if (isNotAReceipt(ack.response)) {
       // Not a receipt is a verdict, not a failure — don't leave it queued.
@@ -409,10 +601,15 @@ export async function processCapture(
     metrics.total_to_response_ms = Date.now() - captureStartedAt;
     logLatency('extract_response_received', { receiptId: ack.receiptId, merchant: fields.store, total: fields.total });
     await store.markDispatched(row.id, ack.receiptId, fields);
+    await store.setDedupeSignals(
+      row.id,
+      store.buildDedupeKey(fields, options?.userId),
+      store.buildOcrFingerprint(localOcrText),
+    );
     if (extractionMode === 'balanced' && localOcrText) {
       await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
       logLatency('ui_ready_image_backup_queued', { receiptId: ack.receiptId });
-      void durableImagePromise.then(async () => {
+      void durableImagePromise?.then(async () => {
         void syncImageBackups();
       });
     } else {
@@ -428,7 +625,9 @@ export async function processCapture(
         fields,
         receiptId: ack.receiptId,
         status: 'extracted',
-        localOcrText,
+        localOcrText: null,
+        dedupeKey: store.buildDedupeKey(fields, options?.userId),
+        ocrFingerprint: store.buildOcrFingerprint(localOcrText),
         imageSyncStatus: extractionMode === 'balanced' && localOcrText ? 'pending_upload' : 'uploaded',
         imageUri: durableImageUri,
       },
@@ -459,9 +658,11 @@ export async function processCapture(
 }
 
 /** Swipe-up (or One-click's auto-confirm). Optimistic: local write, then sync. */
-export async function confirm(id: string, fields: ReceiptFields): Promise<void> {
+export async function confirm(id: string, fields: ReceiptFields, userId?: string | null): Promise<void> {
+  const row = await store.getById(id);
   await store.setSyncStatus(id, { resultSyncStatus: 'pending_sync' });
   await store.setFields(id, fields, 'confirmed_local');
+  await store.setDedupeSignals(id, store.buildDedupeKey(fields, userId), row?.ocrFingerprint ?? null);
   void syncConfirmed();
 }
 
