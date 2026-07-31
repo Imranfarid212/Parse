@@ -45,4 +45,19 @@ if (/EXPO_PUBLIC_.*XAI|EXPO_PUBLIC_.*GROK|sk-[A-Za-z0-9]/.test(client + capture 
   fail('provider secret must not be exposed to the app bundle or hardcoded');
 }
 
+// Client-side quota gate: stops an out-of-scans user at the shutter, before the
+// photo, the upload and the model. Advisory only — the server still enforces.
+const quota = read('src/lib/receipts/quota.ts');
+const camera = read('src/app/camera.tsx');
+
+includes(quota, "from '@/../packages/contracts/src/quota'", 'client uses the shared quota rule');
+includes(quota, 'decideQuota(', 'client decides with the shared rule');
+if (/PLUS_MONTHLY_CAP\s*=|rf_plus_699_m'\s*;|=\s*500\b/.test(quota)) {
+  fail('client must not re-implement the quota arithmetic; import it from contracts');
+}
+includes(quota, 'export async function checkQuotaGate', 'shutter gate helper');
+includes(quota, 'export async function applyServerQuota', 'server balance refreshes the cache');
+includes(camera, 'await passesQuotaGate()', 'capture paths run the gate');
+includes(capture, 'applyServerQuota(options?.userId', 'extract responses refresh the cached balance');
+
 console.log('[b4:app] rejected/non-receipt UX and secret-boundary checks passed');

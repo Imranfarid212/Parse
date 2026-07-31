@@ -44,6 +44,8 @@ export type ExtractCompletedAck = {
   response: ExtractResponse;
   attempts?: CaptureAttemptTrace[];
   duplicateCandidate?: DuplicateCandidate | null;
+  /** Server's post-debit balance; null means unlimited, undefined means not reported. */
+  scansRemaining?: number | null;
 };
 
 export type ExtractVisibleDeadlineAck = {
@@ -112,6 +114,7 @@ type ExtractFunctionPayload = {
   receipt_id: string;
   rejected?: boolean;
   duplicate?: boolean;
+  scans_remaining?: number | null;
   duplicate_candidate?: {
     matched_receipt_id?: string;
     match_rule?: string;
@@ -265,6 +268,14 @@ export function getCaptureAttempts(error: unknown): CaptureAttemptTrace[] {
   return [];
 }
 
+/** Pulls the server's error code (e.g. QUOTA_EXHAUSTED) off a rejected extract(). */
+export function getExtractErrorCode(error: unknown): string | null {
+  if (error instanceof Error && typeof (error as Error & { code?: unknown }).code === 'string') {
+    return (error as Error & { code: string }).code;
+  }
+  return null;
+}
+
 function errorWithAttempts(message: string, attempts: CaptureAttemptTrace[]) {
   const error = new Error(message) as Error & { captureAttempts: CaptureAttemptTrace[] };
   error.captureAttempts = attempts;
@@ -284,13 +295,24 @@ function extractPayloadToAck(data: ExtractFunctionPayload, attempts?: CaptureAtt
       }
     : null;
   if (data.status === 202) throw errorWithAttempts(data.code ?? 'PROVIDER_DELAY', attempts ?? []);
-  if (data.rejected || data.result?.is_receipt === false) return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, attempts };
-  if (data.duplicate) return { receiptId: data.receipt_id, response: { error: 'duplicate_receipt' }, attempts, duplicateCandidate };
+  if (data.rejected || data.result?.is_receipt === false) {
+    return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, attempts, scansRemaining: data.scans_remaining };
+  }
+  if (data.duplicate) {
+    return {
+      receiptId: data.receipt_id,
+      response: { error: 'duplicate_receipt' },
+      attempts,
+      duplicateCandidate,
+      scansRemaining: data.scans_remaining,
+    };
+  }
 
   return {
     receiptId: data.receipt_id,
     attempts,
     duplicateCandidate,
+    scansRemaining: data.scans_remaining,
     response: {
       date: data.result?.txn_date ?? '',
       store: data.result?.merchant ?? '',
@@ -600,8 +622,9 @@ export const supabaseExtractClient: ExtractClient = {
 
           const message = attemptData?.message ?? attemptData?.error ?? attemptData?.code ?? `extract failed (${attemptResponse.status})`;
           trace.error_message = message;
-          const error = errorWithAttempts(message, attempts) as Error & { statusCode?: number };
+          const error = errorWithAttempts(message, attempts) as Error & { statusCode?: number; code?: string };
           error.statusCode = attemptResponse.status;
+          error.code = attemptData?.code;
           if (!isRetryableBalancedStatus(attemptResponse.status)) {
             terminalHttpError = error;
           }
@@ -751,7 +774,13 @@ export const supabaseExtractClient: ExtractClient = {
             previewLength: data.model_preview_length,
           });
         }
-        throw new Error(data?.message ?? data?.error ?? data?.code ?? `extract failed (${response.status})`);
+        const error = new Error(data?.message ?? data?.error ?? data?.code ?? `extract failed (${response.status})`) as Error & {
+          statusCode?: number;
+          code?: string;
+        };
+        error.statusCode = response.status;
+        error.code = data?.code;
+        throw error;
       }
       if (!data) throw new Error('extract returned no data');
       const requestMs = Date.now() - requestStartedAt;
@@ -769,14 +798,15 @@ export const supabaseExtractClient: ExtractClient = {
       }
       if (data.status === 202) throw new Error(data.code ?? 'PROVIDER_DELAY');
       if (data.rejected || data.result?.is_receipt === false) {
-        return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' } };
+        return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, scansRemaining: data.scans_remaining };
       }
       if (data.duplicate) {
-        return { receiptId: data.receipt_id, response: { error: 'duplicate_receipt' } };
+        return { receiptId: data.receipt_id, response: { error: 'duplicate_receipt' }, scansRemaining: data.scans_remaining };
       }
 
       return {
         receiptId: data.receipt_id,
+        scansRemaining: data.scans_remaining,
         response: {
           date: data.result?.txn_date ?? '',
           store: data.result?.merchant ?? '',

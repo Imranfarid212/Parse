@@ -30,6 +30,7 @@ import { TapToFocusLayer, useFocusReticle } from '@/components/camera/TapToFocus
 import { TrackingDebug, TrackingQuad, useDocumentTracking } from '@/components/camera/TrackingQuad';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { TOAST_REFERRAL_PROMPT, useAuth } from '@/lib/auth/auth-context';
+import { COPY_QUOTA_EXHAUSTED_BODY, COPY_QUOTA_EXHAUSTED_TITLE } from '@/../packages/contracts/src/copy';
 import { markReferralPromptSeen, shouldShowReferralPrompt } from '@/lib/auth/referralPrompt';
 import {
   confirm,
@@ -43,6 +44,7 @@ import {
   type PrecisePreflightWarning,
 } from '@/lib/receipts/capture';
 import { extractClient } from '@/lib/receipts/client';
+import { checkQuotaGate, refreshQuota } from '@/lib/receipts/quota';
 import * as store from '@/lib/receipts/store';
 import type { CaptureMode, DuplicateCandidate, ExtractionMode, LocalDuplicateCandidate, ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
@@ -50,6 +52,8 @@ import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
 
 type Mode = 'default' | 'oneclick';
 const PRECISE_SCREEN_VISIBLE_DEADLINE_MS = 4500;
+/** MenuPanel's TABS order: Export, Search, Plan, Settings. */
+const PLAN_TAB_INDEX = 2;
 
 function waitForVisibleDeadline(ms: number): Promise<'visible_deadline'> {
   return new Promise((resolve) => {
@@ -61,10 +65,12 @@ function waitForVisibleDeadline(ms: number): Promise<'visible_deadline'> {
  * Post-shutter phases.
  *  idle       — live camera
  *  review     — Default: frozen frame + card (loading → fields)
+ *  working    — Precise: the server has been asked, nothing claimed yet
  *  processing — /extract never landed; the image is queued and will retry
  */
 type Phase =
   | { k: 'idle' }
+  | { k: 'working' }
   | {
       k: 'review';
       photoUri: string;
@@ -232,20 +238,31 @@ export default function CameraScreen() {
     extractClient.warmUpPrecise?.();
   }, [appActive, auth.session, extractionMode, isFocused]);
 
+  // Keep the cached balance honest: on landing, and whenever the app comes back
+  // (another device may have scanned, or a plan may have changed).
+  useEffect(() => {
+    const userId = auth.user?.id;
+    if (!userId || !isFocused || !appActive) return;
+    void refreshQuota(userId);
+  }, [appActive, auth.user?.id, isFocused]);
+
   useEffect(() => {
     if (auth.loading) return;
-    if (!auth.session) {
+    if (!auth.authenticated) {
       router.replace('/');
       return;
     }
     if (auth.profile && !auth.profile.onboarding_complete) router.replace('/onboarding' as Href);
-  }, [auth.loading, auth.profile, auth.session, router]);
+  }, [auth.authenticated, auth.loading, auth.profile, router]);
 
-  const openMenu = (initialTab = 0) => {
-    setMenuInitialTab(initialTab);
-    setMenuOpen(true);
-    menuProgress.value = withTiming(1, { duration: 620, easing: EMPHASIZED_SETTLE });
-  };
+  const openMenu = useCallback(
+    (initialTab = 0) => {
+      setMenuInitialTab(initialTab);
+      setMenuOpen(true);
+      menuProgress.value = withTiming(1, { duration: 620, easing: EMPHASIZED_SETTLE });
+    },
+    [menuProgress],
+  );
   const openRecents = () => openMenu(1);
   const closeMenu = () => {
     menuProgress.value = withTiming(0, { duration: 560, easing: EMPHASIZED_SETTLE }, (f) => {
@@ -301,6 +318,18 @@ export default function CameraScreen() {
     }, 1800);
   }, []);
 
+  /**
+   * Precise, post-preflight: an honest "still working" state. It claims nothing
+   * — the server has not answered yet, and it may still come back with a
+   * rejection, a duplicate, or no scans left.
+   */
+  const showPreciseWorking = useCallback(() => setPhase({ k: 'working' }), []);
+
+  /**
+   * Only once the visible deadline passes without an answer do we promise the
+   * background workflow. Announcing it at preflight (before the server had said
+   * anything) is what stacked this on top of "Out of scans" / "not a receipt".
+   */
   const showPreciseProcessingAlert = useCallback(() => {
     setPhase({ k: 'idle' });
     Alert.alert(
@@ -368,6 +397,35 @@ export default function CameraScreen() {
       }),
     [showExistingLocalReceipt],
   );
+
+  /**
+   * Out of scans. A blocking alert rather than a toast: this is a dead end the
+   * user has to act on, not a status update they can miss. "Upgrade" opens the
+   * Plan tab — note its Subscribe button is still a shell until billing lands.
+   */
+  const showQuotaExhaustedAlert = useCallback(() => {
+    Alert.alert(
+      COPY_QUOTA_EXHAUSTED_TITLE,
+      COPY_QUOTA_EXHAUSTED_BODY,
+      [
+        { text: 'OK', style: 'cancel' },
+        { text: 'Upgrade', onPress: () => openMenu(PLAN_TAB_INDEX) },
+      ],
+      { cancelable: true },
+    );
+  }, [openMenu]);
+
+  /**
+   * The shutter gate. Answers from the local cache, so an out-of-scans user is
+   * stopped before the photo, the upload and the model — not after. The server
+   * still enforces; this only avoids wasting the user's time and our tokens.
+   */
+  const passesQuotaGate = useCallback(async () => {
+    const gate = await checkQuotaGate(auth.user?.id);
+    if (gate.canScan) return true;
+    showQuotaExhaustedAlert();
+    return false;
+  }, [auth.user?.id, showQuotaExhaustedAlert]);
 
   const promptPrecisePreflightWarning = useCallback(
     (warning: PrecisePreflightWarning) =>
@@ -437,7 +495,9 @@ export default function CameraScreen() {
     (out: CaptureOutcome, photoUri: string, startedAt: number) => {
       if (out.kind === 'extracted') {
         if (out.row.extractionMode === 'precise') {
-          setPhase((prev) => (prev.k === 'review' || prev.k === 'processing' ? { k: 'idle' } : prev));
+          setPhase((prev) =>
+            prev.k === 'review' || prev.k === 'processing' || prev.k === 'working' ? { k: 'idle' } : prev,
+          );
           flashNotice('Receipt saved to Recents');
           return;
         }
@@ -461,8 +521,14 @@ export default function CameraScreen() {
         // The prompt already opened the existing local receipt.
       } else if (out.kind === 'preflight_rejected') {
         setPhase({ k: 'idle' });
+      } else if (out.kind === 'quota_exhausted') {
+        setPhase({ k: 'idle' });
+        showQuotaExhaustedAlert();
       } else {
+        // Precise clears the working overlay instead: its "still going" message
+        // belongs to the visible deadline, not to every queued outcome.
         if (out.row.extractionMode !== 'precise') showProcessing(out.reason);
+        else setPhase((prev) => (prev.k === 'working' ? { k: 'idle' } : prev));
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
             if (__DEV__) console.log('[camera] queued deferred outcome ready', { kind: finalOut.kind });
@@ -471,7 +537,7 @@ export default function CameraScreen() {
         }
       }
     },
-    [flashNotice, showDuplicateCandidatePrompt, showProcessing],
+    [flashNotice, showDuplicateCandidatePrompt, showProcessing, showQuotaExhaustedAlert],
   );
 
   const handleOneClickCaptureOutcome = useCallback(
@@ -502,6 +568,9 @@ export default function CameraScreen() {
         // The prompt already opened the existing local receipt.
       } else if (out.kind === 'preflight_rejected') {
         setPhase({ k: 'idle' });
+      } else if (out.kind === 'quota_exhausted') {
+        setPhase({ k: 'idle' });
+        showQuotaExhaustedAlert();
       } else {
         if (out.row.extractionMode !== 'precise') {
           showProcessing(out.reason);
@@ -516,11 +585,14 @@ export default function CameraScreen() {
         }
       }
     },
-    [auth.user?.id, flashNotice, popFolder, showDuplicateCandidatePrompt, showProcessing],
+    [auth.user?.id, flashNotice, popFolder, showDuplicateCandidatePrompt, showProcessing, showQuotaExhaustedAlert],
   );
 
   const onCapture = async () => {
     if (!cameraRef.current || busy) return;
+    // Before the shutter fires: no photo, no upload, no model call when the
+    // account is already out of scans.
+    if (!(await passesQuotaGate())) return;
     const startedAt = Date.now(); // the shutter moment — see Phase.startedAt
     try {
       setBusy(true);
@@ -558,7 +630,7 @@ export default function CameraScreen() {
           },
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, photo.uri, startedAt),
           onPrecisePreflightWarning: promptPrecisePreflightWarning,
-          onPrecisePreflightAccepted: showPreciseProcessingAlert,
+          onPrecisePreflightAccepted: showPreciseWorking,
         });
         const out =
           extractionMode === 'precise'
@@ -571,7 +643,7 @@ export default function CameraScreen() {
               visibleDeadlineMs: PRECISE_SCREEN_VISIBLE_DEADLINE_MS,
             });
           }
-          setPhase({ k: 'idle' });
+          showPreciseProcessingAlert();
           void outPromise
             .then((lateOut) => {
               if (__DEV__) console.log('[camera] precise background capture completed', { kind: lateOut.kind });
@@ -598,7 +670,7 @@ export default function CameraScreen() {
           signal: ac.signal,
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, photo.uri, startedAt),
           onPrecisePreflightWarning: promptPrecisePreflightWarning,
-          onPrecisePreflightAccepted: showPreciseProcessingAlert,
+          onPrecisePreflightAccepted: showPreciseWorking,
         });
         const out =
           extractionMode === 'precise'
@@ -606,7 +678,7 @@ export default function CameraScreen() {
             : await outPromise;
 
         if (out === 'visible_deadline') {
-          setPhase({ k: 'idle' });
+          showPreciseProcessingAlert();
           void outPromise
             .then((lateOut) => handleOneClickCaptureOutcome(lateOut, photo.uri, startedAt))
             .catch((error) => {
@@ -618,6 +690,8 @@ export default function CameraScreen() {
       }
     } catch (e) {
       console.warn('[capture] failed', e);
+      // An unexpected throw must not strand the working overlay over a live camera.
+      setPhase((prev) => (prev.k === 'working' ? { k: 'idle' } : prev));
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -626,6 +700,9 @@ export default function CameraScreen() {
   };
 
   const onPickFromGallery = async () => {
+    // Gated before the picker opens, so the user is not asked to choose a photo
+    // that cannot be scanned.
+    if (!(await passesQuotaGate())) return;
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
       flashNotice('Photo library access is needed to choose a receipt');
@@ -660,7 +737,7 @@ export default function CameraScreen() {
           },
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
           onPrecisePreflightWarning: promptPrecisePreflightWarning,
-          onPrecisePreflightAccepted: showPreciseProcessingAlert,
+          onPrecisePreflightAccepted: showPreciseWorking,
         });
         handleDefaultCaptureOutcome(out, uri, startedAt);
       } else {
@@ -670,7 +747,7 @@ export default function CameraScreen() {
           signal: ac.signal,
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
           onPrecisePreflightWarning: promptPrecisePreflightWarning,
-          onPrecisePreflightAccepted: showPreciseProcessingAlert,
+          onPrecisePreflightAccepted: showPreciseWorking,
         });
         const out =
           extractionMode === 'precise'
@@ -678,7 +755,7 @@ export default function CameraScreen() {
             : await outPromise;
 
         if (out === 'visible_deadline') {
-          setPhase({ k: 'idle' });
+          showPreciseProcessingAlert();
           void outPromise
             .then((lateOut) => handleOneClickCaptureOutcome(lateOut, uri, startedAt))
             .catch((error) => {
@@ -689,6 +766,8 @@ export default function CameraScreen() {
         handleOneClickCaptureOutcome(out, uri, startedAt);
       }
     } finally {
+      // Same guard as onCapture: never leave the working overlay up.
+      setPhase((prev) => (prev.k === 'working' ? { k: 'idle' } : prev));
       busyRef.current = false;
       setBusy(false);
       setTimeout(flushBackgroundQueues, 600);
@@ -911,6 +990,13 @@ export default function CameraScreen() {
           onRetake={onRetake}
           onFieldsChange={onFieldsChange}
         />
+      )}
+
+      {phase.k === 'working' && (
+        <View style={styles.processing}>
+          <ActivityIndicator color="#fff" />
+          <Text style={styles.processingText}>Reading receipt…</Text>
+        </View>
       )}
 
       {phase.k === 'processing' && (

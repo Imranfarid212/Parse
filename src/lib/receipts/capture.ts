@@ -15,6 +15,7 @@ import {
   confirmReceiptClient,
   extractClient,
   getCaptureAttempts,
+  getExtractErrorCode,
   imageBackupClient,
   toReceiptFields,
   type CaptureMetricsPayload,
@@ -22,6 +23,7 @@ import {
   type ExtractAck,
   type ExtractVisibleDeadlineAck,
 } from '@/lib/receipts/client';
+import { applyServerQuota } from '@/lib/receipts/quota';
 import * as store from '@/lib/receipts/store';
 import {
   isDuplicateReceipt,
@@ -264,6 +266,8 @@ export type CaptureOutcome =
   | { kind: 'local_duplicate'; candidate: LocalDuplicateCandidate }
   /** Precise preflight was rejected by the user before backend/model work. */
   | { kind: 'preflight_rejected' }
+  /** No free scans left. Retrying can't fix this, so it's terminal, not queued. */
+  | { kind: 'quota_exhausted'; row: ReceiptRow }
   /** Anything else. The row stays `pending_extract` and the queue retries it. */
   | { kind: 'queued'; row: ReceiptRow; reason?: string; attempts?: CaptureAttemptTrace[]; deferred?: Promise<CaptureOutcome> };
 
@@ -506,6 +510,9 @@ export async function processCapture(
         });
     }
     const ack = await ackPromise;
+    // Every completed call carries the server's own balance — cheaper and more
+    // accurate than a separate refresh.
+    if (!isVisibleDeadlineAck(ack)) void applyServerQuota(options?.userId, ack.scansRemaining);
     if (isVisibleDeadlineAck(ack)) {
       metrics.backend_extract_ms = Date.now() - extractStartedAt;
       metrics.total_to_response_ms = Date.now() - captureStartedAt;
@@ -523,6 +530,7 @@ export async function processCapture(
       const deferred = ack.deferred
         .then(async (lateAck): Promise<CaptureOutcome> => {
           if (isVisibleDeadlineAck(lateAck)) return { kind: 'queued', row, attempts: lateAck.attempts };
+          void applyServerQuota(options?.userId, lateAck.scansRemaining);
           if (isNotAReceipt(lateAck.response)) {
             await store.remove(row.id);
             await deleteLocalFile(durableImageUri);
@@ -576,7 +584,13 @@ export async function processCapture(
             duplicateCandidate: lateAck.duplicateCandidate,
           };
         })
-        .catch((error) => {
+        .catch(async (error): Promise<CaptureOutcome> => {
+          if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
+            await store.remove(row.id);
+            await deleteLocalFile(durableImageUri);
+            void durableImagePromise?.then(deleteLocalFile);
+            return { kind: 'quota_exhausted', row };
+          }
           if (__DEV__) console.warn('[capture] visible-deadline request stayed queued', describeError(error));
           return { kind: 'queued' as const, row, reason: __DEV__ ? describeError(error) : undefined, attempts: ack.attempts };
         });
@@ -649,6 +663,15 @@ export async function processCapture(
       metrics: { ...metrics, total_to_ui_ms: metrics.total_to_response_ms },
       attempts,
     });
+    if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
+      // Retrying can't fix "out of scans" — treat it as a verdict, not a transient
+      // failure, so it never enters the backoff/retry queue.
+      logLatency('extract_quota_exhausted', {});
+      await store.remove(row.id);
+      await deleteLocalFile(durableImageUri);
+      void durableImagePromise?.then(deleteLocalFile);
+      return { kind: 'quota_exhausted', row };
+    }
     logLatency('extract_failed_queued', { reason });
     if (__DEV__) console.warn('[capture] extract queued', reason);
     await store.setStatus(row.id, 'llm_failed_retryable');
@@ -805,6 +828,40 @@ export async function retryPending(): Promise<number> {
   return dispatchInFlight;
 }
 
+/**
+ * Applies a queued row's result when it lands after the visible deadline. Same
+ * terminal outcomes as the inline path — the only difference is that no screen
+ * is watching, so there is nothing to tell the user.
+ */
+async function applyDeferredDispatch(row: ReceiptRow, deferred: Promise<ExtractAck>): Promise<void> {
+  try {
+    const ack = await deferred;
+    if (isVisibleDeadlineAck(ack)) return;
+    void applyServerQuota(null, ack.scansRemaining);
+    if (isNotAReceipt(ack.response) || isDuplicateReceipt(ack.response)) {
+      await store.remove(row.id);
+      await deleteLocalFile(row.imageUri);
+      return;
+    }
+    await store.markDispatched(row.id, ack.receiptId, toReceiptFields(ack.response));
+    if (row.extractionMode === 'balanced' && row.localOcrText) {
+      await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
+      void syncImageBackups();
+    } else {
+      await store.setSyncStatus(row.id, { imageSyncStatus: 'uploaded' });
+      await deleteLocalFile(row.imageUri);
+    }
+  } catch (error) {
+    if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
+      await store.remove(row.id);
+      await deleteLocalFile(row.imageUri);
+      return;
+    }
+    // Anything else stays queued; the row is already scheduled for another try.
+    if (__DEV__) console.warn('[capture] deferred retry stayed queued', describeError(error));
+  }
+}
+
 async function dispatchPending(): Promise<number> {
   const pending = await store.listPendingExtract();
   let recovered = 0;
@@ -821,6 +878,10 @@ async function dispatchPending(): Promise<number> {
       });
       if (isVisibleDeadlineAck(ack)) {
         await store.markRetry(row.id, row.attempts + 1, Date.now() + VISIBLE_DEADLINE_RETRY_DELAY_MS);
+        // The request is still running. Dropping it here is how a row gets
+        // stranded as "Processing receipt" while the server has actually
+        // finished — or has rejected it outright.
+        void applyDeferredDispatch(row, ack.deferred);
         continue;
       }
       if (isNotAReceipt(ack.response)) {
@@ -843,6 +904,13 @@ async function dispatchPending(): Promise<number> {
       }
       recovered += 1;
     } catch (error) {
+      if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
+        // No live screen to toast into here — this is a background reconnect
+        // retry — but retrying a quota rejection is still pointless.
+        await store.remove(row.id);
+        await deleteLocalFile(row.imageUri);
+        continue;
+      }
       if (__DEV__) console.warn('[capture] retry queued', describeError(error));
       const attempts = row.attempts + 1;
       if (attempts >= MAX_EXTRACT_ATTEMPTS) {

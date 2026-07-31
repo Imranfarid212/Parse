@@ -62,6 +62,23 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_receipt_metric_queue_retry ON receipt_metric_queue (next_retry_at, created_at);
+    CREATE TABLE IF NOT EXISTS quota_cache (
+      user_id    TEXT PRIMARY KEY NOT NULL,
+      remaining  INTEGER,
+      paywall    TEXT NOT NULL DEFAULT 'plus',
+      fetched_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS auth_cache (
+      id            INTEGER PRIMARY KEY CHECK (id = 1),
+      user_id       TEXT NOT NULL,
+      user_json     TEXT,
+      profile_json  TEXT,
+      categories_json TEXT NOT NULL DEFAULT '[]',
+      selected_category_ids_json TEXT NOT NULL DEFAULT '[]',
+      fetched_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL
+    );
   `);
   await ensureColumn(db, 'capture_mode', "ALTER TABLE receipts ADD COLUMN capture_mode TEXT NOT NULL DEFAULT 'default'");
   await ensureColumn(db, 'extraction_mode', "ALTER TABLE receipts ADD COLUMN extraction_mode TEXT NOT NULL DEFAULT 'balanced'");
@@ -530,6 +547,51 @@ export async function countPending(): Promise<number> {
     "SELECT COUNT(*) AS n FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'image_upload_pending', 'confirmed_local', 'result_sync_pending')",
   );
   return r?.n ?? 0;
+}
+
+/**
+ * The locally cached scan balance. Plain SQLite, deliberately not secure
+ * storage: this is not a secret and not the authority — the server re-checks
+ * every scan, so a tampered value buys nothing but a camera that opens onto a
+ * 402. `remaining: null` means unlimited.
+ */
+export type CachedQuota = { remaining: number | null; paywall: 'plus' | 'unlimited'; fetchedAt: number };
+
+export async function getCachedQuota(userId: string): Promise<CachedQuota | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ remaining: number | null; paywall: string; fetched_at: number }>(
+    'SELECT remaining, paywall, fetched_at FROM quota_cache WHERE user_id = ?',
+    [userId],
+  );
+  if (!row) return null;
+  return {
+    remaining: row.remaining == null ? null : Number(row.remaining),
+    paywall: row.paywall === 'unlimited' ? 'unlimited' : 'plus',
+    fetchedAt: row.fetched_at,
+  };
+}
+
+export async function setCachedQuota(
+  userId: string,
+  quota: { remaining: number | null; paywall: 'plus' | 'unlimited' },
+): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO quota_cache (user_id, remaining, paywall, fetched_at, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET remaining = excluded.remaining, paywall = excluded.paywall,
+       fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
+    [userId, quota.remaining, quota.paywall, now, now],
+  );
+}
+
+/** Optimistic decrement after a scan is accepted, so the next tap gates without a round trip. */
+export async function decrementCachedQuota(userId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE quota_cache SET remaining = MAX(0, remaining - 1), updated_at = ? WHERE user_id = ? AND remaining IS NOT NULL',
+    [Date.now(), userId],
+  );
 }
 
 export async function enqueueCaptureMetric(payload: CaptureMetricsPayload): Promise<void> {

@@ -3,5 +3,6 @@ export * from './db.types';
 export * from './enums';
 export * from './errors';
 export * from './fixtures';
+export * from './quota';
 export * from './schemas';
 export * from './types';

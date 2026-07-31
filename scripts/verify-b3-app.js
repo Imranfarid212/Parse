@@ -27,7 +27,11 @@ const camera = read('src/app/camera.tsx');
 const types = read('src/lib/receipts/types.ts');
 const client = read('src/lib/receipts/client.ts');
 
-includes(capture, 'const TARGET_LONG_EDGE = 1024', 'T3.1 long-edge target');
+// T3.1 specifies a ceiling (≤1080 px), not one exact value — B4 tuned this down
+// to 640 for latency, which the old equality check read as a regression.
+const longEdge = Number(capture.match(/const TARGET_LONG_EDGE = (\d+)/)?.[1]);
+if (!Number.isFinite(longEdge)) fail('T3.1 long-edge target: TARGET_LONG_EDGE not found');
+if (longEdge > 1080) fail(`T3.1 long-edge target: ${longEdge}px exceeds the 1080px ceiling`);
 includes(capture, 'SaveFormat.JPEG', 'T3.1 JPEG output');
 includes(capture, 'compress: JPEG_QUALITY', 'T3.1 JPEG quality');
 includes(capture, 'detectAndCorrect(photoUri)', 'T3.1 EXIF/document correction path');
@@ -43,8 +47,9 @@ includes(store, 'acked_at INTEGER', 'T3.5 ack timestamp column');
 includes(store, 'newCaptureId', 'T3.2 unique capture ids');
 
 includes(camera, "processCapture(photo.uri, toCaptureMode(mode)", 'T3.2 camera captures enqueue selected mode');
-includes(camera, "processCapture(uri, 'default')", 'T3.2 gallery default mode');
-includes(camera, "processCapture(uri, 'one_click')", 'T3.2 gallery one-click mode');
+// Trailing paren dropped: B4 added the extraction-mode argument to these calls.
+includes(camera, "processCapture(uri, 'default'", 'T3.2 gallery default mode');
+includes(camera, "processCapture(uri, 'one_click'", 'T3.2 gallery one-click mode');
 includes(camera, 'Network.addNetworkStateListener', 'T3.3 reconnect listener');
 includes(camera, 'void retryPending();', 'T3.3 retry on mount/reconnect');
 

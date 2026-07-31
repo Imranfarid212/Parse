@@ -1,0 +1,34 @@
+{
+  "phase": "b4",
+  "status": "passed_local_backend",
+  "note": "Local B4 Grok fast-path source checks passed with dummy provider config. Official evidence still requires live Grok golden/latency and device mode runs.",
+  "duration_ms": 9446,
+  "commit_sha": "4b8be293c43cb2f00d5d5bba7fc5645223cef13a",
+  "tests": [
+    {
+      "id": "T4.1-validate-repair-reject-misc",
+      "status": "passed",
+      "duration_ms": 189
+    },
+    {
+      "id": "T4.2-golden-latency-source-readiness",
+      "status": "passed",
+      "duration_ms": 4581
+    },
+    {
+      "id": "T4.3-quota-idempotency",
+      "status": "passed",
+      "duration_ms": 195
+    },
+    {
+      "id": "T4.4-ack-gate-server",
+      "status": "passed",
+      "duration_ms": 188
+    },
+    {
+      "id": "T4.5-mode-e2e-source-readiness",
+      "status": "passed",
+      "duration_ms": 4293
+    }
+  ]
+}

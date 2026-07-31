@@ -1,6 +1,8 @@
 // @ts-nocheck - Supabase Edge Functions run under Deno, outside the Expo app tsconfig.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
+import { evaluateQuota } from '../_shared/quota.ts';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers':
@@ -1092,19 +1094,18 @@ async function handleExtract(req: Request) {
     });
 
   const quotaStartedAt = performance.now();
-  const subscriptionsPromise = userSupabase
-    .from('subscriptions')
-    .select('product_id, status, current_period_start')
-    .eq('user_id', userId)
-    .in('status', ['active', 'grace'])
-    .order('current_period_start', { ascending: false })
-    .limit(1);
+  // Shared with extract-balanced so the two modes can never enforce different
+  // limits — see functions/_shared/quota.ts.
+  const quotaPromise = evaluateQuota(userSupabase, userId).then((verdict) => {
+    timing.quota_ms = Math.round(performance.now() - quotaStartedAt);
+    return verdict;
+  });
 
   const [
     { data: profile, error: profileError },
     { data: selectedCategories, error: categoriesError },
-    { data: subscriptions, error: subscriptionError },
-  ] = await Promise.all([profilePromise, categoriesPromise, subscriptionsPromise]);
+    quota,
+  ] = await Promise.all([profilePromise, categoriesPromise, quotaPromise]);
 
   if (profileError) return json(500, { code: 'VALIDATION_FAILED', message: profileError.message });
   const defaultCurrency = profile.default_currency ?? 'USD';
@@ -1114,29 +1115,7 @@ async function handleExtract(req: Request) {
   const categories = Array.from(new Set([...categoryRows.map((row) => row.name), 'Miscellaneous']));
   const categoryByName = new Map(categoryRows.map((row) => [row.name, row.id]));
 
-  if (subscriptionError) return json(500, { code: 'VALIDATION_FAILED', message: subscriptionError.message });
-
-  const subscription = subscriptions?.[0];
-  const hasUnlimited = subscription?.product_id === 'rf_unlimited_1199_m';
-  const plusStart = subscription?.product_id === 'rf_plus_699_m' ? subscription.current_period_start : null;
-  let canScan = Boolean(hasUnlimited);
-  if (!canScan && plusStart) {
-    const { count, error } = await userSupabase
-      .from('scan_ledger')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .eq('reason', 'scan_used')
-      .gte('created_at', plusStart);
-    if (error) return json(500, { code: 'VALIDATION_FAILED', message: error.message });
-    canScan = (count ?? 0) < 500;
-  }
-  if (!canScan && !plusStart) {
-    const { data: ledger, error } = await userSupabase.from('scan_ledger').select('delta').eq('user_id', userId);
-    if (error) return json(500, { code: 'VALIDATION_FAILED', message: error.message });
-    canScan = (ledger ?? []).reduce((sum, row) => sum + Number(row.delta || 0), 0) > 0;
-  }
-  timing.quota_ms = Math.round(performance.now() - quotaStartedAt);
-  if (!canScan) return json(402, { status: 402, code: 'QUOTA_EXHAUSTED', paywall: 'plus' });
+  if (!quota.canScan) return json(402, { status: 402, code: 'QUOTA_EXHAUSTED', paywall: quota.paywall });
 
   if (req.headers.get('x-rf-force-storage-failure') === '1') {
     return json(503, { code: 'VALIDATION_FAILED', message: 'Forced Storage failure' });
@@ -1324,6 +1303,9 @@ async function handleExtract(req: Request) {
     receipt_id: receipt.id,
     image_path: imagePath,
     acked_at: ackedAt,
+    // Refreshes the client's cached balance off a call it already made. The
+    // verdict predates this scan's debit, so account for it here.
+    scans_remaining: quota.remaining == null ? null : Math.max(0, quota.remaining - 1),
     timing,
     result: extraction,
   });

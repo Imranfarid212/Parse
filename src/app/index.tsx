@@ -33,9 +33,9 @@ export default function LandingScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (auth.loading || !auth.session || !auth.profile) return;
+      if (auth.loading || !auth.authenticated || !auth.profile) return;
       router.replace((auth.profile.onboarding_complete ? '/camera' : '/welcome') as Href);
-    }, [auth.loading, auth.profile, auth.session, router]),
+    }, [auth.authenticated, auth.loading, auth.profile, router]),
   );
 
   // Opacity-only entrance (no transform) so the text bounds we measure stay accurate.
@@ -63,7 +63,7 @@ export default function LandingScreen() {
     }
   };
 
-  if (auth.loading || auth.session) {
+  if (auth.loading || auth.authenticated) {
     return (
       <View style={styles.loadingGate}>
         <ActivityIndicator color={colors.accent} />

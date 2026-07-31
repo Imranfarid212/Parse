@@ -28,18 +28,21 @@ includes(fixtures, 'extractRequestFixture', 'extract request fixture');
 includes(fixtures, 'extractionResultFixture', 'fixture result');
 
 includes(fn, "Deno.serve", 'extract function server');
-includes(fn, 'supabase.auth.getUser()', 'JWT check');
-includes(fn, "form.get('capture_id')", 'capture_id form field');
-includes(fn, "form.get('mode')", 'mode form field');
-includes(fn, "form.get('captured_at')", 'captured_at form field');
-includes(fn, "form.get('image')", 'image form field');
+// Client variable name is not part of the contract — B4 renamed it to
+// `userSupabase`, which silently broke this check.
+includes(fn, '.auth.getUser()', 'JWT check');
+includes(fn, ".get('capture_id')", 'capture_id form field');
+includes(fn, ".get('mode')", 'mode form field');
+includes(fn, ".get('captured_at')", 'captured_at form field');
+includes(fn, ".get('image')", 'image form field');
 includes(fn, "x-rf-force-storage-failure", 'forced storage failure drill');
 includes(fn, "storage.from('receipts').upload", 'Storage write before ack');
 includes(fn, "imagePath = `${userId}/${captureId}.jpg`", 'owner-scoped storage path');
 includes(fn, ".from('receipts')", 'receipts upsert');
 includes(fn, "upsert(", 'idempotent duplicate capture upsert');
 includes(fn, "{ onConflict: 'capture_id' }", 'duplicate capture id conflict target');
-includes(fn, "status: 'needs_review'", 'fixture receipt state');
+// Was a flat fixture literal in the B3 stub; B4 made it the real mode split.
+includes(fn, "'needs_review'", 'default-mode captures land in needs_review');
 includes(fn, "return json(200", 'ack response after durable writes');
 
 const uploadIndex = fn.indexOf("storage.from('receipts').upload");
