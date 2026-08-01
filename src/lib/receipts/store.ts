@@ -69,6 +69,12 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       fetched_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS sync_state (
+      user_id     TEXT PRIMARY KEY NOT NULL,
+      hydrated_at INTEGER,
+      pull_cursor TEXT,
+      updated_at  INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS auth_cache (
       id            INTEGER PRIMARY KEY CHECK (id = 1),
       user_id       TEXT NOT NULL,
@@ -101,6 +107,9 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   await ensureColumn(db, 'next_retry_at', 'ALTER TABLE receipts ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0');
   await ensureColumn(db, 'receipt_id', 'ALTER TABLE receipts ADD COLUMN receipt_id TEXT');
   await ensureColumn(db, 'acked_at', 'ALTER TABLE receipts ADD COLUMN acked_at INTEGER');
+  // Where the image lives on the server. A row restored from the server has no
+  // local file, so this is the only way back to its photo.
+  await ensureColumn(db, 'remote_image_path', 'ALTER TABLE receipts ADD COLUMN remote_image_path TEXT');
   await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_dedupe ON receipts (dedupe_key, created_at DESC)');
   await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_duplicate_of ON receipts (duplicate_of, created_at DESC)');
   return db;
@@ -134,6 +143,7 @@ type Persisted = {
   next_retry_at: number;
   receipt_id: string | null;
   acked_at: number | null;
+  remote_image_path: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -170,6 +180,7 @@ const hydrate = (r: Persisted): ReceiptRow => ({
   nextRetryAt: r.next_retry_at,
   receiptId: r.receipt_id,
   ackedAt: r.acked_at,
+  remoteImagePath: r.remote_image_path ?? null,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -299,6 +310,7 @@ export async function insertCaptured(
     nextRetryAt: now,
     receiptId: null,
     ackedAt: null,
+    remoteImagePath: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -472,6 +484,85 @@ export async function getByReceiptId(receiptId: string): Promise<ReceiptRow | nu
   const db = await getDb();
   const r = await db.getFirstAsync<Persisted>('SELECT * FROM receipts WHERE receipt_id = ? ORDER BY created_at DESC LIMIT 1', [receiptId]);
   return r ? hydrate(r) : null;
+}
+
+/**
+ * Restore-from-server support.
+ *
+ * The app has no continuous pull — one device writes, the server records. What
+ * it does need is a way back after a reinstall, and this is the local half of
+ * that: a marker so the restore runs once, and an upsert keyed by the id the
+ * device minted in the first place (`receipts.capture_id` server-side), so a
+ * restored row lands under the key it had before.
+ *
+ * `pull_cursor` is unused today. It exists so that adding a delta pull later —
+ * if this ever becomes multi-device — needs no local migration.
+ */
+export type SyncState = { hydratedAt: number | null; pullCursor: string | null };
+
+export async function getSyncState(userId: string): Promise<SyncState | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ hydrated_at: number | null; pull_cursor: string | null }>(
+    'SELECT hydrated_at, pull_cursor FROM sync_state WHERE user_id = ?',
+    [userId],
+  );
+  if (!row) return null;
+  return { hydratedAt: row.hydrated_at, pullCursor: row.pull_cursor };
+}
+
+export async function setHydrated(userId: string, cursor: string | null): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO sync_state (user_id, hydrated_at, pull_cursor, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET hydrated_at = excluded.hydrated_at,
+       pull_cursor = excluded.pull_cursor, updated_at = excluded.updated_at`,
+    [userId, now, cursor, now],
+  );
+}
+
+export async function countReceipts(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM receipts');
+  return row?.n ?? 0;
+}
+
+export type RestoredReceipt = {
+  captureId: string;
+  receiptId: string;
+  status: ReceiptStatus;
+  fields: ReceiptFields;
+  remoteImagePath: string | null;
+  createdAt: number;
+};
+
+/**
+ * Write a receipt that came from the server. Idempotent on the capture id, and
+ * it never overwrites a row this device already has — anything local is either
+ * newer or still on its way up, and the whole point of the outbox is that
+ * un-acked local work wins.
+ */
+export async function upsertRestored(row: RestoredReceipt): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, status, fields,
+       image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at,
+       remote_image_path, created_at, updated_at)
+     VALUES (?, '', 'default', 'balanced', ?, ?, ?, 'synced', 0, 0, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO NOTHING`,
+    [
+      row.captureId,
+      row.status,
+      JSON.stringify(row.fields),
+      row.remoteImagePath ? 'uploaded' : 'missing_local_file',
+      row.receiptId,
+      now,
+      row.remoteImagePath,
+      row.createdAt,
+      now,
+    ],
+  );
 }
 
 /** Newest first — what the folder's carousel shows. */

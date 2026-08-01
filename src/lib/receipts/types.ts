@@ -132,6 +132,9 @@ export type ReceiptRow = {
   attempts: number;
   nextRetryAt: number;
   receiptId: string | null;
+  /** Storage path of the image on the server; the only route back to the
+   *  photo for a receipt restored onto a device that never took it. */
+  remoteImagePath: string | null;
   ackedAt: number | null;
   createdAt: number;
   updatedAt: number;

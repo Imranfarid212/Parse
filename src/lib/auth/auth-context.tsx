@@ -13,6 +13,7 @@ import { clearCachedAuth, getCachedAuth, setCachedAuth } from '@/lib/auth/sessio
 import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
 import type { Profile } from '@/lib/auth/types';
 import { withNetworkRetry } from '@/lib/network/retry';
+import { restoreIfNeeded } from '@/lib/receipts/restore';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -227,6 +228,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       if (__DEV__) console.warn('Writing the auth snapshot failed', error);
     }
+
+    // A device that has never seen this account's receipts pulls them once.
+    // It needs the category names this call just fetched, and it must not run
+    // before the session is established — hence here rather than at startup.
+    // Failure is swallowed: the app is fully usable without it and it retries
+    // on the next launch.
+    void restoreIfNeeded(currentSession.user.id, nextState.categoryRows)
+      .then((count) => {
+        if (count > 0 && __DEV__) console.log(`[restore] pulled ${count} receipt(s) from the server`);
+      })
+      .catch((error: unknown) => {
+        if (__DEV__) console.warn('[restore] failed; will retry next launch', error);
+      });
 
     return nextState.profileRow;
   }, [applySignedIn, applySignedOut]);
