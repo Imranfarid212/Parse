@@ -69,6 +69,11 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       fetched_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS local_owner (
+      id         INTEGER PRIMARY KEY CHECK (id = 1),
+      user_id    TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS sync_state (
       user_id     TEXT PRIMARY KEY NOT NULL,
       hydrated_at INTEGER,
@@ -498,6 +503,46 @@ export async function getByReceiptId(receiptId: string): Promise<ReceiptRow | nu
  * `pull_cursor` is unused today. It exists so that adding a delta pull later —
  * if this ever becomes multi-device — needs no local migration.
  */
+/**
+ * Which account the local receipts belong to.
+ *
+ * Rows in `receipts` carry no user id — the device has always assumed one
+ * account — so signing out and signing in as someone else showed the previous
+ * user's receipts. This is the marker that makes that detectable. It survives
+ * sign-out deliberately: the receipts do too, and a user signing back into
+ * their own account must not lose captures that never made it up.
+ */
+export async function getLocalOwner(): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ user_id: string }>('SELECT user_id FROM local_owner WHERE id = 1');
+  return row?.user_id ?? null;
+}
+
+export async function setLocalOwner(userId: string): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO local_owner (id, user_id, updated_at) VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at`,
+    [userId, now],
+  );
+}
+
+/** Every local image path, so the files can go when their rows do. */
+export async function listAllImageUris(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ image_uri: string }>(
+    "SELECT image_uri FROM receipts WHERE image_uri IS NOT NULL AND image_uri <> ''",
+  );
+  return rows.map((row) => row.image_uri);
+}
+
+/** Drop every receipt and the restore markers. Only for an account switch. */
+export async function clearReceiptData(): Promise<void> {
+  const db = await getDb();
+  await db.execAsync('DELETE FROM receipts; DELETE FROM sync_state; DELETE FROM receipt_metric_queue;');
+}
+
 export type SyncState = { hydratedAt: number | null; pullCursor: string | null };
 
 export async function getSyncState(userId: string): Promise<SyncState | null> {

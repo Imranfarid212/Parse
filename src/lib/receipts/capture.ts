@@ -747,6 +747,22 @@ export async function confirm(id: string, fields: ReceiptFields, userId?: string
   void syncConfirmed();
 }
 
+/**
+ * Wipe the local receipt store because a different account has signed in.
+ *
+ * Local rows carry no user id, so without this the incoming user would see the
+ * previous one's receipts — and, since the restore only runs against an empty
+ * database, would never get their own. Deliberately not called on sign-out: a
+ * user signing back into their own account would lose any capture that had not
+ * yet reached the server.
+ */
+export async function clearLocalReceiptsForAccountSwitch(): Promise<void> {
+  const uris = await store.listAllImageUris();
+  await Promise.all(uris.map((uri) => deleteLocalFile(uri).catch(() => {})));
+  await store.clearReceiptData();
+  if (__DEV__) console.warn(`[capture] cleared ${uris.length} local receipt image(s) for account switch`);
+}
+
 export async function syncConfirmed(): Promise<void> {
   const reclaimed = await store.reclaimStalledSyncs(STALLED_SYNC_MS);
   if (reclaimed > 0 && __DEV__) console.warn(`[capture] reclaimed ${reclaimed} stalled sync row(s)`);

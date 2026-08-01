@@ -21,6 +21,7 @@
  */
 import type { Category } from '@/../packages/contracts/src/types';
 import { supabase } from '@/lib/auth/supabase';
+import { clearLocalReceiptsForAccountSwitch } from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
 import { CATEGORIES, isCategory, type ReceiptFields, type ReceiptStatus } from '@/lib/receipts/types';
 
@@ -77,6 +78,13 @@ function toFields(row: ServerReceipt, categoryNameById: Map<number, string>): Re
  * work still queued to go up.
  */
 export async function restoreIfNeeded(userId: string, categories: Category[]): Promise<number> {
+  // A different account on this device owns nothing here. Local rows carry no
+  // user id, so the only safe reading of "someone else's receipts are already
+  // in the table" is to drop them and start this account clean.
+  const owner = await store.getLocalOwner();
+  if (owner && owner !== userId) await clearLocalReceiptsForAccountSwitch();
+  if (owner !== userId) await store.setLocalOwner(userId);
+
   const state = await store.getSyncState(userId);
   if (state?.hydratedAt) return 0;
 
