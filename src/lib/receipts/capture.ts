@@ -763,6 +763,18 @@ export async function clearLocalReceiptsForAccountSwitch(): Promise<void> {
   if (__DEV__) console.warn(`[capture] cleared ${uris.length} local receipt image(s) for account switch`);
 }
 
+/**
+ * Remove a receipt the server says is gone, taking its image with it. Used
+ * when a pull brings back a tombstone — a retention purge, or a deletion made
+ * anywhere other than this device.
+ */
+export async function deleteLocalReceipt(captureId: string): Promise<void> {
+  const row = await store.getById(captureId);
+  if (!row) return;
+  if (row.imageUri) await deleteLocalFile(row.imageUri).catch(() => {});
+  await store.remove(captureId);
+}
+
 export async function syncConfirmed(): Promise<void> {
   const reclaimed = await store.reclaimStalledSyncs(STALLED_SYNC_MS);
   if (reclaimed > 0 && __DEV__) console.warn(`[capture] reclaimed ${reclaimed} stalled sync row(s)`);

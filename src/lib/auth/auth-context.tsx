@@ -13,7 +13,7 @@ import { clearCachedAuth, getCachedAuth, setCachedAuth } from '@/lib/auth/sessio
 import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
 import type { Profile } from '@/lib/auth/types';
 import { withNetworkRetry } from '@/lib/network/retry';
-import { restoreIfNeeded } from '@/lib/receipts/restore';
+import { syncFromServer } from '@/lib/receipts/server-sync';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -229,17 +229,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (__DEV__) console.warn('Writing the auth snapshot failed', error);
     }
 
-    // A device that has never seen this account's receipts pulls them once.
-    // It needs the category names this call just fetched, and it must not run
-    // before the session is established — hence here rather than at startup.
-    // Failure is swallowed: the app is fully usable without it and it retries
-    // on the next launch.
-    void restoreIfNeeded(currentSession.user.id, nextState.categoryRows)
-      .then((count) => {
-        if (count > 0 && __DEV__) console.log(`[restore] pulled ${count} receipt(s) from the server`);
+    // Bring the device's receipts back in step with the server. It needs the
+    // category names this call just fetched, and must not run before the
+    // session exists — hence here rather than at startup. Failure is swallowed:
+    // the local copy stays usable and the cursor is unchanged, so the next pass
+    // picks up exactly where this one stopped.
+    void syncFromServer(currentSession.user.id, nextState.categoryRows)
+      .then((counts) => {
+        const changed = counts.added + counts.updated + counts.deleted;
+        if (changed > 0 && __DEV__) console.log('[sync] receipts', counts);
       })
       .catch((error: unknown) => {
-        if (__DEV__) console.warn('[restore] failed; will retry next launch', error);
+        if (__DEV__) console.warn('[sync] failed; the cursor is unchanged', error);
       });
 
     return nextState.profileRow;
@@ -367,7 +368,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const subscription = Network.addNetworkStateListener((state) => {
       if (!state.isInternetReachable) return;
-      if (statusRef.current === 'authenticated' && !sessionRef.current) void revalidate();
+      if (statusRef.current !== 'authenticated') return;
+      // Two reasons to revalidate on reconnect: pick up a session that could not
+      // be refreshed at launch, and pull whatever changed on the server while
+      // the device was away — the local copy is what every offline decision
+      // reads, so a reconnect is exactly when it should stop being stale.
+      const stale = Date.now() - lastRefreshedAtRef.current > REVALIDATE_AFTER_MS;
+      if (!sessionRef.current || stale) void revalidate();
     });
 
     return () => subscription.remove();

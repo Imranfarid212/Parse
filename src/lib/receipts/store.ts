@@ -555,6 +555,38 @@ export async function getSyncState(userId: string): Promise<SyncState | null> {
   return { hydratedAt: row.hydrated_at, pullCursor: row.pull_cursor };
 }
 
+/**
+ * A local row is the authority on itself until the server has acknowledged it.
+ * Anything short of fully settled is either mid-flight or holds user work that
+ * has not gone up yet, and a pull must not overwrite it — that is how a
+ * background sync eats somebody's edit.
+ */
+export function hasUnsyncedLocalWork(row: ReceiptRow): boolean {
+  return !(row.status === 'synced' && row.resultSyncStatus === 'synced');
+}
+
+export async function setPullCursor(userId: string, cursor: string): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO sync_state (user_id, hydrated_at, pull_cursor, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET pull_cursor = excluded.pull_cursor,
+       hydrated_at = COALESCE(sync_state.hydrated_at, excluded.hydrated_at),
+       updated_at = excluded.updated_at`,
+    [userId, now, cursor, now],
+  );
+}
+
+/** Overwrite a settled row with the server's version. */
+export async function updateFromServer(row: RestoredReceipt): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE receipts SET status = ?, fields = ?, receipt_id = ?, remote_image_path = ?, updated_at = ?
+      WHERE id = ?`,
+    [row.status, JSON.stringify(row.fields), row.receiptId, row.remoteImagePath, Date.now(), row.captureId],
+  );
+}
+
 export async function setHydrated(userId: string, cursor: string | null): Promise<void> {
   const db = await getDb();
   const now = Date.now();
