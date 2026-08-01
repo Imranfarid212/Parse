@@ -37,6 +37,7 @@ function orderBeforeLast(source, before, after, label) {
 
 const fn = read('supabase/functions/extract/index.ts');
 const balancedFn = read('supabase/functions/extract-balanced/index.ts');
+const sharedCategories = read('supabase/functions/_shared/categories.ts');
 const quotaModule = read('supabase/functions/_shared/quota.ts');
 const contractsQuota = read('packages/contracts/src/quota.ts');
 const confirmFn = read('supabase/functions/receipt-confirm/index.ts');
@@ -72,7 +73,7 @@ includes(fn, "duplicate: true", 'duplicate receipt response');
 includes(fn, ".neq('capture_id', captureId)", 'duplicate ignores same capture id');
 includes(fn, ".in('status', ['needs_review', 'confirmed'])", 'duplicate scans only terminal review/confirmed rows');
 includes(fn, "await admin.storage.from('receipts').remove([imagePath]);", 'duplicate image cleanup');
-includes(confirmFn, "update({ status: 'confirmed', confirmed_via: 'user' })", 'user confirmation status transition');
+includes(confirmFn, "{ status: 'confirmed', confirmed_via: 'user' }", 'user confirmation status transition');
 includes(confirmFn, ".eq('user_id', userData.user.id)", 'confirmation ownership guard');
 includes(confirmFn, "receipt_id must be a UUID", 'confirmation id validation');
 includes(fn, ".from('receipt_items').insert", 'line item persistence');
@@ -156,13 +157,31 @@ orderBeforeLast(balancedFn, 'const receiptId = reservation.id', 'receipt_id: rec
 includes(balancedFn, ".eq('status', 'processing')", 'persist only claims a row still processing');
 excludesPattern(balancedFn, /\bid: receiptId,\s*\n\s*user_id:/, 'balanced must not re-upsert a client-minted receipt id');
 
-// Categories come from the user's own picks, not a hardcoded list.
-includes(balancedFn, 'async function getUserCategories', 'balanced reads the user categories');
-includes(balancedFn, ".from('user_categories')", 'balanced queries user_categories');
+// Categories come from the user's own picks, not a hardcoded list. The read and
+// the name->id rule live in _shared so extraction and confirmation cannot drift
+// apart the way Balanced drifted from Precise; both must import them.
+includes(sharedCategories, 'async function getUserCategories', 'shared module reads the user categories');
+includes(sharedCategories, ".from('user_categories')", 'shared module queries user_categories');
+includes(sharedCategories, 'idByName.get(name) ?? categories.fallbackId', 'shared name->id rule falls back to Miscellaneous');
+includes(balancedFn, "from '../_shared/categories.ts'", 'balanced uses the shared category module');
+excludesPattern(balancedFn, /async function getUserCategories/, 'balanced must not re-declare the category read');
 includes(balancedFn, 'buildPrompt(ocrText, defaultCurrency, categories.names)', 'prompt uses the user categories');
 includes(balancedFn, 'enum: categoryNames', 'model schema is constrained to the user categories');
 includes(balancedFn, 'categoryNames.includes(category) ? category : MISCELLANEOUS', 'off-list category fallback');
 includes(balancedFn, 'category_id: categoryId', 'balanced persists the resolved category id');
+includes(balancedFn, 'resolveCategoryId(categories,', 'balanced resolves the id through the shared rule');
 excludesPattern(balancedFn, /category_id:\s*\d+/, 'balanced must not hardcode a category id');
+
+// Confirmation is the only path by which a user's edits reach the database.
+// Without these it silently stored nothing but a status flag, and every
+// correction lived on one device.
+includes(confirmFn, "from '../_shared/categories.ts'", 'confirm uses the shared category module');
+includes(confirmFn, 'patch.merchant', 'confirm persists the edited merchant');
+includes(confirmFn, 'patch.txn_date', 'confirm persists the edited date');
+includes(confirmFn, 'patch.total', 'confirm persists the edited total');
+includes(confirmFn, 'patch.currency', 'confirm persists the edited currency');
+includes(confirmFn, 'patch.category_id = resolveCategoryId(', 'confirm resolves the category through the shared rule');
+includes(confirmFn, '.update(patch)', 'confirm writes the field patch, not just a status');
+excludesPattern(confirmFn, /\.update\(\{\s*status:\s*'confirmed',\s*confirmed_via:\s*'user'\s*\}\)/, 'confirm must not go back to writing only a status');
 
 console.log('[b4:backend] Grok fast path, balanced fast path, shared quota, validation, and ack-gate source checks passed');

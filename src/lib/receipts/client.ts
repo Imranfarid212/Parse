@@ -203,6 +203,8 @@ const BALANCED_HARD_DEADLINE_MS = 15_000;
 const BALANCED_WARMUP_TIMEOUT_MS = 5000;
 const PRECISE_VISIBLE_DEADLINE_MS = 4500;
 const PRECISE_WARMUP_TIMEOUT_MS = 5000;
+/** Confirm is a small write; anything this slow is a stalled connection. */
+const CONFIRM_TIMEOUT_MS = 20_000;
 const AUTH_REFRESH_WINDOW_MS = 30_000;
 let balancedWarmupInFlight: Promise<void> | null = null;
 let preciseWarmupInFlight: Promise<void> | null = null;
@@ -908,15 +910,27 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const accessToken = await getAccessTokenForRequest();
 
-    const response = await fetch(`${env.supabaseUrl}/functions/v1/receipt-confirm`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        apikey: env.supabaseAnonKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ receipt_id: receiptId, fields }),
-    });
+    // Bounded on purpose. This request used to have no timeout at all, so a
+    // connection that never settled left the local row marked `syncing` with
+    // nothing to retry it and no error to show — the receipt looked saved on
+    // the device and never reached the server. A timeout turns that silence
+    // into an ordinary retryable failure.
+    const timeout = childTimeoutSignal(undefined, CONFIRM_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(`${env.supabaseUrl}/functions/v1/receipt-confirm`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          apikey: env.supabaseAnonKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ receipt_id: receiptId, fields }),
+        signal: timeout.signal,
+      });
+    } finally {
+      timeout.dispose();
+    }
 
     let data: ConfirmReceiptErrorPayload | null = null;
     try {
@@ -925,7 +939,13 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
       // A non-JSON edge/gateway response should still leave the local row queued.
     }
     if (!response.ok) {
-      throw new Error(data?.message ?? data?.error ?? data?.code ?? `confirm failed (${response.status})`);
+      const error = new Error(data?.message ?? data?.error ?? data?.code ?? `confirm failed (${response.status})`);
+      // The caller has to tell "the server is briefly unwell" from "the server
+      // will reject this forever" — one is worth retrying and the other never
+      // is. Without the status that distinction is unrecoverable, because a
+      // JSON error body replaces the only place it appeared.
+      (error as Error & { status?: number }).status = response.status;
+      throw error;
     }
   },
 };

@@ -1,33 +1,18 @@
 // @ts-nocheck - Supabase Edge Functions run under Deno, outside the Expo app tsconfig.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
+import {
+  getUserCategories,
+  MISCELLANEOUS,
+  resolveCategoryId,
+  type UserCategories,
+} from '../_shared/categories.ts';
 import { evaluateQuota, type QuotaVerdict } from '../_shared/quota.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
-
-const MISCELLANEOUS = 'Miscellaneous';
-
-/**
- * The seeded master list from the B1 migration. The prompt and the persisted
- * category_id come from the user's own `user_categories` picks; this is only the
- * fallback for when that read fails, so a scan never dies over a category lookup.
- */
-const SEEDED_CATEGORIES = [
-  { id: 1, name: 'Travel & Transit' },
-  { id: 2, name: 'Meals & Entertainment' },
-  { id: 3, name: 'Office Supplies' },
-  { id: 4, name: 'Software & IT' },
-  { id: 5, name: 'Vehicle Expenses' },
-  { id: 6, name: 'Advertising & Marketing' },
-  { id: 7, name: 'Professional Services' },
-  { id: 8, name: 'Utilities & Telecom' },
-  { id: 9, name: 'Inventory & Materials' },
-  { id: 10, name: MISCELLANEOUS },
-] as const;
-const MISCELLANEOUS_ID = 10;
 
 const OPENROUTER_CHAT_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const GEMINI_GENERATE_CONTENT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -66,21 +51,6 @@ type DuplicateCandidate = {
   total: number;
 };
 
-/**
- * The user's selected categories: what the model may choose from, and the id
- * each name persists as. Miscellaneous is always present (it is the locked
- * system category and the off-list fallback).
- */
-type UserCategories = { names: string[]; idByName: Map<string, number>; fallbackId: number };
-
-const CATEGORY_CACHE_MS = 5 * 60 * 1000;
-const categoryCache = new Map<string, { value: UserCategories; fetchedAt: number }>();
-
-const SEEDED_USER_CATEGORIES: UserCategories = {
-  names: SEEDED_CATEGORIES.map((category) => category.name),
-  idByName: new Map(SEEDED_CATEGORIES.map((category) => [category.name, category.id])),
-  fallbackId: MISCELLANEOUS_ID,
-};
 
 type Jwk = JsonWebKey & { kid?: string; alg?: string };
 type AuthOutcome =
@@ -249,66 +219,6 @@ function waitUntil(promise: Promise<unknown>) {
   else promise.catch((error) => console.error('[extract-balanced] background task failed', error));
 }
 
-/**
- * The user's own category picks, cached per isolate so the hot path usually pays
- * nothing. The camera's warm-up call primes this before the shutter is pressed.
- * A failed read falls back to the seeded list rather than failing the scan.
- */
-async function getUserCategories(
-  admin: ReturnType<typeof createClient>,
-  userId: string,
-  timing?: Record<string, unknown>,
-): Promise<UserCategories> {
-  const cached = categoryCache.get(userId);
-  if (cached && Date.now() - cached.fetchedAt < CATEGORY_CACHE_MS) {
-    if (timing) {
-      timing.categories_ms = 0;
-      timing.categories_cached = 1;
-    }
-    return cached.value;
-  }
-
-  const startedAt = performance.now();
-  try {
-    const { data, error } = await admin
-      .from('user_categories')
-      .select('categories(id, name)')
-      .eq('user_id', userId);
-    if (error) throw error;
-
-    const rows = (data ?? [])
-      .map((row: Record<string, unknown>) => row.categories as { id: number; name: string } | null)
-      .filter((row): row is { id: number; name: string } => Boolean(row?.name));
-    if (rows.length === 0) throw new Error('user has no selected categories');
-
-    const idByName = new Map(rows.map((row) => [row.name, row.id]));
-    // Miscellaneous is the locked system category and the off-list fallback, so
-    // it is always offered even if the join somehow missed it.
-    if (!idByName.has(MISCELLANEOUS)) idByName.set(MISCELLANEOUS, MISCELLANEOUS_ID);
-    const value: UserCategories = {
-      names: [...idByName.keys()],
-      idByName,
-      fallbackId: idByName.get(MISCELLANEOUS) ?? MISCELLANEOUS_ID,
-    };
-    categoryCache.set(userId, { value, fetchedAt: Date.now() });
-    if (timing) {
-      timing.categories_ms = Math.round(performance.now() - startedAt);
-      timing.categories_cached = 0;
-    }
-    return value;
-  } catch (error) {
-    console.error('[extract-balanced] category read failed; using seeded list', {
-      user_id: userId,
-      error: shortError(error),
-    });
-    if (timing) {
-      timing.categories_ms = Math.round(performance.now() - startedAt);
-      timing.categories_cached = 0;
-      timing.categories_fallback = 1;
-    }
-    return cached?.value ?? SEEDED_USER_CATEGORIES;
-  }
-}
 
 function buildPrompt(ocrText: string, defaultCurrency: string, categoryNames: string[]) {
   return [
@@ -1266,7 +1176,7 @@ Deno.serve(async (req) => {
         captureId,
         captureMode,
         extraction,
-        categoryId: categories.idByName.get(extraction.suggested_category) ?? categories.fallbackId,
+        categoryId: resolveCategoryId(categories, extraction.suggested_category),
         ackedAt,
         duplicateOverride,
         duplicateOf,

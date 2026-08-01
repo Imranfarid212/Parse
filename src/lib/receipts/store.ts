@@ -378,11 +378,17 @@ export async function setFields(id: string, fields: ReceiptFields, status: Recei
   ]);
 }
 
+/**
+ * Extraction landed. `attempts` and `next_retry_at` are reset because one pair
+ * of columns serves both queues: without this, a scan that needed three
+ * extract retries would start its confirm backoff already three deep, and used
+ * to inherit those attempts against the confirm retry budget too.
+ */
 export async function markDispatched(id: string, receiptId: string, fields: ReceiptFields): Promise<void> {
   const db = await getDb();
   const now = Date.now();
   await db.runAsync(
-    "UPDATE receipts SET fields = ?, local_ocr_text = NULL, status = 'extracted', receipt_id = ?, acked_at = ?, updated_at = ? WHERE id = ?",
+    "UPDATE receipts SET fields = ?, local_ocr_text = NULL, status = 'extracted', receipt_id = ?, acked_at = ?, attempts = 0, next_retry_at = 0, updated_at = ? WHERE id = ?",
     [JSON.stringify(fields), receiptId, now, now, id],
   );
 }
@@ -519,6 +525,32 @@ export async function listPendingExtract(): Promise<ReceiptRow[]> {
     [Date.now()],
   );
   return rows.map(hydrate);
+}
+
+/**
+ * Return rows stranded mid-flight to their queue.
+ *
+ * Both queues mark a row `syncing`/`uploading` before the network call, and
+ * neither work list selects those states — so anything that does not survive
+ * the request (app backgrounded, process killed, a request that never settles)
+ * sat there forever, with no error recorded and the receipt still looking saved
+ * on the device. The staleness window is what keeps this from interrupting a
+ * request that is genuinely still running.
+ */
+export async function reclaimStalledSyncs(staleMs: number): Promise<number> {
+  const db = await getDb();
+  const cutoff = Date.now() - staleMs;
+  const results = await Promise.all([
+    db.runAsync(
+      "UPDATE receipts SET result_sync_status = 'pending_sync', updated_at = ? WHERE result_sync_status = 'syncing' AND updated_at < ?",
+      [Date.now(), cutoff],
+    ),
+    db.runAsync(
+      "UPDATE receipts SET image_sync_status = 'pending_upload', updated_at = ? WHERE image_sync_status = 'uploading' AND updated_at < ?",
+      [Date.now(), cutoff],
+    ),
+  ]);
+  return results.reduce((total, result) => total + (result.changes ?? 0), 0);
 }
 
 /** Confirmed locally but not yet on the server — the sync queue's work list. */

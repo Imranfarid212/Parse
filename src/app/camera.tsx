@@ -55,6 +55,13 @@ const PRECISE_SCREEN_VISIBLE_DEADLINE_MS = 4500;
 /** MenuPanel's TABS order: Export, Search, Plan, Settings. */
 const PLAN_TAB_INDEX = 2;
 
+/** How long before an offline capture earns another dialog rather than a toast. */
+const OFFLINE_NOTICE_REPEAT_MS = 60_000;
+const OFFLINE_QUEUED_TITLE = 'No network connection';
+const OFFLINE_QUEUED_BODY =
+  "Your receipt is saved. We'll process it automatically once you're back online, and it will appear in Recents when it's ready.";
+const OFFLINE_QUEUED_TOAST = "Saved — we'll process it when you're back online";
+
 function waitForVisibleDeadline(ms: number): Promise<'visible_deadline'> {
   return new Promise((resolve) => {
     setTimeout(() => resolve('visible_deadline'), ms);
@@ -319,6 +326,37 @@ export default function CameraScreen() {
   }, []);
 
   /**
+   * A scan queued because the device is offline. The capture is safe and the
+   * retry queue owns it, but until now the only sign of that was a 1.8s
+   * spinner whose explanation was stripped outside __DEV__ — so the user was
+   * told nothing at all about why the receipt had not been read.
+   *
+   * The first one in an episode gets a dialog, because it changes what the
+   * user should expect. Repeats inside the window drop to a toast: someone
+   * scanning a stack of receipts on a plane should not have to dismiss a
+   * dialog for each one.
+   */
+  const offlineNoticeAt = useRef(0);
+  const showQueuedOfflineNotice = useCallback(
+    /**
+     * `toastOnly` is for outcomes that land after Precise's "Receipt is being
+     * processed" dialog. A second dialog there would contradict the first —
+     * late failures are always non-blocking.
+     */
+    (toastOnly = false) => {
+      setPhase({ k: 'idle' });
+      const now = Date.now();
+      if (toastOnly || now - offlineNoticeAt.current < OFFLINE_NOTICE_REPEAT_MS) {
+        flashNotice(OFFLINE_QUEUED_TOAST);
+        return;
+      }
+      offlineNoticeAt.current = now;
+      Alert.alert(OFFLINE_QUEUED_TITLE, OFFLINE_QUEUED_BODY, [{ text: 'OK' }]);
+    },
+    [flashNotice],
+  );
+
+  /**
    * Precise, post-preflight: an honest "still working" state. It claims nothing
    * — the server has not answered yet, and it may still come back with a
    * rejection, a duplicate, or no scans left.
@@ -525,9 +563,12 @@ export default function CameraScreen() {
         setPhase({ k: 'idle' });
         showQuotaExhaustedAlert();
       } else {
+        // Offline is the one queue reason we can name, and it applies to both
+        // modes — Precise previously showed nothing at all here.
+        if (out.offline) showQueuedOfflineNotice();
         // Precise clears the working overlay instead: its "still going" message
         // belongs to the visible deadline, not to every queued outcome.
-        if (out.row.extractionMode !== 'precise') showProcessing(out.reason);
+        else if (out.row.extractionMode !== 'precise') showProcessing(out.reason);
         else setPhase((prev) => (prev.k === 'working' ? { k: 'idle' } : prev));
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
@@ -537,7 +578,7 @@ export default function CameraScreen() {
         }
       }
     },
-    [flashNotice, showDuplicateCandidatePrompt, showProcessing, showQuotaExhaustedAlert],
+    [flashNotice, showDuplicateCandidatePrompt, showProcessing, showQueuedOfflineNotice, showQuotaExhaustedAlert],
   );
 
   const handleOneClickCaptureOutcome = useCallback(
@@ -572,6 +613,10 @@ export default function CameraScreen() {
         setPhase({ k: 'idle' });
         showQuotaExhaustedAlert();
       } else {
+        if (out.offline) {
+          showQueuedOfflineNotice();
+          return;
+        }
         if (out.row.extractionMode !== 'precise') {
           showProcessing(out.reason);
           return;
@@ -585,7 +630,15 @@ export default function CameraScreen() {
         }
       }
     },
-    [auth.user?.id, flashNotice, popFolder, showDuplicateCandidatePrompt, showProcessing, showQuotaExhaustedAlert],
+    [
+      auth.user?.id,
+      flashNotice,
+      popFolder,
+      showDuplicateCandidatePrompt,
+      showProcessing,
+      showQueuedOfflineNotice,
+      showQuotaExhaustedAlert,
+    ],
   );
 
   const onCapture = async () => {
@@ -654,7 +707,14 @@ export default function CameraScreen() {
                 });
                 return;
               }
-              if (lateOut.kind !== 'queued') handleDefaultCaptureOutcome(lateOut, photo.uri, startedAt);
+              // Offline is the one late queue reason worth naming. Without
+              // this the deadline dialog was the last thing the user heard,
+              // and the receipt simply appeared in Recents unexplained.
+              if (lateOut.kind === 'queued') {
+                if (lateOut.offline) showQueuedOfflineNotice(true);
+                return;
+              }
+              handleDefaultCaptureOutcome(lateOut, photo.uri, startedAt);
             })
             .catch((error) => {
               if (__DEV__) console.warn('[camera] precise background capture stayed queued', error instanceof Error ? error.message : String(error));
@@ -680,7 +740,13 @@ export default function CameraScreen() {
         if (out === 'visible_deadline') {
           showPreciseProcessingAlert();
           void outPromise
-            .then((lateOut) => handleOneClickCaptureOutcome(lateOut, photo.uri, startedAt))
+            .then((lateOut) => {
+              if (lateOut.kind === 'queued' && lateOut.offline) {
+                showQueuedOfflineNotice(true);
+                return;
+              }
+              handleOneClickCaptureOutcome(lateOut, photo.uri, startedAt);
+            })
             .catch((error) => {
               if (__DEV__) console.warn('[camera] one-click precise background capture stayed queued', error instanceof Error ? error.message : String(error));
             });
@@ -757,7 +823,13 @@ export default function CameraScreen() {
         if (out === 'visible_deadline') {
           showPreciseProcessingAlert();
           void outPromise
-            .then((lateOut) => handleOneClickCaptureOutcome(lateOut, uri, startedAt))
+            .then((lateOut) => {
+              if (lateOut.kind === 'queued' && lateOut.offline) {
+                showQueuedOfflineNotice(true);
+                return;
+              }
+              handleOneClickCaptureOutcome(lateOut, uri, startedAt);
+            })
             .catch((error) => {
               if (__DEV__) console.warn('[camera] one-click gallery precise background capture stayed queued', error instanceof Error ? error.message : String(error));
             });

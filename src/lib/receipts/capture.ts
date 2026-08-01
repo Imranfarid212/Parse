@@ -23,6 +23,7 @@ import {
   type ExtractAck,
   type ExtractVisibleDeadlineAck,
 } from '@/lib/receipts/client';
+import { isTransientNetworkError } from '@/lib/network/retry';
 import { applyServerQuota } from '@/lib/receipts/quota';
 import * as store from '@/lib/receipts/store';
 import {
@@ -49,8 +50,13 @@ const CAPTURE_DIR = `${FileSystem.documentDirectory ?? ''}captures/`;
 const MAX_BACKOFF_MS = 60_000;
 const MAX_EXTRACT_ATTEMPTS = 5;
 const MAX_IMAGE_BACKUP_ATTEMPTS = 5;
-const MAX_CONFIRM_SYNC_ATTEMPTS = 5;
 const VISIBLE_DEADLINE_RETRY_DELAY_MS = 15_000;
+/**
+ * How long a row may sit in an in-flight sync state before the queue assumes
+ * the attempt died with the process and takes it back. Comfortably longer than
+ * any request timeout, so a live request is never interrupted.
+ */
+const STALLED_SYNC_MS = 2 * 60_000;
 const DRAFT_CATEGORY: Category = 'Miscellaneous';
 
 function getImageSize(uri: string): Promise<{ width: number; height: number }> {
@@ -149,6 +155,40 @@ function describeError(error: unknown): string {
   } catch {
     return 'unknown error';
   }
+}
+
+function getErrorStatus(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null || !('status' in error)) return null;
+  const value = (error as { status?: unknown }).status;
+  return typeof value === 'number' ? value : null;
+}
+
+/**
+ * Whether a failed confirm is worth trying again. The shared classifier only
+ * counts 0 and 5xx as transient, so 408 and 429 would read as verdicts — and
+ * treating a rate limit as a verdict here means losing the receipt. When the
+ * stake is the user's only copy, ambiguity retries.
+ */
+function isRetryableConfirmError(error: unknown): boolean {
+  if (isTransientNetworkError(error)) return true;
+  const status = getErrorStatus(error);
+  if (status === 408 || status === 429) return true;
+  // A timed-out confirm aborts, and an abort is a stalled connection, not a
+  // verdict. Without this the timeout added to bound that stall would itself
+  // mark the receipt permanently failed.
+  return /abort/i.test(describeError(error));
+}
+
+/**
+ * Did this scan queue because the device could not reach the network, as
+ * opposed to a slow or failing server? The UI says different things for the
+ * two, and `reason` cannot answer it — that is stripped outside __DEV__, so a
+ * release build has no other way to tell them apart.
+ */
+function isOfflineError(error: unknown): boolean {
+  return /internet connection appears to be offline|network request failed|network connection was lost|fetch failed|unable to resolve host|could not connect to the server/i.test(
+    describeError(error),
+  );
 }
 
 function inferCurrencyFromText(text: string, defaultCurrency: string): string {
@@ -268,8 +308,20 @@ export type CaptureOutcome =
   | { kind: 'preflight_rejected' }
   /** No free scans left. Retrying can't fix this, so it's terminal, not queued. */
   | { kind: 'quota_exhausted'; row: ReceiptRow }
-  /** Anything else. The row stays `pending_extract` and the queue retries it. */
-  | { kind: 'queued'; row: ReceiptRow; reason?: string; attempts?: CaptureAttemptTrace[]; deferred?: Promise<CaptureOutcome> };
+  /**
+   * Anything else. The row is marked `llm_failed_retryable` and the queue
+   * re-drives it on reconnect. `offline` is true when the device could not
+   * reach the network at all, which is the only case the UI can honestly
+   * blame on connectivity.
+   */
+  | {
+      kind: 'queued';
+      row: ReceiptRow;
+      reason?: string;
+      offline?: boolean;
+      attempts?: CaptureAttemptTrace[];
+      deferred?: Promise<CaptureOutcome>;
+    };
 
 /**
  * Runs a captured photo through the pipeline. Never throws for transport
@@ -592,7 +644,13 @@ export async function processCapture(
             return { kind: 'quota_exhausted', row };
           }
           if (__DEV__) console.warn('[capture] visible-deadline request stayed queued', describeError(error));
-          return { kind: 'queued' as const, row, reason: __DEV__ ? describeError(error) : undefined, attempts: ack.attempts };
+          return {
+            kind: 'queued' as const,
+            row,
+            reason: __DEV__ ? describeError(error) : undefined,
+            offline: isOfflineError(error),
+            attempts: ack.attempts,
+          };
         });
       return { kind: 'queued', row, reason: undefined, attempts: ack.attempts, deferred };
     }
@@ -676,7 +734,7 @@ export async function processCapture(
     if (__DEV__) console.warn('[capture] extract queued', reason);
     await store.setStatus(row.id, 'llm_failed_retryable');
     await store.markRetry(row.id, 1, Date.now() + nextBackoffWithJitterMs(1));
-    return { kind: 'queued', row, reason: __DEV__ ? reason : undefined, attempts };
+    return { kind: 'queued', row, reason: __DEV__ ? reason : undefined, offline: isOfflineError(error), attempts };
   }
 }
 
@@ -690,10 +748,27 @@ export async function confirm(id: string, fields: ReceiptFields, userId?: string
 }
 
 export async function syncConfirmed(): Promise<void> {
+  const reclaimed = await store.reclaimStalledSyncs(STALLED_SYNC_MS);
+  if (reclaimed > 0 && __DEV__) console.warn(`[capture] reclaimed ${reclaimed} stalled sync row(s)`);
+
   const rows = await store.listUnsynced();
 
   for (const row of rows) {
-    if (!row.receiptId || !row.fields) continue;
+    // A confirmed receipt with nothing to address it to. Skipping silently is
+    // how a row can sit "saved" on the device forever while the server never
+    // hears about it — say so, at least, rather than dropping it wordlessly.
+    if (!row.receiptId || !row.fields) {
+      if (__DEV__) {
+        console.warn('[capture] confirm sync skipped — nothing to send', {
+          id: row.id,
+          hasReceiptId: Boolean(row.receiptId),
+          hasFields: Boolean(row.fields),
+          status: row.status,
+          resultSyncStatus: row.resultSyncStatus,
+        });
+      }
+      continue;
+    }
     try {
       await store.setSyncStatus(row.id, { resultSyncStatus: 'syncing' });
       await confirmReceiptClient.confirm({ receiptId: row.receiptId, fields: row.fields });
@@ -701,13 +776,23 @@ export async function syncConfirmed(): Promise<void> {
       await store.setStatus(row.id, 'synced');
     } catch (error) {
       if (__DEV__) console.warn('[capture] confirm sync queued', describeError(error));
-      const attempts = row.attempts + 1;
-      if (attempts >= MAX_CONFIRM_SYNC_ATTEMPTS) {
+
+      // A verdict the server will repeat forever — a malformed payload, or a
+      // receipt row that no longer exists. Retrying cannot change the answer,
+      // so this one stops here rather than blocking the rest of the queue.
+      if (!isRetryableConfirmError(error)) {
         await store.setSyncStatus(row.id, { resultSyncStatus: 'sync_failed_final' });
-      } else {
-        await store.setSyncStatus(row.id, { resultSyncStatus: 'sync_failed' });
-        await store.markRetry(row.id, attempts, Date.now() + nextBackoffWithJitterMs(attempts));
+        continue;
       }
+
+      // Transport or server trouble. This must never become terminal: until
+      // the server has the receipt it exists on this device alone, so giving
+      // up is data loss — and the old five-attempt cap did exactly that, then
+      // left the row in a state nothing ever retried. Backoff is capped, so
+      // retrying indefinitely stays cheap.
+      const attempts = row.attempts + 1;
+      await store.setSyncStatus(row.id, { resultSyncStatus: 'sync_failed' });
+      await store.markRetry(row.id, attempts, Date.now() + nextBackoffWithJitterMs(attempts));
       break;
     }
   }
@@ -722,6 +807,7 @@ export async function syncImageBackups(): Promise<number> {
 }
 
 async function dispatchImageBackups(): Promise<number> {
+  await store.reclaimStalledSyncs(STALLED_SYNC_MS);
   const rows = await store.listPendingImageBackups();
   let uploaded = 0;
 
