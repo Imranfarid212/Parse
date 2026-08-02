@@ -11,6 +11,13 @@ function fail(message) {
   throw new Error(`[b4:app] ${message}`);
 }
 
+/** Asserts `before` appears ahead of `after` — used for control-flow ordering. */
+function order(source, before, after, label) {
+  const a = source.indexOf(before);
+  const b = source.indexOf(after);
+  if (a === -1 || b === -1 || a > b) fail(`${label}: expected ${JSON.stringify(before)} before ${JSON.stringify(after)}`);
+}
+
 function includes(source, needle, label) {
   if (!source.includes(needle)) fail(`${label}: expected ${JSON.stringify(needle)}`);
 }
@@ -59,5 +66,28 @@ includes(quota, 'export async function checkQuotaGate', 'shutter gate helper');
 includes(quota, 'export async function applyServerQuota', 'server balance refreshes the cache');
 includes(camera, 'await passesQuotaGate()', 'capture paths run the gate');
 includes(capture, 'applyServerQuota(options?.userId', 'extract responses refresh the cached balance');
+
+// A rate limit is "not now", not "not ever". The server answers 429 rather than
+// 402 precisely so the capture retries — but the client ignored retry_after_s
+// and spent one of five attempts per refusal, so a throttled scan could reach
+// llm_failed_final in under fifteen seconds over a window that clears in sixty.
+includes(capture, "getExtractErrorCode(error) !== 'RATE_LIMITED'", 'a throttle is told apart from a failure');
+includes(capture, 'throttleRetryMs(error)', 'the retry path asks how long the server said to wait');
+includes(client, 'export function getExtractRetryAfterMs', 'the 429 wait reaches the retry path');
+includes(client, 'error.retryAfterS = data?.retry_after_s', 'retry_after_s is carried on the error');
+// The attempt count is passed through unchanged and the branch exits before the
+// increment, so a throttle can never walk the row to llm_failed_final.
+includes(capture, 'markRetry(row.id, row.attempts, Date.now() + throttleMs)', 'a throttle does not spend an attempt');
+order(capture, 'if (throttleMs != null) {', 'if (attempts >= MAX_EXTRACT_ATTEMPTS)', 'the throttle branch exits before the failure budget');
+
+// T4.5 needs five rapid One-click scans. The shutter used to be held until the
+// model answered and every capture aborted the one before it, so the burst limit
+// guarded a rate the UI could not reach.
+includes(camera, 'releaseShutter();', 'the shutter is freed as soon as the photo exists');
+includes(camera, 'oneClickAborts.current.add(oneClickAc)', 'each One-click capture carries its own controller');
+order(camera, 'releaseShutter();', 'void runOneClickCapture(', 'One-click frees the shutter before the scan runs');
+if (/void runOneClickCapture\([\s\S]{0,200}abortRef/.test(camera)) {
+  fail('One-click must not share abortRef; a new shot would cancel the previous capture');
+}
 
 console.log('[b4:app] rejected/non-receipt UX and secret-boundary checks passed');

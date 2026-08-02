@@ -46,7 +46,11 @@ const mirrorSchemas = read('supabase/functions/_shared/contracts/schemas.ts');
 const fixtures = read('packages/contracts/src/fixtures.ts');
 const grants = read('supabase/migrations/20260723000100_b4_extract_fast_path_grants.sql');
 const quotaReadGrants = read('supabase/migrations/20260723000200_b4_quota_read_grants.sql');
-const canScanSql = read('supabase/migrations/20260801000200_b4_can_scan_unambiguous.sql');
+// The newest migration that redefines can_scan() is the current definition.
+// Point this at the latest one whenever the function is replaced, or these
+// assertions quietly start proofreading a superseded file.
+const canScanSql = read('supabase/migrations/20260802000100_b4_can_scan_profile_guard.sql');
+const refundSql = read('supabase/migrations/20260801000200_b4_can_scan_unambiguous.sql');
 
 if (schemas !== mirrorSchemas) fail('contracts mirror differs; run npm run contracts:sync');
 
@@ -127,8 +131,12 @@ includes(quotaModule, "from './contracts/quota.ts'", 'server quota defers to the
 // The decision and the debit have to happen in one transaction, so the
 // arithmetic lives in SQL and contracts/quota.ts is the client's advisory copy.
 // Nothing else pins the two together — these assertions do.
-includes(canScanSql, 'create function public.can_scan', 'can_scan exists as a database function');
+includes(canScanSql, 'function public.can_scan', 'can_scan exists as a database function');
 includes(canScanSql, 'from public.profiles p where p.id = p_user_id for update', 'can_scan locks the user row');
+// PERFORM matching no row locks nothing and raises nothing, so a user without a
+// profiles row would run the whole function unserialised — silently.
+includes(canScanSql, 'if not found then', 'can_scan refuses when there is no row to lock');
+includes(canScanSql, 'get diagnostics v_charged = row_count', 'a redelivered capture must not move the counter');
 includes(canScanSql, 'v_plus_cap       constant int  := 500', 'SQL Plus cap matches the shared rule');
 includes(canScanSql, "v_plus_product   constant text := 'rf_plus_699_m'", 'SQL Plus product id matches');
 includes(canScanSql, "v_unlim_product  constant text := 'rf_unlimited_1199_m'", 'SQL Unlimited product id matches');
@@ -140,9 +148,32 @@ includes(canScanSql, 'on conflict on constraint scan_ledger_user_id_reason_ref_i
 excludesPattern(canScanSql, /returns table \(allowed /, 'can_scan outputs must not shadow column names');
 includes(canScanSql, 'grant execute on function public.can_scan(uuid, uuid) to service_role', 'can_scan is service-role only');
 excludesPattern(canScanSql, /grant execute on function public\.can_scan\(uuid, uuid\) to authenticated/, 'can_scan must not be callable by users directly');
+includes(refundSql, 'grant execute on function public.refund_scan(uuid, uuid) to service_role', 'refund_scan is service-role only');
+excludesPattern(refundSql, /grant execute on function public\.refund_scan\(uuid, uuid\) to authenticated/, 'refund_scan must not be callable by users directly');
 
 includes(quotaModule, "client.rpc('can_scan'", 'server quota decides through the atomic function');
 includes(quotaModule, "client.rpc('refund_scan'", 'server quota can give a scan back');
+
+// The scan is charged before the model runs, and only an explicit is_receipt:false
+// refunds it. So a *missing* verdict must not read as "receipt" — that turned a
+// model omission into a charge the user never got back.
+excludes(fn, 'r.is_receipt !== false', 'precise must not default a missing is_receipt to true');
+excludes(balancedFn, 'r.is_receipt !== false', 'balanced must not default a missing is_receipt to true');
+includes(fn, "typeof r.is_receipt === 'boolean' ? r.is_receipt : null", 'precise honours only an explicit verdict');
+includes(balancedFn, "typeof r.is_receipt === 'boolean' ? r.is_receipt : null", 'balanced honours only an explicit verdict');
+
+// An order list extracts seven named items and not one amount among them, so
+// item count proves nothing. No money anywhere means nothing usable was
+// produced, and the scan goes back — an explicit "receipt" does not override it.
+includes(fn, 'total > 0 || items.some((item) => item.amount > 0)', 'precise requires at least one amount');
+includes(balancedFn, 'total > 0 || items.some((item) => item.amount > 0)', 'balanced requires at least one amount');
+includes(fn, 'hasValue && claimed !== false', 'precise cannot save a receipt worth nothing');
+includes(balancedFn, 'hasValue && claimed !== false', 'balanced cannot save a receipt worth nothing');
+
+// Refunding at each return site is how three of them got missed. One flag, one
+// finally: anything that is not a delivered receipt gives the scan back.
+includes(balancedFn, 'if (refundCharge && !billable)', 'balanced refunds every non-billable exit');
+includes(fn, 'if (charge.refund && !charge.billable)', 'precise refunds every non-billable exit');
 includes(fn, "code: 'RATE_LIMITED'", 'precise returns 429 when the burst limit is hit');
 includes(balancedFn, "code: 'RATE_LIMITED'", 'balanced returns 429 when the burst limit is hit');
 includes(fn, 'evaluateQuota(admin, userId, captureId)', 'precise charges under the capture id');
