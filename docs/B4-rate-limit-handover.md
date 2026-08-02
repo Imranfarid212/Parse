@@ -1,182 +1,198 @@
 # Handover — B4 per-user rate limit + atomic quota
 
-Written to be picked up cold in a new thread. Branch
-`feat/b4-extraction-fast-path`, staging project `receiptflow-staging`
-(`wfboznibkhsfxteejxco`).
+Written to be picked up cold. Branch `feat/b4-extraction-fast-path`, staging
+project `receiptflow-staging` (`wfboznibkhsfxteejxco`).
+
+Supersedes the 2 August version, which said a scan had never succeeded through
+`can_scan` and whose §8 environment notes were wrong in ways that cost real time.
 
 ## Status in one line
 
-**Deployed to staging, not yet verified.** One scan has been attempted and it
-failed; the cause was found and fixed, and the fix is deployed but untested.
-**The next action is a single scan on the device.**
+**Verified end to end, on the device and in an automated suite.** Six commits,
+none pushed. The §6 checklist is closed, and so is 4.2 — the item the earlier
+handover called the most serious one open.
 
 ---
 
-## 1. What the task was
+## 1. What exists
 
-The playbook requires of B4:
-
-> can_scan() + atomic −1 scan_used in one transaction (row lock on profiles);
-> per-user rate limit (12/min burst)
-
-Neither existed. Entitlement was three PostgREST reads in application code, and
-the debit was a separate insert written after the model call, seconds later.
-
-Two holes followed:
-
-- **Nothing bounded call rate.** Every scan is a paid model call, and an
-  Unlimited subscriber has no entitlement ceiling at all, so one account could
-  spend without limit.
-- **A parallel-scan race.** Two captures fired at once both read the balance
-  before either wrote, so a user with one scan left could get two.
-  `UNIQUE(user_id, reason, ref_id)` makes a *redelivered* capture idempotent but
-  does nothing for two different receipts.
-
-## 2. What was built
-
-`public.can_scan(p_user_id uuid, p_capture_id uuid)` — one transaction that:
-
-1. locks the user's `profiles` row
-2. enforces a 12/min burst from `public.scan_attempts` (new table)
-3. evaluates entitlement (free balance / Plus monthly cap / Unlimited)
-4. writes the `-1 scan_used` ledger row
-
-Returns `(out_allowed, out_reason, out_remaining, out_paywall)`.
-`out_remaining` already accounts for the scan just charged.
+`public.can_scan(p_user_id uuid, p_capture_id uuid)` — one transaction that
+locks the user's `profiles` row, enforces a 12/min burst from
+`public.scan_attempts`, evaluates entitlement, and writes the `-1 scan_used`
+ledger row. Returns `(out_allowed, out_reason, out_remaining, out_paywall)`.
 
 `public.refund_scan(p_user_id, p_capture_id)` writes a compensating `+1` with
-reason `refund` — a rejected image gets its credit back, as an entry rather than
-a deletion, so the ledger stays an audit trail.
+reason `refund`, idempotent on `UNIQUE(user_id, reason, ref_id)`.
 
 **The burst is a pool, not a spacing rule.** Twelve back-to-back are fine; the
-thirteenth inside a minute is refused. This matters because gate test T4.5
-requires five rapid One-click scans to work.
+thirteenth inside a minute is refused. **Over the limit returns 429
+`RATE_LIMITED`, not 402** — too fast is not out of scans.
 
-**Over the limit returns 429 `RATE_LIMITED`, not 402.** Too fast is not out of
-scans. The client already treats 429 as retryable and 402 as a verdict, so a
-throttled scan queues and retries silently instead of showing a paywall.
+**Charging happens at decision time**, before the model runs. That is the single
+fact most of this document follows from: every outcome that is not a delivered
+receipt has to give the scan back.
 
-**Charging moved to decision time** — it had to, to share the transaction with
-the check. So every non-billable outcome must refund. A rejected image still
-counts against the burst window: it cost a model call either way.
+### The lock, since it is the least obvious part
 
-### Deliberate trade-off
+`profiles` is not read here and is never written. Its row is purely a mutex,
+because the thing being protected — the balance — is an aggregate over
+`scan_ledger` and has no row of its own to lock, and rows that do not exist yet
+cannot be locked. Two captures with *different* capture ids do not conflict on
+any constraint; without the lock they both read the balance and both spend it.
 
-The quota arithmetic now exists in two places. `packages/contracts/src/quota.ts`
-(`decideQuota`) remains the **client's advisory copy** for the shutter gate; the
-SQL is the **server authority**. The gate pins the cap and both product ids in
-both files so they cannot drift silently. This was accepted knowingly — the
-alternative was leaving the race open.
+`PERFORM ... FOR UPDATE` matching no row locks nothing **and raises nothing**, so
+a user without a `profiles` row would run the whole function unserialised in
+silence. There is a `NOT FOUND` guard now.
 
-### Also in this batch
+---
 
-The on-device "is this a receipt" pre-check now runs in **Balanced** too. It
-previously ran only in Precise, so the default mode sent everything to the
-model. Balanced already reads the text, so the check is free, runs before the
-draft card, and warns rather than blocks (same Retake / Continue Anyway prompt).
-This makes the refund path a last resort rather than the first line of defence.
+## 2. What this session found
 
-## 3. What went wrong on the first attempt
+Everything below was live on staging before it was found. Ordered by how much it
+cost the user.
 
-The first scan returned **"Quota could not be verified"** — the extract path
-fails closed when the quota check throws.
+**A quota rejection destroyed the capture and its photo.** Four sites deleted the
+row and the local file on a 402; the worst was the reconnect drain, whose own
+comment admitted there was "no live screen to toast into". So a receipt
+photographed offline was destroyed, permanently, the moment connectivity
+returned on an exhausted account, with nothing shown at any point. Defensible
+while it could not happen unobserved — optimistic offline capture removed that.
 
-Cause: the function's outputs were named `allowed`, `reason`, `remaining`,
-`paywall`. In PL/pgSQL those are variables in scope for the whole body, so the
-ledger insert's `reason` — in both the column list and the conflict target —
-meant two things at once. Ambiguous on every scan, regardless of plan.
+**A throttle became permanent data loss.** The client ignored the 429's
+`retry_after_s`, retried after one second, and each refusal spent one of five
+attempts, so a capture could reach `llm_failed_final` in under fifteen seconds
+over a window that clears in sixty. The exact opposite of why the server answers
+429 rather than 402.
 
-Fixed in `20260801000200_b4_can_scan_unambiguous.sql`:
+**Five exits charged and never refunded** — the 503 on a failed reservation, the
+422 on an empty extraction, the catch-all 500, and in Precise the 500s on a
+profile or category read and the 200 that reports a rejected image.
 
-- outputs renamed with an `out_` prefix so none can shadow a column
-- every column reference inside the function table-qualified
-- conflict target pinned to `scan_ledger_user_id_reason_ref_id_key` by name
-- the function is **dropped and recreated** — renaming outputs changes the
-  return type, which `CREATE OR REPLACE` refuses
-- `notify pgrst, 'reload schema'` — a function created by a migration is
-  invisible to `rpc()` until the cache refreshes, which produces the *identical*
-  symptom for an unrelated reason. Both were fixed because there was no way to
-  tell them apart without database access.
+**`is_receipt` was fail-open.** A missing field read as "receipt", so a model
+omission became a charge with no refund. And an explicit "receipt" stood on a
+document with no amounts at all: an order list extracts seven named items with
+quantities and not one amount among them, which was saved as a 0.00 row the user
+cannot expense and charged for.
 
-## 4. Current state
+**The retry queue had no clock.** A retry time was written and nothing woke up to
+honour it; a capture queued while the user sat on Search stayed "waiting to
+retry" indefinitely.
 
-| thing | state |
+**Capture failures were invisible.** A throw before the skeleton card left the
+screen untouched — no card, no alert, one `console.warn`. Pointing the camera at
+a keyboard and getting nothing at all was this.
+
+**Rapid One-click was impossible.** The shutter was held until the model
+answered and every capture aborted the one before it, so the five rapid scans
+T4.5 asks for could not happen — the 12/min pool guarded a rate the UI could not
+reach.
+
+---
+
+## 3. Commits
+
+| | |
 | --- | --- |
-| `20260801000100_b4_can_scan_rate_limit.sql` | applied |
-| `20260801000200_b4_can_scan_unambiguous.sql` | applied — "Remote database is up to date" |
-| `extract-balanced` | deployed, boots (401 on unauthenticated POST) |
-| `extract` | deployed, boots |
-| `b4:backend`, `b4:app`, typecheck, lint | pass |
-| **a scan actually succeeding through can_scan** | **never happened** |
+| `ff98b78` | `can_scan` trusted a lock that may never have been taken |
+| `0af966e` | a scan charged before the model ran was not always given back |
+| `5fde28a` | captures failed, waited and rendered in ways the user could not read |
+| `50eca55` | run `can_scan` instead of grepping the migration for it |
+| `1d89694` | a scan refused for quota destroyed the user's photo |
+| `5fd7e0b` | retrying a blocked capture hid the row it was meant to recover |
 
-Commits: `1627c7a` (the feature), `e1310b8` (Balanced pre-check), `6f8cdd8`
-(the ambiguity fix). Nothing pushed to a remote.
+Nothing pushed. Both edge functions and the migration are deployed to staging.
 
-## 5. Next action
+---
 
-**Take one scan in Balanced mode on the device.**
+## 4. Tests
 
-- **It works** → the atomic charge and rate limit are live. Move to §6.
-- **It still says "Quota could not be verified"** → do not guess. Open the
-  Supabase dashboard → Edge Functions → `extract-balanced` → Logs, and find the
-  line beginning `[extract-balanced] quota check failed`. It carries the real
-  error. This CLI version (2.109.1) has **no `functions logs` command**, and the
-  direct database host does not resolve on the current network, so the dashboard
-  is the only window onto it.
+Three suites, and the distinction between them matters.
 
-## 6. Test checklist once a scan succeeds
+`npm run b4:db:verify` — **11 tests, 75 checks, no model calls.** Creates a
+throwaway user, drives every entitlement branch, the burst limit and the
+parallel race, deletes it. Wired into `b4:all` and into gate test **T4.3**,
+which was named `quota-idempotency` and had never executed a quota call.
 
-1. **Normal scan** — completes, and `scan_ledger` gains one `scan_used` row for
-   that capture id.
-2. **Photograph a wall or blank page** — the new Balanced pre-check warns
-   *before* the model runs, in well under a second.
-3. **Photograph a menu or bank statement** — gets past the pre-check, reaches
-   the model, comes back rejected, and a `refund` row appears in `scan_ledger`.
-4. **Thirteen scans inside a minute** — the thirteenth is throttled. Nothing
-   visible happens; it queues and retries. Watch Metro logs, not the screen.
-5. **Parallel race (untested, needs two devices or a script)** — two captures at
-   the same instant on a balance of 1 must produce exactly one charge. This is
-   the bug the row lock exists for and it has never been exercised.
+The race test was mutation-checked: against a copy of `can_scan` with the lock
+removed, six parallel captures on one credit produced **three charges and a
+balance of −2**. It fails when the thing it guards is broken.
+
+`npm run b4:http:verify` — 5 tests against the deployed function as a real
+signed-in user. **Not in the gate: two of them spend a model call.** Covers what
+the database suite cannot — that the edge function reaches `can_scan`, and that
+a verdict becomes the right status on the wire.
+
+`npm run b4:preflight` — the receipt heuristic as a pure function, possible only
+because the rule now has no imports. Real receipts must pass; blank frames,
+signage and a photographed keyboard must warn.
+
+Both live suites need `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_DB_URL` in
+`.env.staging` (gitignored). `can_scan` is granted to `service_role` only, by
+design; seeding goes over the direct connection because `service_role` here
+holds least privilege — `select` on `profiles` and `subscriptions`, nothing more
+— and widening those grants so tests could write would permanently enlarge what
+a leaked key can do, in production, to serve a test.
+
+### Device-verified
+
+Normal scans in both modes; the pre-check catching a blank frame and an order
+list while a **badly-lit real receipt still passed**; a rejection refunding; a
+throttled capture queueing, waiting the server's 60s and landing on its own; the
+blocked-quota path end to end (offline capture on an exhausted account,
+reconnect, "Out of scans" with its photo intact, recovered on a tap once the
+balance returned); and rapid One-click.
+
+---
+
+## 5. Still outstanding
+
+- **The live Grok golden/latency run and device mode runs** — per
+  `docs/B4-handover-2026-08-01.md`, these are what actually close the phase.
+  T4.2 and T4.5 are still named `source-readiness` and are still static.
+- From that document's §8: **4.4** (category lookup timing), **4.5**
+  (image-durability, two B3 assertions deliberately failing), **4.6** process
+  items, **8.3** single-device enforcement, **8.4** line-item sync.
+- **The model's `is_receipt` verdict is not deterministic.** The same passage of
+  prose was rejected on one run and accepted on the next. The on-device
+  pre-check is therefore the *deterministic* guard, not merely a cost saving —
+  worth remembering before anyone trims it.
+- **`auth.admin.deleteUser` returns a 500 for users that have receipts.** Every
+  foreign key cascades or nulls and a direct SQL delete works instantly, so the
+  cause is unexplained. The harnesses retry and fall back to SQL. It will matter
+  when account deletion is built.
+
+---
+
+## 6. Environment
+
+Corrections to the old §8, which was wrong twice:
+
+- **`db.wfboznibkhsfxteejxco.supabase.co` has no A record — only AAAA.** It is
+  IPv6-only and will never resolve from a host without IPv6, on any network.
+  This is not a local DNS fault.
+- **The region is `us-east-2`, and the pooler is `aws-1`, not `aws-0`.**
+  `SUPABASE_DB_URL` now points at
+  `postgresql://postgres.<ref>@aws-1-us-east-2.pooler.supabase.com:5432/postgres`
+  and `npm run supabase:staging:push` works directly.
+- `supabase functions logs` still does not exist in CLI 2.109.1; use the
+  dashboard.
+- `supabase storage rm` reports success and deletes nothing. Verify by listing.
+- Deploy order still matters: the migration lands before the functions.
+
+---
 
 ## 7. Rollback
 
-The database objects are **additive** — a new table and two functions. Nothing
-existing was altered or dropped. So rolling back is just redeploying the
-previous function code:
+Database objects are additive — one table, two functions, and a
+`create or replace` that changed no signature. Rolling back is reverting the
+commits and redeploying:
 
 ```bash
-git revert 6f8cdd8 1627c7a          # leaves the Balanced pre-check in place
+git revert 5fd7e0b 1d89694 50eca55 5fde28a 0af966e ff98b78
 supabase functions deploy extract-balanced --project-ref wfboznibkhsfxteejxco
 supabase functions deploy extract --project-ref wfboznibkhsfxteejxco
 ```
 
-`can_scan`, `refund_scan` and `scan_attempts` can stay — unused, they cost
-nothing. Note that reverting also restores the old post-model debit, so any scan
-charged by `can_scan` in the meantime would be charged again by the old code
-path; on staging with a test account that does not matter.
-
-## 8. Environment gotchas that cost time
-
-- **`db.wfboznibkhsfxteejxco.supabase.co` does not resolve** on the current
-  network (Mac at `192.168.1.103`). It resolved earlier from a different
-  network. The `supabase` CLI connects fine through its own routing, so
-  `db push` works; a direct `pg` client does not. The pooler host resolves but
-  `postgres.wfboznibkhsfxteejxco` is rejected as a tenant on `ap-south-1`, so
-  the region is something else.
-- **`supabase functions logs` does not exist** in CLI 2.109.1. Use the
-  dashboard.
-- **`supabase storage rm` reports success and deletes nothing.** Verify storage
-  deletions by listing afterwards.
-- **Deploy order matters.** The functions call `can_scan`, so the migration must
-  land first or scanning breaks in the window between.
-
-## 9. Still outstanding, unrelated to whether this works
-
-- **The device needs rebuilding.** It runs a build from before all of this, so
-  it has neither the Balanced pre-check nor the earlier sync fixes.
-- **Delete the app before reinstalling.** It holds ~24 receipts that no longer
-  exist on staging (that data was cleared with a hard `DELETE`, which leaves no
-  tombstones for sync to act on). They will not go away on their own.
-- Remaining B4 items are in `docs/B4-handover-2026-08-01.md` §8 — chiefly the
-  live Grok golden/latency run and device mode runs, which are what actually
-  close the phase.
+Note that reverting `0af966e` restores exits that charge without refunding, and
+reverting `1d89694` restores the silent deletion of a refused capture's photo.
+Prefer fixing forward.
