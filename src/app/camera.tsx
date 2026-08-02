@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, AppState, Linking, Pressable, StyleSheet, Tex
 import { type Href, useIsFocused, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import {
   Camera,
   useCameraDevice,
@@ -48,7 +48,7 @@ import { checkQuotaGate, refreshQuota } from '@/lib/receipts/quota';
 import * as store from '@/lib/receipts/store';
 import type { CaptureMode, DuplicateCandidate, ExtractionMode, LocalDuplicateCandidate, ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
-import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
+import { fontFamily, radius, spacing } from '@/theme/tokens';
 
 type Mode = 'default' | 'oneclick';
 const PRECISE_SCREEN_VISIBLE_DEADLINE_MS = 4500;
@@ -61,6 +61,15 @@ const OFFLINE_QUEUED_TITLE = 'No network connection';
 const OFFLINE_QUEUED_BODY =
   "Your receipt is saved. We'll process it automatically once you're back online, and it will appear in Recents when it's ready.";
 const OFFLINE_QUEUED_TOAST = "Saved — we'll process it when you're back online";
+/**
+ * Every other reason a capture queues: throttled, a timeout, a 5xx, a slow
+ * model. The user is told the photo is safe and nothing else — the cause is our
+ * policy, not their problem, and naming it ("rate limited") reads as a
+ * punishment for using the app. Without this the only sign was a 1.8s spinner
+ * whose explanation was stripped outside __DEV__, so a release build said
+ * nothing at all; the raw reason still reaches Metro from capture.ts.
+ */
+const QUEUED_RETRY_TOAST = "Saved — we're still reading this one";
 
 function waitForVisibleDeadline(ms: number): Promise<'visible_deadline'> {
   return new Promise((resolve) => {
@@ -73,7 +82,9 @@ function waitForVisibleDeadline(ms: number): Promise<'visible_deadline'> {
  *  idle       — live camera
  *  review     — Default: frozen frame + card (loading → fields)
  *  working    — Precise: the server has been asked, nothing claimed yet
- *  processing — /extract never landed; the image is queued and will retry
+ *
+ * A queued capture has no phase of its own: it is a toast over a live camera,
+ * because there is nothing left on screen for the user to wait on.
  */
 type Phase =
   | { k: 'idle' }
@@ -91,8 +102,7 @@ type Phase =
        * later on slower captures.
        */
       startedAt: number;
-    }
-  | { k: 'processing'; reason?: string };
+    };
 
 const FOLDER_W = 82;
 
@@ -138,7 +148,16 @@ function ExtractionModeToggle({
   );
 }
 
-function showNotReceiptAlert(message = 'This image does not look like a receipt, invoice, or bill.'): void {
+/**
+ * Covers both ways a scan comes back with nothing: the photo was not a receipt,
+ * or it was one whose amounts did not survive the capture. The user cannot tell
+ * those apart and does not need to — the action is the same, and either way the
+ * scan is refunded, which is worth saying so a failed scan does not feel like a
+ * charge.
+ */
+function showNotReceiptAlert(
+  message = 'No amounts could be read from this image. If it is a receipt, retake it with the totals in frame — this scan has not been counted against your balance.',
+): void {
   Alert.alert('Could not read a receipt', message, [{ text: 'OK' }]);
 }
 
@@ -194,6 +213,20 @@ export default function CameraScreen() {
   const digest = useSharedValue(1);
   const folderIn = useSharedValue(0);
   const abortRef = useRef<AbortController | null>(null);
+  /**
+   * One-click captures run concurrently, so they cannot share abortRef — that
+   * one belongs to the Default review card, where Retake genuinely means
+   * "cancel the thing on screen". Sharing it made every new shot abort the
+   * previous one, which is half of why five rapid scans were impossible.
+   */
+  const oneClickAborts = useRef(new Set<AbortController>());
+  useEffect(() => {
+    const inFlight = oneClickAborts.current;
+    return () => {
+      inFlight.forEach((ac) => ac.abort());
+      inFlight.clear();
+    };
+  }, []);
   const referralPromptChecked = useRef(false);
   const balancedWarmupAt = useRef(0);
   const preciseWarmupAt = useRef(0);
@@ -317,13 +350,6 @@ export default function CameraScreen() {
       withSpring(1, { damping: 9, stiffness: 220 }),
     );
   }, [digest]);
-
-  const showProcessing = useCallback((reason?: string) => {
-    setPhase({ k: 'processing', reason: __DEV__ ? reason : undefined });
-    setTimeout(() => {
-      setPhase((prev) => (prev.k === 'processing' ? { k: 'idle' } : prev));
-    }, 1800);
-  }, []);
 
   /**
    * A scan queued because the device is offline. The capture is safe and the
@@ -472,14 +498,22 @@ export default function CameraScreen() {
           warning.confidence === 'low'
             ? 'We could not find enough receipt-like text or amounts in this image.'
             : 'This image has weak receipt signals, so extraction may be inaccurate.';
+        // Clear the frame as the alert dismisses rather than waiting for the
+        // outcome to travel back up to handleDefaultCaptureOutcome: that lands a
+        // frame or two later, so the overlay was revealed on the way out and
+        // declining flashed the very thing the user had just declined.
+        const cancel = () => {
+          setPhase({ k: 'idle' });
+          resolve('cancel');
+        };
         Alert.alert(
           'This may not be a receipt',
           `${detail}\n\nContinue anyway if the receipt is handwritten, blurry, or unusual.`,
           [
-            { text: 'Retake', style: 'cancel', onPress: () => resolve('cancel') },
+            { text: 'Retake', style: 'cancel', onPress: cancel },
             { text: 'Continue Anyway', onPress: () => resolve('continue') },
           ],
-          { cancelable: true, onDismiss: () => resolve('cancel') },
+          { cancelable: true, onDismiss: cancel },
         );
       }),
     [],
@@ -534,7 +568,7 @@ export default function CameraScreen() {
       if (out.kind === 'extracted') {
         if (out.row.extractionMode === 'precise') {
           setPhase((prev) =>
-            prev.k === 'review' || prev.k === 'processing' || prev.k === 'working' ? { k: 'idle' } : prev,
+            prev.k === 'review' || prev.k === 'working' ? { k: 'idle' } : prev,
           );
           flashNotice('Receipt saved to Recents');
           return;
@@ -566,10 +600,13 @@ export default function CameraScreen() {
         // Offline is the one queue reason we can name, and it applies to both
         // modes — Precise previously showed nothing at all here.
         if (out.offline) showQueuedOfflineNotice();
-        // Precise clears the working overlay instead: its "still going" message
-        // belongs to the visible deadline, not to every queued outcome.
-        else if (out.row.extractionMode !== 'precise') showProcessing(out.reason);
-        else setPhase((prev) => (prev.k === 'working' ? { k: 'idle' } : prev));
+        else {
+          // Precise clears its working overlay first; both modes then say the
+          // same thing, because to the user they are the same outcome.
+          if (out.row.extractionMode === 'precise') setPhase((prev) => (prev.k === 'working' ? { k: 'idle' } : prev));
+          else setPhase({ k: 'idle' });
+          flashNotice(QUEUED_RETRY_TOAST);
+        }
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
             if (__DEV__) console.log('[camera] queued deferred outcome ready', { kind: finalOut.kind });
@@ -578,7 +615,7 @@ export default function CameraScreen() {
         }
       }
     },
-    [flashNotice, showDuplicateCandidatePrompt, showProcessing, showQueuedOfflineNotice, showQuotaExhaustedAlert],
+    [flashNotice, showDuplicateCandidatePrompt, showQueuedOfflineNotice, showQuotaExhaustedAlert],
   );
 
   const handleOneClickCaptureOutcome = useCallback(
@@ -617,11 +654,8 @@ export default function CameraScreen() {
           showQueuedOfflineNotice();
           return;
         }
-        if (out.row.extractionMode !== 'precise') {
-          showProcessing(out.reason);
-          return;
-        }
         setPhase({ k: 'idle' });
+        flashNotice(QUEUED_RETRY_TOAST);
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
             if (__DEV__) console.log('[camera] one-click precise deferred outcome ready', { kind: finalOut.kind });
@@ -635,22 +669,86 @@ export default function CameraScreen() {
       flashNotice,
       popFolder,
       showDuplicateCandidatePrompt,
-      showProcessing,
       showQueuedOfflineNotice,
       showQuotaExhaustedAlert,
     ],
   );
 
+  /**
+   * A One-click capture, run detached from the shutter.
+   *
+   * One-click shows no card and has already told the user the receipt will turn
+   * up in Recents, so there is nothing on screen for them to wait on — holding
+   * the shutter until the model answers bought nothing and made five rapid
+   * scans impossible. Each capture carries its own AbortController so shots do
+   * not cancel one another.
+   */
+  const runOneClickCapture = useCallback(
+    async (uri: string, ac: AbortController, startedAt: number) => {
+      const outPromise = processCapture(uri, 'one_click', extractionMode, {
+        defaultCurrency,
+        userId: auth.user?.id,
+        signal: ac.signal,
+        onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
+        onPreflightWarning: promptPreflightWarning,
+        onPrecisePreflightAccepted: showPreciseWorking,
+      });
+      const out =
+        extractionMode === 'precise'
+          ? await Promise.race([outPromise, waitForVisibleDeadline(PRECISE_SCREEN_VISIBLE_DEADLINE_MS)])
+          : await outPromise;
+
+      if (out === 'visible_deadline') {
+        showPreciseProcessingAlert();
+        void outPromise
+          .then((lateOut) => {
+            if (lateOut.kind === 'queued' && lateOut.offline) {
+              showQueuedOfflineNotice(true);
+              return;
+            }
+            handleOneClickCaptureOutcome(lateOut, uri, startedAt);
+          })
+          .catch((error) => {
+            if (__DEV__) console.warn('[camera] one-click precise background capture stayed queued', error instanceof Error ? error.message : String(error));
+          });
+        return;
+      }
+      handleOneClickCaptureOutcome(out, uri, startedAt);
+    },
+    [
+      auth.user?.id,
+      defaultCurrency,
+      extractionMode,
+      handleOneClickCaptureOutcome,
+      promptLocalDuplicateCandidate,
+      promptPreflightWarning,
+      showPreciseProcessingAlert,
+      showPreciseWorking,
+      showQueuedOfflineNotice,
+    ],
+  );
+
   const onCapture = async () => {
     if (!cameraRef.current || busy) return;
-    // Before the shutter fires: no photo, no upload, no model call when the
-    // account is already out of scans.
-    if (!(await passesQuotaGate())) return;
     const startedAt = Date.now(); // the shutter moment — see Phase.startedAt
+    // Idempotent: One-click frees the shutter early, and the finally must not
+    // then clear a flag a later capture has since taken.
+    let shutterHeld = true;
+    const releaseShutter = () => {
+      if (!shutterHeld) return;
+      shutterHeld = false;
+      busyRef.current = false;
+      setBusy(false);
+    };
     try {
       setBusy(true);
       setWakeEarly(false); // a new scan re-arms the gate
       busyRef.current = true;
+      // Before the shutter fires: no photo, no upload, no model call when the
+      // account is already out of scans. Inside the try because a throw here
+      // used to reject onCapture itself — an unhandled rejection, which on the
+      // device looks exactly like the tap never registered.
+      if (!(await passesQuotaGate())) return;
       if (extractionMode === 'precise') extractClient.warmUpPrecise?.();
       // VisionCamera hands back a native Photo object rather than a URI. Spill
       // it to a temp file for the pipeline, then dispose — the underlying
@@ -661,11 +759,30 @@ export default function CameraScreen() {
       const photo = { uri: path.startsWith('file://') ? path : `file://${path}` };
       if (!photo.uri) return;
 
+      if (mode !== 'default') {
+        // The photo exists; that is all the shutter was ever waiting for.
+        const oneClickAc = new AbortController();
+        oneClickAborts.current.add(oneClickAc);
+        releaseShutter();
+        void runOneClickCapture(photo.uri, oneClickAc, startedAt)
+          .catch((error) => {
+            console.warn('[capture] one-click failed', error);
+            flashNotice("That didn't go through — try again");
+          })
+          .finally(() => {
+            oneClickAborts.current.delete(oneClickAc);
+            setTimeout(flushBackgroundQueues, 600);
+          });
+        return;
+      }
+
+      // Default keeps one in flight: there is a card on screen, and Retake
+      // means cancel that card's capture.
       abortRef.current?.abort();
       const ac = new AbortController();
       abortRef.current = ac;
 
-      if (mode === 'default') {
+      {
         if (extractionMode === 'balanced') {
           // Card appears immediately as a skeleton; fields fill in when they land.
           setPhase({ k: 'review', photoUri: photo.uri, rowId: null, fields: null, loading: true, startedAt });
@@ -722,45 +839,18 @@ export default function CameraScreen() {
           return;
         }
         handleDefaultCaptureOutcome(out, photo.uri, startedAt);
-      } else {
-        // One-click: no card. The folder digests it and you shoot again.
-        const outPromise = processCapture(photo.uri, toCaptureMode(mode), extractionMode, {
-          defaultCurrency,
-          userId: auth.user?.id,
-          signal: ac.signal,
-          onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, photo.uri, startedAt),
-          onPreflightWarning: promptPreflightWarning,
-          onPrecisePreflightAccepted: showPreciseWorking,
-        });
-        const out =
-          extractionMode === 'precise'
-            ? await Promise.race([outPromise, waitForVisibleDeadline(PRECISE_SCREEN_VISIBLE_DEADLINE_MS)])
-            : await outPromise;
-
-        if (out === 'visible_deadline') {
-          showPreciseProcessingAlert();
-          void outPromise
-            .then((lateOut) => {
-              if (lateOut.kind === 'queued' && lateOut.offline) {
-                showQueuedOfflineNotice(true);
-                return;
-              }
-              handleOneClickCaptureOutcome(lateOut, photo.uri, startedAt);
-            })
-            .catch((error) => {
-              if (__DEV__) console.warn('[camera] one-click precise background capture stayed queued', error instanceof Error ? error.message : String(error));
-            });
-          return;
-        }
-        handleOneClickCaptureOutcome(out, photo.uri, startedAt);
       }
     } catch (e) {
       console.warn('[capture] failed', e);
-      // An unexpected throw must not strand the working overlay over a live camera.
-      setPhase((prev) => (prev.k === 'working' ? { k: 'idle' } : prev));
+      // Only 'working' was reset here, which is the Precise overlay. In Balanced
+      // the skeleton card is not set until after the photo is taken, so a throw
+      // before that — the camera session, the temp-file spill — left the screen
+      // exactly as it was: no card, no alert, nothing to say the shutter had
+      // even fired, and the only trace in a console the user cannot see.
+      setPhase({ k: 'idle' });
+      flashNotice("That didn't go through — try again");
     } finally {
-      busyRef.current = false;
-      setBusy(false);
+      releaseShutter();
       setTimeout(flushBackgroundQueues, 600);
     }
   };
@@ -1071,15 +1161,6 @@ export default function CameraScreen() {
         </View>
       )}
 
-      {phase.k === 'processing' && (
-        <View style={styles.processing}>
-          <Text style={styles.processingText}>Your receipt is being processed</Text>
-          {phase.reason && <Text style={styles.processingReason}>{phase.reason}</Text>}
-          <View style={styles.check}>
-            <Feather name="check" size={22} color="#fff" />
-          </View>
-        </View>
-      )}
     </View>
   );
 }
@@ -1173,19 +1254,4 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
   processingText: { color: '#fff', fontFamily: fontFamily.semibold, fontSize: 17 },
-  processingReason: {
-    maxWidth: '82%',
-    color: 'rgba(255,255,255,0.78)',
-    fontSize: 12,
-    lineHeight: 16,
-    textAlign: 'center',
-  },
-  check: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 });

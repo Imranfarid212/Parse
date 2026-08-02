@@ -16,6 +16,7 @@ import {
   extractClient,
   getCaptureAttempts,
   getExtractErrorCode,
+  getExtractRetryAfterMs,
   imageBackupClient,
   toReceiptFields,
   type CaptureMetricsPayload,
@@ -24,6 +25,11 @@ import {
   type ExtractVisibleDeadlineAck,
 } from '@/lib/receipts/client';
 import { isTransientNetworkError } from '@/lib/network/retry';
+import {
+  scoreReceiptPreflight,
+  type PreflightDecision,
+  type PreflightWarning,
+} from '@/lib/receipts/preflight';
 import { applyServerQuota } from '@/lib/receipts/quota';
 import * as store from '@/lib/receipts/store';
 import {
@@ -139,6 +145,24 @@ async function localFileExists(uri: string): Promise<boolean> {
 }
 
 const nextBackoffMs = (attempts: number) => Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.max(0, attempts - 1));
+/** If the server sent a 429 without a retry_after_s, assume its stated window. */
+const RATE_LIMIT_FALLBACK_MS = 60_000;
+
+/**
+ * How long to wait when a capture was throttled rather than failed, or null if
+ * this was not a throttle.
+ *
+ * A rate limit is "not now", not "not ever". It used to be indistinguishable
+ * from a real failure: the client ignored retry_after_s, retried after a second,
+ * and each refusal spent one of five attempts — so a capture could reach
+ * llm_failed_final in under fifteen seconds over a limit that clears in sixty.
+ * That is the opposite of why the server answers 429 rather than 402.
+ */
+function throttleRetryMs(error: unknown): number | null {
+  if (getExtractErrorCode(error) !== 'RATE_LIMITED') return null;
+  return getExtractRetryAfterMs(error) ?? RATE_LIMIT_FALLBACK_MS;
+}
+
 const nextBackoffWithJitterMs = (attempts: number) => {
   const base = nextBackoffMs(attempts);
   return Math.round(base * (0.75 + Math.random() * 0.5));
@@ -260,34 +284,11 @@ function draftFromOcr(text: string, defaultCurrency: string): ReceiptFields | nu
 }
 
 export type LocalDuplicateDecision = 'view_existing' | 'save_anyway';
-export type PreflightDecision = 'continue' | 'cancel';
-export type PreflightWarning = {
-  confidence: 'low' | 'uncertain';
-  textLength: number;
-  amountCount: number;
-  keywordCount: number;
-  hasDocument: boolean;
-  timedOut: boolean;
-};
 
-function scoreReceiptPreflight(text: string | null, hasDocument: boolean, timedOut: boolean): PreflightWarning | null {
-  const normalized = text ?? '';
-  const amountCount = [...normalized.matchAll(/(?:rs\.?|inr|₹|\$|cad|usd)?\s*\d{1,7}(?:[.,]\d{2})/gi)].length;
-  const keywordCount = [...normalized.matchAll(/\b(receipt|invoice|bill|total|subtotal|tax|gst|vat|paid|cash|card|debit|credit|amount|qty|item|change|balance)\b/gi)].length;
-  const textLength = normalized.trim().length;
-  const likelyReceipt = amountCount >= 2 || (amountCount >= 1 && keywordCount >= 1) || keywordCount >= 3;
-  if (likelyReceipt) return null;
-  if (!hasDocument && textLength < 40) {
-    return { confidence: 'low', textLength, amountCount, keywordCount, hasDocument, timedOut };
-  }
-  if (textLength < 80 && amountCount === 0 && keywordCount === 0) {
-    return { confidence: 'low', textLength, amountCount, keywordCount, hasDocument, timedOut };
-  }
-  if (textLength < 180 && amountCount === 0 && keywordCount <= 1) {
-    return { confidence: 'uncertain', textLength, amountCount, keywordCount, hasDocument, timedOut };
-  }
-  return null;
-}
+// Re-exported so camera.tsx and anything else already importing these from the
+// capture pipeline keeps working; the rule itself lives in a dependency-free
+// module so it can be tested without a device.
+export type { PreflightDecision, PreflightWarning };
 
 export type CaptureOutcome =
   | {
@@ -749,7 +750,14 @@ export async function processCapture(
     logLatency('extract_failed_queued', { reason });
     if (__DEV__) console.warn('[capture] extract queued', reason);
     await store.setStatus(row.id, 'llm_failed_retryable');
-    await store.markRetry(row.id, 1, Date.now() + nextBackoffWithJitterMs(1));
+    // A throttle leaves the attempt count alone: it did not fail, it was not
+    // served, and spending the budget on it is what killed these captures.
+    const throttleMs = throttleRetryMs(error);
+    await store.markRetry(
+      row.id,
+      throttleMs == null ? 1 : row.attempts,
+      Date.now() + (throttleMs ?? nextBackoffWithJitterMs(1)),
+    );
     return { kind: 'queued', row, reason: __DEV__ ? reason : undefined, offline: isOfflineError(error), attempts };
   }
 }
@@ -1042,6 +1050,16 @@ async function dispatchPending(): Promise<number> {
         continue;
       }
       if (__DEV__) console.warn('[capture] retry queued', describeError(error));
+      // Throttled, not failed. Wait exactly as long as the server asked, and
+      // never let it reach a terminal state — the window always clears, so a
+      // capture that is merely too early must not become "could not be
+      // processed".
+      const throttleMs = throttleRetryMs(error);
+      if (throttleMs != null) {
+        await store.setStatus(row.id, 'llm_failed_retryable');
+        await store.markRetry(row.id, row.attempts, Date.now() + throttleMs);
+        break;
+      }
       const attempts = row.attempts + 1;
       if (attempts >= MAX_EXTRACT_ATTEMPTS) {
         await store.markFinalFailure(row.id, 'llm_failed_final');

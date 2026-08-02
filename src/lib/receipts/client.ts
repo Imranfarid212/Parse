@@ -170,6 +170,8 @@ type ExtractFunctionPayload = {
   code?: 'PROVIDER_DELAY' | string;
   error?: string;
   message?: string;
+  /** A 429 carries the server's own "come back in N seconds". */
+  retry_after_s?: number;
   model_parse_stage?: string;
   model_preview?: string;
   model_preview_length?: number;
@@ -276,6 +278,16 @@ export function getExtractErrorCode(error: unknown): string | null {
     return (error as Error & { code: string }).code;
   }
   return null;
+}
+
+/**
+ * A 429 carries the server's own "come back in N seconds". Scheduling anything
+ * shorter is a call guaranteed to be refused, which is exactly how a throttled
+ * capture used to burn its retry budget and die before the window even cleared.
+ */
+export function getExtractRetryAfterMs(error: unknown): number | null {
+  const seconds = error instanceof Error ? (error as Error & { retryAfterS?: unknown }).retryAfterS : undefined;
+  return typeof seconds === 'number' && seconds > 0 ? seconds * 1000 : null;
 }
 
 function errorWithAttempts(message: string, attempts: CaptureAttemptTrace[]) {
@@ -624,9 +636,14 @@ export const supabaseExtractClient: ExtractClient = {
 
           const message = attemptData?.message ?? attemptData?.error ?? attemptData?.code ?? `extract failed (${attemptResponse.status})`;
           trace.error_message = message;
-          const error = errorWithAttempts(message, attempts) as Error & { statusCode?: number; code?: string };
+          const error = errorWithAttempts(message, attempts) as Error & {
+            statusCode?: number;
+            code?: string;
+            retryAfterS?: number;
+          };
           error.statusCode = attemptResponse.status;
           error.code = attemptData?.code;
+          error.retryAfterS = attemptData?.retry_after_s;
           if (!isRetryableBalancedStatus(attemptResponse.status)) {
             terminalHttpError = error;
           }
@@ -779,9 +796,11 @@ export const supabaseExtractClient: ExtractClient = {
         const error = new Error(data?.message ?? data?.error ?? data?.code ?? `extract failed (${response.status})`) as Error & {
           statusCode?: number;
           code?: string;
+          retryAfterS?: number;
         };
         error.statusCode = response.status;
         error.code = data?.code;
+        error.retryAfterS = data?.retry_after_s;
         throw error;
       }
       if (!data) throw new Error('extract returned no data');
