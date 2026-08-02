@@ -685,6 +685,38 @@ export async function findLocalDuplicateCandidate(
   return null;
 }
 
+/**
+ * Put a blocked or permanently failed capture back in the queue.
+ *
+ * The photo was kept precisely so this is possible: the row goes back to
+ * pending_extract with a cleared attempt count, and the next drain picks it up
+ * like any other pending scan.
+ */
+export async function requeueForExtract(id: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE receipts SET status = 'pending_extract', attempts = 0, next_retry_at = 0, updated_at = ? WHERE id = ?",
+    [Date.now(), id],
+  );
+}
+
+/**
+ * Captures the user can still act on but hasn't, past their keep-by date.
+ *
+ * Keeping a blocked capture's photo is what makes it recoverable, and is also
+ * why something has to expire it — otherwise the capture directory grows
+ * forever for anyone who never upgrades. Returned rather than deleted here so
+ * the caller can remove the files too.
+ */
+export async function listAbandoned(olderThanMs: number): Promise<ReceiptRow[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<Persisted>(
+    "SELECT * FROM receipts WHERE status IN ('blocked_quota', 'llm_failed_final') AND updated_at <= ? ORDER BY updated_at ASC",
+    [Date.now() - olderThanMs],
+  );
+  return rows.map(hydrate);
+}
+
 /** Scans whose extraction never landed — the retry queue's work list. */
 export async function listPendingExtract(): Promise<ReceiptRow[]> {
   const db = await getDb();

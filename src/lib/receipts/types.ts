@@ -100,6 +100,14 @@ export type ReceiptStatus =
   | 'llm_processing'
   | 'llm_failed_retryable'
   | 'llm_failed_final'
+  /**
+   * Refused for quota. Terminal for the retry queue — retrying cannot conjure
+   * scans — but recoverable by the user, unlike llm_failed_final: the capture
+   * and its photo are kept so upgrading makes it scannable again. Previously
+   * this deleted both, which after offline capture became possible with nobody
+   * watching.
+   */
+  | 'blocked_quota'
   | 'user_confirmation_pending'
   | 'extracted'
   | 'confirmed_local'

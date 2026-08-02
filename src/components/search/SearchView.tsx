@@ -15,6 +15,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { GRAY, Toggle } from '@/components/menu/primitives';
 import { FanCarousel, type FanItem } from '@/components/search/FanCarousel';
 import { SleuthDog } from '@/components/search/SleuthDog';
+import { retryBlockedCapture } from '@/lib/receipts/capture';
 import { listRecent } from '@/lib/receipts/store';
 import type { ReceiptRow, ReceiptStatus } from '@/lib/receipts/types';
 import { colors, radius, spacing, typography } from '@/theme/tokens';
@@ -30,6 +31,14 @@ const IN_FLIGHT_STATUSES = new Set<ReceiptStatus>([
 ]);
 
 const REFRESH_WHILE_IN_FLIGHT_MS = 2_500;
+
+/**
+ * Rows that are going nowhere on their own but still hold the user's photo, so
+ * there has to be a way back. Without an action these read as a dead end — and
+ * blocked_quota used to be worse than a dead end: the capture was deleted
+ * outright, with nothing shown.
+ */
+const ACTIONABLE_STATUSES = new Set<ReceiptStatus>(['blocked_quota', 'llm_failed_final']);
 
 const formatTotal = (row: ReceiptRow) => {
   const fields = row.fields;
@@ -64,6 +73,7 @@ const STATUS_LABELS: Record<ReceiptStatus, string> = {
   llm_processing: 'Processing…',
   llm_failed_retryable: 'Waiting to retry',
   llm_failed_final: 'Could not be processed',
+  blocked_quota: 'Out of scans',
   user_confirmation_pending: 'Needs review',
   extracted: 'Needs review',
   confirmed_local: 'Saved',
@@ -123,7 +133,7 @@ const searchableText = (row: ReceiptRow) =>
     .join(' ')
     .toLowerCase();
 
-export function SearchView() {
+export function SearchView({ onOpenPlan }: { onOpenPlan?: () => void } = {}) {
   const { width } = useWindowDimensions();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'card' | 'list'>('card');
@@ -151,6 +161,19 @@ export function SearchView() {
       if (aliveRef.current) setLoaded(true);
     }
   }, []);
+
+  /**
+   * Hand a blocked or failed capture back to the queue and re-read, so the row
+   * visibly moves to "Waiting to retry" rather than looking like nothing
+   * happened. The photo is still on the device; that is what makes this work.
+   */
+  const onRetryRow = useCallback(
+    async (id: string) => {
+      await retryBlockedCapture(id);
+      await reload();
+    },
+    [reload],
+  );
 
   useEffect(() => {
     void reload(true);
@@ -267,7 +290,14 @@ export function SearchView() {
         ) : (
           <ScrollView style={{ alignSelf: 'stretch' }} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
             {results.map((row) => (
-              <ReceiptListRow key={row.id} row={row} similarDedupeKeys={similarDedupeKeys} softSimilarKeys={softSimilarKeys} />
+              <ReceiptListRow
+                key={row.id}
+                row={row}
+                similarDedupeKeys={similarDedupeKeys}
+                softSimilarKeys={softSimilarKeys}
+                onRetry={onRetryRow}
+                onUpgrade={onOpenPlan}
+              />
             ))}
           </ScrollView>
         )}
@@ -280,12 +310,17 @@ function ReceiptListRow({
   row,
   similarDedupeKeys,
   softSimilarKeys,
+  onRetry,
+  onUpgrade,
 }: {
   row: ReceiptRow;
   similarDedupeKeys: Set<string>;
   softSimilarKeys: Set<string>;
+  onRetry: (id: string) => void;
+  onUpgrade?: () => void;
 }) {
   const badge = duplicateBadgeLabel(row, similarDedupeKeys) ?? (softSimilarKeys.has(softSimilarGroupKey(row) ?? '') ? 'Similar receipt' : null);
+  const actionable = ACTIONABLE_STATUSES.has(row.status);
   return (
     <View style={styles.listRow}>
       <View style={styles.listIcon}>
@@ -301,6 +336,18 @@ function ReceiptListRow({
           )}
         </View>
         <Text style={styles.listMeta} numberOfLines={1}>{receiptMeta(row)}</Text>
+        {actionable && (
+          <View style={styles.actionRow}>
+            {row.status === 'blocked_quota' && onUpgrade && (
+              <Pressable style={styles.actionPrimary} onPress={onUpgrade} hitSlop={6}>
+                <Text style={styles.actionPrimaryText}>Upgrade</Text>
+              </Pressable>
+            )}
+            <Pressable style={styles.action} onPress={() => onRetry(row.id)} hitSlop={6}>
+              <Text style={styles.actionText}>Try again</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
       <Text style={styles.listTotal}>{formatTotal(row)}</Text>
     </View>
@@ -309,6 +356,23 @@ function ReceiptListRow({
 
 const styles = StyleSheet.create({
   root: { flex: 1, alignItems: 'center' },
+
+  actionRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+  action: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  actionText: { fontFamily: typography.button.fontFamily, fontSize: 12, color: colors.textPrimary },
+  actionPrimary: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    backgroundColor: colors.textPrimary,
+  },
+  actionPrimaryText: { fontFamily: typography.button.fontFamily, fontSize: 12, color: colors.background },
 
   headerRow: {
     flexDirection: 'row',

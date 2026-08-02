@@ -56,6 +56,7 @@ if (/EXPO_PUBLIC_.*XAI|EXPO_PUBLIC_.*GROK|sk-[A-Za-z0-9]/.test(client + capture 
 // photo, the upload and the model. Advisory only — the server still enforces.
 const quota = read('src/lib/receipts/quota.ts');
 const camera = read('src/app/camera.tsx');
+const search = read('src/components/search/SearchView.tsx');
 
 includes(quota, "from '@/../packages/contracts/src/quota'", 'client uses the shared quota rule');
 includes(quota, 'decideQuota(', 'client decides with the shared rule');
@@ -88,6 +89,23 @@ includes(camera, 'oneClickAborts.current.add(oneClickAc)', 'each One-click captu
 order(camera, 'releaseShutter();', 'void runOneClickCapture(', 'One-click frees the shutter before the scan runs');
 if (/void runOneClickCapture\([\s\S]{0,200}abortRef/.test(camera)) {
   fail('One-click must not share abortRef; a new shot would cancel the previous capture');
+}
+
+// A quota rejection used to delete the row and the photo. That was defensible
+// only while it could not happen without the user watching — offline capture
+// removed that, so a receipt photographed offline was destroyed the moment
+// connectivity returned on an exhausted account, with nothing shown at any
+// point. It is kept and listed as blocked now, and never auto-retried.
+includes(capture, "markFinalFailure(row.id, 'blocked_quota')", 'a quota rejection blocks the capture rather than deleting it');
+if (/QUOTA_EXHAUSTED'\)\s*\{[\s\S]{0,400}?deleteLocalFile/.test(capture)) {
+  fail("a quota rejection must not delete the user's photo");
+}
+includes(capture, 'export async function retryBlockedCapture', 'a blocked capture can be handed back to the queue');
+includes(capture, 'export async function purgeAbandonedCaptures', 'kept photos expire instead of accumulating forever');
+includes(search, "blocked_quota: 'Out of scans'", 'a blocked capture is labelled, not silently absent');
+includes(search, 'retryBlockedCapture(id)', 'the list offers a way back');
+if (/'blocked_quota'/.test(read('src/lib/receipts/store.ts').match(/listPendingExtract[\s\S]{0,400}/)?.[0] ?? '')) {
+  fail('blocked captures must stay out of the retry queue; retrying cannot conjure scans');
 }
 
 console.log('[b4:app] rejected/non-receipt UX and secret-boundary checks passed');

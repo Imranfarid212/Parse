@@ -14,7 +14,7 @@ import {
   InstrumentSans_600SemiBold_Italic,
 } from '@expo-google-fonts/instrument-sans';
 import { AuthProvider } from '@/lib/auth/auth-context';
-import { retryPending } from '@/lib/receipts/capture';
+import { purgeAbandonedCaptures, retryPending } from '@/lib/receipts/capture';
 import { colors } from '@/theme/tokens';
 
 SplashScreen.preventAutoHideAsync();
@@ -54,6 +54,10 @@ export default function RootLayout() {
     const start = () => {
       if (ticking.current) return;
       void retryPending();
+      // Blocked and failed captures keep their photo so the user can act on
+      // them; this is what stops that becoming an unbounded pile. Once per
+      // foreground, not per tick — nothing here changes in twenty seconds.
+      void purgeAbandonedCaptures();
       ticking.current = setInterval(() => void retryPending(), RETRY_TICK_MS);
     };
     const stop = () => {

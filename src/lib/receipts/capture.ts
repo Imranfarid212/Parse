@@ -655,9 +655,7 @@ export async function processCapture(
         })
         .catch(async (error): Promise<CaptureOutcome> => {
           if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
-            await store.remove(row.id);
-            await deleteLocalFile(durableImageUri);
-            void durableImagePromise?.then(deleteLocalFile);
+            await store.markFinalFailure(row.id, 'blocked_quota');
             return { kind: 'quota_exhausted', row };
           }
           if (__DEV__) console.warn('[capture] visible-deadline request stayed queued', describeError(error));
@@ -740,11 +738,12 @@ export async function processCapture(
     });
     if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
       // Retrying can't fix "out of scans" — treat it as a verdict, not a transient
-      // failure, so it never enters the backoff/retry queue.
+      // failure, so it never enters the backoff/retry queue. But it is the user's
+      // photo: it is kept, and listed as blocked, so upgrading makes it scannable
+      // rather than making them take it again. Deleting it here was defensible
+      // only while it could not happen without the user watching.
       logLatency('extract_quota_exhausted', {});
-      await store.remove(row.id);
-      await deleteLocalFile(durableImageUri);
-      void durableImagePromise?.then(deleteLocalFile);
+      await store.markFinalFailure(row.id, 'blocked_quota');
       return { kind: 'quota_exhausted', row };
     }
     logLatency('extract_failed_queued', { reason });
@@ -958,6 +957,49 @@ async function dispatchCaptureMetrics(): Promise<number> {
  * Re-drive scans whose extraction never landed. Called on reconnect.
  * Returns how many rows advanced past `pending_extract`.
  */
+/**
+ * How long a blocked or failed capture is kept before its photo is discarded.
+ *
+ * Long enough that upgrading a week later still recovers the receipt, short
+ * enough that an account which never comes back does not keep every rejected
+ * photo forever.
+ */
+export const ABANDONED_CAPTURE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Hand a blocked or permanently failed capture back to the queue.
+ *
+ * The photo was kept for exactly this. Used by the Retry action in Search —
+ * after an upgrade for a blocked_quota row, or on demand for one that failed.
+ */
+export async function retryBlockedCapture(id: string): Promise<void> {
+  const row = await store.getById(id);
+  if (!row) return;
+  if (!(await localFileExists(row.imageUri))) {
+    // The photo is what makes a retry possible; without it there is nothing to
+    // send, and leaving the row listed as retryable would promise otherwise.
+    await store.markFinalFailure(id, 'llm_failed_final');
+    return;
+  }
+  await store.requeueForExtract(id);
+  void retryPending();
+}
+
+/**
+ * Discard captures the user could have acted on and didn't. Keeping a blocked
+ * capture's photo is what makes it recoverable; this is the other half of that
+ * bargain, and without it the capture directory only ever grows.
+ */
+export async function purgeAbandonedCaptures(ttlMs = ABANDONED_CAPTURE_TTL_MS): Promise<number> {
+  const rows = await store.listAbandoned(ttlMs);
+  for (const row of rows) {
+    await deleteLocalFile(row.imageUri);
+    await store.remove(row.id);
+  }
+  if (__DEV__ && rows.length > 0) console.log('[capture] purged abandoned captures', { count: rows.length });
+  return rows.length;
+}
+
 export async function retryPending(): Promise<number> {
   if (dispatchInFlight) return dispatchInFlight;
   dispatchInFlight = dispatchPending().finally(() => {
@@ -991,8 +1033,7 @@ async function applyDeferredDispatch(row: ReceiptRow, deferred: Promise<ExtractA
     }
   } catch (error) {
     if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
-      await store.remove(row.id);
-      await deleteLocalFile(row.imageUri);
+      await store.markFinalFailure(row.id, 'blocked_quota');
       return;
     }
     // Anything else stays queued; the row is already scheduled for another try.
@@ -1043,10 +1084,12 @@ async function dispatchPending(): Promise<number> {
       recovered += 1;
     } catch (error) {
       if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
-        // No live screen to toast into here — this is a background reconnect
-        // retry — but retrying a quota rejection is still pointless.
-        await store.remove(row.id);
-        await deleteLocalFile(row.imageUri);
+        // Nobody is watching this one: it is the reconnect drain. Which is
+        // exactly why it must not delete anything — a receipt photographed
+        // offline used to be destroyed here, silently and permanently, the
+        // moment connectivity returned on an exhausted account. It is left
+        // listed as blocked instead, with its photo, and never retried.
+        await store.markFinalFailure(row.id, 'blocked_quota');
         continue;
       }
       if (__DEV__) console.warn('[capture] retry queued', describeError(error));
