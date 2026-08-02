@@ -80,8 +80,13 @@ const testsByPhase = {
       command: ['npm', ['run', 'b4:app']],
     },
     {
+      // Runs can_scan against a real database rather than grepping the
+      // migration for it. b4:backend still covers this phase's source checks
+      // under T4.1 and T4.4; idempotency is a runtime claim, so it is tested at
+      // runtime — the ambiguity bug that broke every scan was invisible to a
+      // source check and obvious the moment anything executed the function.
       id: 'T4.3-quota-idempotency',
-      command: ['npm', ['run', 'b4:backend']],
+      command: ['npm', ['run', 'b4:db:verify']],
     },
     {
       id: 'T4.4-ack-gate-server',

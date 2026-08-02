@@ -15,6 +15,8 @@ import {
   confirmReceiptClient,
   extractClient,
   getCaptureAttempts,
+  getExtractErrorCode,
+  getExtractRetryAfterMs,
   imageBackupClient,
   toReceiptFields,
   type CaptureMetricsPayload,
@@ -22,6 +24,13 @@ import {
   type ExtractAck,
   type ExtractVisibleDeadlineAck,
 } from '@/lib/receipts/client';
+import { isTransientNetworkError } from '@/lib/network/retry';
+import {
+  scoreReceiptPreflight,
+  type PreflightDecision,
+  type PreflightWarning,
+} from '@/lib/receipts/preflight';
+import { applyServerQuota } from '@/lib/receipts/quota';
 import * as store from '@/lib/receipts/store';
 import {
   isDuplicateReceipt,
@@ -47,8 +56,13 @@ const CAPTURE_DIR = `${FileSystem.documentDirectory ?? ''}captures/`;
 const MAX_BACKOFF_MS = 60_000;
 const MAX_EXTRACT_ATTEMPTS = 5;
 const MAX_IMAGE_BACKUP_ATTEMPTS = 5;
-const MAX_CONFIRM_SYNC_ATTEMPTS = 5;
 const VISIBLE_DEADLINE_RETRY_DELAY_MS = 15_000;
+/**
+ * How long a row may sit in an in-flight sync state before the queue assumes
+ * the attempt died with the process and takes it back. Comfortably longer than
+ * any request timeout, so a live request is never interrupted.
+ */
+const STALLED_SYNC_MS = 2 * 60_000;
 const DRAFT_CATEGORY: Category = 'Miscellaneous';
 
 function getImageSize(uri: string): Promise<{ width: number; height: number }> {
@@ -131,6 +145,24 @@ async function localFileExists(uri: string): Promise<boolean> {
 }
 
 const nextBackoffMs = (attempts: number) => Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.max(0, attempts - 1));
+/** If the server sent a 429 without a retry_after_s, assume its stated window. */
+const RATE_LIMIT_FALLBACK_MS = 60_000;
+
+/**
+ * How long to wait when a capture was throttled rather than failed, or null if
+ * this was not a throttle.
+ *
+ * A rate limit is "not now", not "not ever". It used to be indistinguishable
+ * from a real failure: the client ignored retry_after_s, retried after a second,
+ * and each refusal spent one of five attempts — so a capture could reach
+ * llm_failed_final in under fifteen seconds over a limit that clears in sixty.
+ * That is the opposite of why the server answers 429 rather than 402.
+ */
+function throttleRetryMs(error: unknown): number | null {
+  if (getExtractErrorCode(error) !== 'RATE_LIMITED') return null;
+  return getExtractRetryAfterMs(error) ?? RATE_LIMIT_FALLBACK_MS;
+}
+
 const nextBackoffWithJitterMs = (attempts: number) => {
   const base = nextBackoffMs(attempts);
   return Math.round(base * (0.75 + Math.random() * 0.5));
@@ -147,6 +179,40 @@ function describeError(error: unknown): string {
   } catch {
     return 'unknown error';
   }
+}
+
+function getErrorStatus(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null || !('status' in error)) return null;
+  const value = (error as { status?: unknown }).status;
+  return typeof value === 'number' ? value : null;
+}
+
+/**
+ * Whether a failed confirm is worth trying again. The shared classifier only
+ * counts 0 and 5xx as transient, so 408 and 429 would read as verdicts — and
+ * treating a rate limit as a verdict here means losing the receipt. When the
+ * stake is the user's only copy, ambiguity retries.
+ */
+function isRetryableConfirmError(error: unknown): boolean {
+  if (isTransientNetworkError(error)) return true;
+  const status = getErrorStatus(error);
+  if (status === 408 || status === 429) return true;
+  // A timed-out confirm aborts, and an abort is a stalled connection, not a
+  // verdict. Without this the timeout added to bound that stall would itself
+  // mark the receipt permanently failed.
+  return /abort/i.test(describeError(error));
+}
+
+/**
+ * Did this scan queue because the device could not reach the network, as
+ * opposed to a slow or failing server? The UI says different things for the
+ * two, and `reason` cannot answer it — that is stripped outside __DEV__, so a
+ * release build has no other way to tell them apart.
+ */
+function isOfflineError(error: unknown): boolean {
+  return /internet connection appears to be offline|network request failed|network connection was lost|fetch failed|unable to resolve host|could not connect to the server/i.test(
+    describeError(error),
+  );
 }
 
 function inferCurrencyFromText(text: string, defaultCurrency: string): string {
@@ -218,34 +284,11 @@ function draftFromOcr(text: string, defaultCurrency: string): ReceiptFields | nu
 }
 
 export type LocalDuplicateDecision = 'view_existing' | 'save_anyway';
-export type PrecisePreflightDecision = 'continue' | 'cancel';
-export type PrecisePreflightWarning = {
-  confidence: 'low' | 'uncertain';
-  textLength: number;
-  amountCount: number;
-  keywordCount: number;
-  hasDocument: boolean;
-  timedOut: boolean;
-};
 
-function scoreReceiptPreflight(text: string | null, hasDocument: boolean, timedOut: boolean): PrecisePreflightWarning | null {
-  const normalized = text ?? '';
-  const amountCount = [...normalized.matchAll(/(?:rs\.?|inr|₹|\$|cad|usd)?\s*\d{1,7}(?:[.,]\d{2})/gi)].length;
-  const keywordCount = [...normalized.matchAll(/\b(receipt|invoice|bill|total|subtotal|tax|gst|vat|paid|cash|card|debit|credit|amount|qty|item|change|balance)\b/gi)].length;
-  const textLength = normalized.trim().length;
-  const likelyReceipt = amountCount >= 2 || (amountCount >= 1 && keywordCount >= 1) || keywordCount >= 3;
-  if (likelyReceipt) return null;
-  if (!hasDocument && textLength < 40) {
-    return { confidence: 'low', textLength, amountCount, keywordCount, hasDocument, timedOut };
-  }
-  if (textLength < 80 && amountCount === 0 && keywordCount === 0) {
-    return { confidence: 'low', textLength, amountCount, keywordCount, hasDocument, timedOut };
-  }
-  if (textLength < 180 && amountCount === 0 && keywordCount <= 1) {
-    return { confidence: 'uncertain', textLength, amountCount, keywordCount, hasDocument, timedOut };
-  }
-  return null;
-}
+// Re-exported so camera.tsx and anything else already importing these from the
+// capture pipeline keeps working; the rule itself lives in a dependency-free
+// module so it can be tested without a device.
+export type { PreflightDecision, PreflightWarning };
 
 export type CaptureOutcome =
   | {
@@ -264,8 +307,22 @@ export type CaptureOutcome =
   | { kind: 'local_duplicate'; candidate: LocalDuplicateCandidate }
   /** Precise preflight was rejected by the user before backend/model work. */
   | { kind: 'preflight_rejected' }
-  /** Anything else. The row stays `pending_extract` and the queue retries it. */
-  | { kind: 'queued'; row: ReceiptRow; reason?: string; attempts?: CaptureAttemptTrace[]; deferred?: Promise<CaptureOutcome> };
+  /** No free scans left. Retrying can't fix this, so it's terminal, not queued. */
+  | { kind: 'quota_exhausted'; row: ReceiptRow }
+  /**
+   * Anything else. The row is marked `llm_failed_retryable` and the queue
+   * re-drives it on reconnect. `offline` is true when the device could not
+   * reach the network at all, which is the only case the UI can honestly
+   * blame on connectivity.
+   */
+  | {
+      kind: 'queued';
+      row: ReceiptRow;
+      reason?: string;
+      offline?: boolean;
+      attempts?: CaptureAttemptTrace[];
+      deferred?: Promise<CaptureOutcome>;
+    };
 
 /**
  * Runs a captured photo through the pipeline. Never throws for transport
@@ -289,7 +346,7 @@ export async function processCapture(
       candidate: LocalDuplicateCandidate,
       draft: ReceiptFields,
     ) => Promise<LocalDuplicateDecision>;
-    onPrecisePreflightWarning?: (warning: PrecisePreflightWarning) => Promise<PrecisePreflightDecision>;
+    onPreflightWarning?: (warning: PreflightWarning) => Promise<PreflightDecision>;
     onPrecisePreflightAccepted?: () => void;
   },
 ): Promise<CaptureOutcome> {
@@ -363,6 +420,22 @@ export async function processCapture(
       textLength: localOcrText?.length ?? 0,
       timedOut: ocr.timedOut,
     });
+
+    // The same check Precise runs, on text this mode already read. Catching an
+    // obvious non-receipt here costs nothing and skips the model call outright,
+    // rather than paying for one and refunding it afterwards. It runs before
+    // the draft card so a non-receipt never renders as a receipt.
+    const balancedWarning = scoreReceiptPreflight(localOcrText, Boolean(corrected), ocr.timedOut);
+    logLatency('preflight_done', {
+      mode: 'balanced',
+      warning: balancedWarning?.confidence ?? null,
+      amountCount: balancedWarning?.amountCount ?? null,
+      keywordCount: balancedWarning?.keywordCount ?? null,
+    });
+    if (balancedWarning) {
+      const decision = await options?.onPreflightWarning?.(balancedWarning);
+      if (decision !== 'continue') return { kind: 'preflight_rejected' };
+    }
     const draft = localOcrText ? draftFromOcr(localOcrText, options?.defaultCurrency ?? 'USD') : null;
     if (draft) {
       logLatency('local_draft_ready', { captureId, merchant: draft.store, total: draft.total });
@@ -421,7 +494,7 @@ export async function processCapture(
       keywordCount: warning?.keywordCount ?? null,
     });
     if (warning) {
-      const decision = await options?.onPrecisePreflightWarning?.(warning);
+      const decision = await options?.onPreflightWarning?.(warning);
       if (decision !== 'continue') return { kind: 'preflight_rejected' };
     }
     options?.onPrecisePreflightAccepted?.();
@@ -506,6 +579,9 @@ export async function processCapture(
         });
     }
     const ack = await ackPromise;
+    // Every completed call carries the server's own balance — cheaper and more
+    // accurate than a separate refresh.
+    if (!isVisibleDeadlineAck(ack)) void applyServerQuota(options?.userId, ack.scansRemaining);
     if (isVisibleDeadlineAck(ack)) {
       metrics.backend_extract_ms = Date.now() - extractStartedAt;
       metrics.total_to_response_ms = Date.now() - captureStartedAt;
@@ -523,6 +599,7 @@ export async function processCapture(
       const deferred = ack.deferred
         .then(async (lateAck): Promise<CaptureOutcome> => {
           if (isVisibleDeadlineAck(lateAck)) return { kind: 'queued', row, attempts: lateAck.attempts };
+          void applyServerQuota(options?.userId, lateAck.scansRemaining);
           if (isNotAReceipt(lateAck.response)) {
             await store.remove(row.id);
             await deleteLocalFile(durableImageUri);
@@ -576,9 +653,19 @@ export async function processCapture(
             duplicateCandidate: lateAck.duplicateCandidate,
           };
         })
-        .catch((error) => {
+        .catch(async (error): Promise<CaptureOutcome> => {
+          if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
+            await store.markFinalFailure(row.id, 'blocked_quota');
+            return { kind: 'quota_exhausted', row };
+          }
           if (__DEV__) console.warn('[capture] visible-deadline request stayed queued', describeError(error));
-          return { kind: 'queued' as const, row, reason: __DEV__ ? describeError(error) : undefined, attempts: ack.attempts };
+          return {
+            kind: 'queued' as const,
+            row,
+            reason: __DEV__ ? describeError(error) : undefined,
+            offline: isOfflineError(error),
+            attempts: ack.attempts,
+          };
         });
       return { kind: 'queued', row, reason: undefined, attempts: ack.attempts, deferred };
     }
@@ -649,11 +736,28 @@ export async function processCapture(
       metrics: { ...metrics, total_to_ui_ms: metrics.total_to_response_ms },
       attempts,
     });
+    if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
+      // Retrying can't fix "out of scans" — treat it as a verdict, not a transient
+      // failure, so it never enters the backoff/retry queue. But it is the user's
+      // photo: it is kept, and listed as blocked, so upgrading makes it scannable
+      // rather than making them take it again. Deleting it here was defensible
+      // only while it could not happen without the user watching.
+      logLatency('extract_quota_exhausted', {});
+      await store.markFinalFailure(row.id, 'blocked_quota');
+      return { kind: 'quota_exhausted', row };
+    }
     logLatency('extract_failed_queued', { reason });
     if (__DEV__) console.warn('[capture] extract queued', reason);
     await store.setStatus(row.id, 'llm_failed_retryable');
-    await store.markRetry(row.id, 1, Date.now() + nextBackoffWithJitterMs(1));
-    return { kind: 'queued', row, reason: __DEV__ ? reason : undefined, attempts };
+    // A throttle leaves the attempt count alone: it did not fail, it was not
+    // served, and spending the budget on it is what killed these captures.
+    const throttleMs = throttleRetryMs(error);
+    await store.markRetry(
+      row.id,
+      throttleMs == null ? 1 : row.attempts,
+      Date.now() + (throttleMs ?? nextBackoffWithJitterMs(1)),
+    );
+    return { kind: 'queued', row, reason: __DEV__ ? reason : undefined, offline: isOfflineError(error), attempts };
   }
 }
 
@@ -666,11 +770,56 @@ export async function confirm(id: string, fields: ReceiptFields, userId?: string
   void syncConfirmed();
 }
 
+/**
+ * Wipe the local receipt store because a different account has signed in.
+ *
+ * Local rows carry no user id, so without this the incoming user would see the
+ * previous one's receipts — and, since the restore only runs against an empty
+ * database, would never get their own. Deliberately not called on sign-out: a
+ * user signing back into their own account would lose any capture that had not
+ * yet reached the server.
+ */
+export async function clearLocalReceiptsForAccountSwitch(): Promise<void> {
+  const uris = await store.listAllImageUris();
+  await Promise.all(uris.map((uri) => deleteLocalFile(uri).catch(() => {})));
+  await store.clearReceiptData();
+  if (__DEV__) console.warn(`[capture] cleared ${uris.length} local receipt image(s) for account switch`);
+}
+
+/**
+ * Remove a receipt the server says is gone, taking its image with it. Used
+ * when a pull brings back a tombstone — a retention purge, or a deletion made
+ * anywhere other than this device.
+ */
+export async function deleteLocalReceipt(captureId: string): Promise<void> {
+  const row = await store.getById(captureId);
+  if (!row) return;
+  if (row.imageUri) await deleteLocalFile(row.imageUri).catch(() => {});
+  await store.remove(captureId);
+}
+
 export async function syncConfirmed(): Promise<void> {
+  const reclaimed = await store.reclaimStalledSyncs(STALLED_SYNC_MS);
+  if (reclaimed > 0 && __DEV__) console.warn(`[capture] reclaimed ${reclaimed} stalled sync row(s)`);
+
   const rows = await store.listUnsynced();
 
   for (const row of rows) {
-    if (!row.receiptId || !row.fields) continue;
+    // A confirmed receipt with nothing to address it to. Skipping silently is
+    // how a row can sit "saved" on the device forever while the server never
+    // hears about it — say so, at least, rather than dropping it wordlessly.
+    if (!row.receiptId || !row.fields) {
+      if (__DEV__) {
+        console.warn('[capture] confirm sync skipped — nothing to send', {
+          id: row.id,
+          hasReceiptId: Boolean(row.receiptId),
+          hasFields: Boolean(row.fields),
+          status: row.status,
+          resultSyncStatus: row.resultSyncStatus,
+        });
+      }
+      continue;
+    }
     try {
       await store.setSyncStatus(row.id, { resultSyncStatus: 'syncing' });
       await confirmReceiptClient.confirm({ receiptId: row.receiptId, fields: row.fields });
@@ -678,13 +827,23 @@ export async function syncConfirmed(): Promise<void> {
       await store.setStatus(row.id, 'synced');
     } catch (error) {
       if (__DEV__) console.warn('[capture] confirm sync queued', describeError(error));
-      const attempts = row.attempts + 1;
-      if (attempts >= MAX_CONFIRM_SYNC_ATTEMPTS) {
+
+      // A verdict the server will repeat forever — a malformed payload, or a
+      // receipt row that no longer exists. Retrying cannot change the answer,
+      // so this one stops here rather than blocking the rest of the queue.
+      if (!isRetryableConfirmError(error)) {
         await store.setSyncStatus(row.id, { resultSyncStatus: 'sync_failed_final' });
-      } else {
-        await store.setSyncStatus(row.id, { resultSyncStatus: 'sync_failed' });
-        await store.markRetry(row.id, attempts, Date.now() + nextBackoffWithJitterMs(attempts));
+        continue;
       }
+
+      // Transport or server trouble. This must never become terminal: until
+      // the server has the receipt it exists on this device alone, so giving
+      // up is data loss — and the old five-attempt cap did exactly that, then
+      // left the row in a state nothing ever retried. Backoff is capped, so
+      // retrying indefinitely stays cheap.
+      const attempts = row.attempts + 1;
+      await store.setSyncStatus(row.id, { resultSyncStatus: 'sync_failed' });
+      await store.markRetry(row.id, attempts, Date.now() + nextBackoffWithJitterMs(attempts));
       break;
     }
   }
@@ -699,6 +858,7 @@ export async function syncImageBackups(): Promise<number> {
 }
 
 async function dispatchImageBackups(): Promise<number> {
+  await store.reclaimStalledSyncs(STALLED_SYNC_MS);
   const rows = await store.listPendingImageBackups();
   let uploaded = 0;
 
@@ -797,12 +957,88 @@ async function dispatchCaptureMetrics(): Promise<number> {
  * Re-drive scans whose extraction never landed. Called on reconnect.
  * Returns how many rows advanced past `pending_extract`.
  */
+/**
+ * How long a blocked or failed capture is kept before its photo is discarded.
+ *
+ * Long enough that upgrading a week later still recovers the receipt, short
+ * enough that an account which never comes back does not keep every rejected
+ * photo forever.
+ */
+export const ABANDONED_CAPTURE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Hand a blocked or permanently failed capture back to the queue.
+ *
+ * The photo was kept for exactly this. Used by the Retry action in Search —
+ * after an upgrade for a blocked_quota row, or on demand for one that failed.
+ */
+export async function retryBlockedCapture(id: string): Promise<void> {
+  const row = await store.getById(id);
+  if (!row) return;
+  if (!(await localFileExists(row.imageUri))) {
+    // The photo is what makes a retry possible; without it there is nothing to
+    // send, and leaving the row listed as retryable would promise otherwise.
+    await store.markFinalFailure(id, 'llm_failed_final');
+    return;
+  }
+  await store.requeueForExtract(id);
+  void retryPending();
+}
+
+/**
+ * Discard captures the user could have acted on and didn't. Keeping a blocked
+ * capture's photo is what makes it recoverable; this is the other half of that
+ * bargain, and without it the capture directory only ever grows.
+ */
+export async function purgeAbandonedCaptures(ttlMs = ABANDONED_CAPTURE_TTL_MS): Promise<number> {
+  const rows = await store.listAbandoned(ttlMs);
+  for (const row of rows) {
+    await deleteLocalFile(row.imageUri);
+    await store.remove(row.id);
+  }
+  if (__DEV__ && rows.length > 0) console.log('[capture] purged abandoned captures', { count: rows.length });
+  return rows.length;
+}
+
 export async function retryPending(): Promise<number> {
   if (dispatchInFlight) return dispatchInFlight;
   dispatchInFlight = dispatchPending().finally(() => {
     dispatchInFlight = null;
   });
   return dispatchInFlight;
+}
+
+/**
+ * Applies a queued row's result when it lands after the visible deadline. Same
+ * terminal outcomes as the inline path — the only difference is that no screen
+ * is watching, so there is nothing to tell the user.
+ */
+async function applyDeferredDispatch(row: ReceiptRow, deferred: Promise<ExtractAck>): Promise<void> {
+  try {
+    const ack = await deferred;
+    if (isVisibleDeadlineAck(ack)) return;
+    void applyServerQuota(null, ack.scansRemaining);
+    if (isNotAReceipt(ack.response) || isDuplicateReceipt(ack.response)) {
+      await store.remove(row.id);
+      await deleteLocalFile(row.imageUri);
+      return;
+    }
+    await store.markDispatched(row.id, ack.receiptId, toReceiptFields(ack.response));
+    if (row.extractionMode === 'balanced' && row.localOcrText) {
+      await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
+      void syncImageBackups();
+    } else {
+      await store.setSyncStatus(row.id, { imageSyncStatus: 'uploaded' });
+      await deleteLocalFile(row.imageUri);
+    }
+  } catch (error) {
+    if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
+      await store.markFinalFailure(row.id, 'blocked_quota');
+      return;
+    }
+    // Anything else stays queued; the row is already scheduled for another try.
+    if (__DEV__) console.warn('[capture] deferred retry stayed queued', describeError(error));
+  }
 }
 
 async function dispatchPending(): Promise<number> {
@@ -821,6 +1057,10 @@ async function dispatchPending(): Promise<number> {
       });
       if (isVisibleDeadlineAck(ack)) {
         await store.markRetry(row.id, row.attempts + 1, Date.now() + VISIBLE_DEADLINE_RETRY_DELAY_MS);
+        // The request is still running. Dropping it here is how a row gets
+        // stranded as "Processing receipt" while the server has actually
+        // finished — or has rejected it outright.
+        void applyDeferredDispatch(row, ack.deferred);
         continue;
       }
       if (isNotAReceipt(ack.response)) {
@@ -843,7 +1083,26 @@ async function dispatchPending(): Promise<number> {
       }
       recovered += 1;
     } catch (error) {
+      if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
+        // Nobody is watching this one: it is the reconnect drain. Which is
+        // exactly why it must not delete anything — a receipt photographed
+        // offline used to be destroyed here, silently and permanently, the
+        // moment connectivity returned on an exhausted account. It is left
+        // listed as blocked instead, with its photo, and never retried.
+        await store.markFinalFailure(row.id, 'blocked_quota');
+        continue;
+      }
       if (__DEV__) console.warn('[capture] retry queued', describeError(error));
+      // Throttled, not failed. Wait exactly as long as the server asked, and
+      // never let it reach a terminal state — the window always clears, so a
+      // capture that is merely too early must not become "could not be
+      // processed".
+      const throttleMs = throttleRetryMs(error);
+      if (throttleMs != null) {
+        await store.setStatus(row.id, 'llm_failed_retryable');
+        await store.markRetry(row.id, row.attempts, Date.now() + throttleMs);
+        break;
+      }
       const attempts = row.attempts + 1;
       if (attempts >= MAX_EXTRACT_ATTEMPTS) {
         await store.markFinalFailure(row.id, 'llm_failed_final');

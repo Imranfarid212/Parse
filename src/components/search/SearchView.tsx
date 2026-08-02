@@ -6,19 +6,39 @@
  * exceed 7, the system forces List view and disables the toggle (the card fan
  * shows the latest 5 when there are more receipts.
  */
-import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import * as Network from 'expo-network';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { GRAY, Toggle } from '@/components/menu/primitives';
 import { FanCarousel, type FanItem } from '@/components/search/FanCarousel';
 import { SleuthDog } from '@/components/search/SleuthDog';
+import { retryBlockedCapture } from '@/lib/receipts/capture';
 import { listRecent } from '@/lib/receipts/store';
-import type { ReceiptRow } from '@/lib/receipts/types';
+import type { ReceiptRow, ReceiptStatus } from '@/lib/receipts/types';
 import { colors, radius, spacing, typography } from '@/theme/tokens';
 
 const MAX_FAN = 5;
+
+/** Rows the retry queue is still working on — while any are listed, re-read. */
+const IN_FLIGHT_STATUSES = new Set<ReceiptStatus>([
+  'pending_extract',
+  'llm_processing',
+  'llm_failed_retryable',
+  'image_upload_pending',
+]);
+
+const REFRESH_WHILE_IN_FLIGHT_MS = 2_500;
+
+/**
+ * Rows that are going nowhere on their own but still hold the user's photo, so
+ * there has to be a way back. Without an action these read as a dead end — and
+ * blocked_quota used to be worse than a dead end: the capture was deleted
+ * outright, with nothing shown.
+ */
+const ACTIONABLE_STATUSES = new Set<ReceiptStatus>(['blocked_quota', 'llm_failed_final']);
 
 const formatTotal = (row: ReceiptRow) => {
   const fields = row.fields;
@@ -34,9 +54,38 @@ const receiptTitle = (row: ReceiptRow) => {
   return 'Receipt';
 };
 
+/**
+ * What a row says before it has any extracted fields. Without this the raw
+ * status enum reaches the user — a scan queued offline read "llm failed
+ * retryable" on the list, in release builds too.
+ *
+ * "Waiting to retry" rather than "Waiting for network": the retryable states
+ * also cover a slow or 5xx server, so promising connectivity is the fix would
+ * sometimes be a lie.
+ */
+const STATUS_LABELS: Record<ReceiptStatus, string> = {
+  local_captured: 'Processing…',
+  local_ocr_processing: 'Reading receipt…',
+  local_ocr_done: 'Processing…',
+  image_upload_pending: 'Waiting to retry',
+  image_uploaded: 'Processing…',
+  pending_extract: 'Waiting to retry',
+  llm_processing: 'Processing…',
+  llm_failed_retryable: 'Waiting to retry',
+  llm_failed_final: 'Could not be processed',
+  blocked_quota: 'Out of scans',
+  user_confirmation_pending: 'Needs review',
+  extracted: 'Needs review',
+  confirmed_local: 'Saved',
+  result_sync_pending: 'Saving…',
+  synced: 'Saved',
+  delete_pending: 'Removing…',
+  deleted: 'Removed',
+};
+
 const receiptMeta = (row: ReceiptRow) => {
   const parts = [row.fields?.date, row.fields?.category].filter(Boolean);
-  return parts.length > 0 ? parts.join(' • ') : row.status.replace(/_/g, ' ');
+  return parts.length > 0 ? parts.join(' • ') : STATUS_LABELS[row.status];
 };
 
 const duplicateBadgeLabel = (row: ReceiptRow, similarDedupeKeys: Set<string>) => {
@@ -84,30 +133,79 @@ const searchableText = (row: ReceiptRow) =>
     .join(' ')
     .toLowerCase();
 
-export function SearchView() {
+export function SearchView({ onOpenPlan }: { onOpenPlan?: () => void } = {}) {
   const { width } = useWindowDimensions();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'card' | 'list'>('card');
   const [rows, setRows] = useState<ReceiptRow[]>([]);
   const [loaded, setLoaded] = useState(false);
 
+  const aliveRef = useRef(true);
   useEffect(() => {
-    let alive = true;
-    listRecent(50)
-      .then((recent) => {
-        if (alive) setRows(recent);
-      })
-      .catch((error) => {
-        console.warn('[recents] failed to load local receipts', error);
-        if (alive) setRows([]);
-      })
-      .finally(() => {
-        if (alive) setLoaded(true);
-      });
+    aliveRef.current = true;
     return () => {
-      alive = false;
+      aliveRef.current = false;
     };
   }, []);
+
+  const reload = useCallback(async (initial = false) => {
+    try {
+      const recent = await listRecent(50);
+      if (aliveRef.current) setRows(recent);
+    } catch (error) {
+      console.warn('[recents] failed to load local receipts', error);
+      // Only the first read clears the list; a later failure keeps what we have
+      // rather than blanking a screen the user is looking at.
+      if (initial && aliveRef.current) setRows([]);
+    } finally {
+      if (aliveRef.current) setLoaded(true);
+    }
+  }, []);
+
+  /**
+   * Hand a blocked or failed capture back to the queue and re-read, so the row
+   * visibly moves to "Waiting to retry" rather than looking like nothing
+   * happened. The photo is still on the device; that is what makes this work.
+   */
+  const onRetryRow = useCallback(
+    async (id: string) => {
+      await retryBlockedCapture(id);
+      await reload();
+    },
+    [reload],
+  );
+
+  useEffect(() => {
+    void reload(true);
+  }, [reload]);
+
+  // The retry queue drains in the background (camera's reconnect flush), so a
+  // row can finish while this view is open. Nothing pushed those changes here,
+  // so a receipt queued offline sat on "Processing receipt" until the view was
+  // reopened. Re-read on the events that move rows.
+  useEffect(() => {
+    const network = Network.addNetworkStateListener((state) => {
+      if (state.isInternetReachable) void reload();
+    });
+    const app = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void reload();
+    });
+    return () => {
+      network.remove();
+      app.remove();
+    };
+  }, [reload]);
+
+  const hasInFlightRows = useMemo(() => rows.some((row) => IN_FLIGHT_STATUSES.has(row.status)), [rows]);
+
+  // Reconnecting starts the retries; it does not finish them. Poll while any
+  // row is still in flight so the result lands on its own, and stop the moment
+  // none are — this cannot spin on an idle list.
+  useEffect(() => {
+    if (!hasInFlightRows) return undefined;
+    const timer = setInterval(() => void reload(), REFRESH_WHILE_IN_FLIGHT_MS);
+    return () => clearInterval(timer);
+  }, [hasInFlightRows, reload]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -192,7 +290,14 @@ export function SearchView() {
         ) : (
           <ScrollView style={{ alignSelf: 'stretch' }} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
             {results.map((row) => (
-              <ReceiptListRow key={row.id} row={row} similarDedupeKeys={similarDedupeKeys} softSimilarKeys={softSimilarKeys} />
+              <ReceiptListRow
+                key={row.id}
+                row={row}
+                similarDedupeKeys={similarDedupeKeys}
+                softSimilarKeys={softSimilarKeys}
+                onRetry={onRetryRow}
+                onUpgrade={onOpenPlan}
+              />
             ))}
           </ScrollView>
         )}
@@ -205,12 +310,17 @@ function ReceiptListRow({
   row,
   similarDedupeKeys,
   softSimilarKeys,
+  onRetry,
+  onUpgrade,
 }: {
   row: ReceiptRow;
   similarDedupeKeys: Set<string>;
   softSimilarKeys: Set<string>;
+  onRetry: (id: string) => void;
+  onUpgrade?: () => void;
 }) {
   const badge = duplicateBadgeLabel(row, similarDedupeKeys) ?? (softSimilarKeys.has(softSimilarGroupKey(row) ?? '') ? 'Similar receipt' : null);
+  const actionable = ACTIONABLE_STATUSES.has(row.status);
   return (
     <View style={styles.listRow}>
       <View style={styles.listIcon}>
@@ -226,6 +336,18 @@ function ReceiptListRow({
           )}
         </View>
         <Text style={styles.listMeta} numberOfLines={1}>{receiptMeta(row)}</Text>
+        {actionable && (
+          <View style={styles.actionRow}>
+            {row.status === 'blocked_quota' && onUpgrade && (
+              <Pressable style={styles.actionPrimary} onPress={onUpgrade} hitSlop={6}>
+                <Text style={styles.actionPrimaryText}>Upgrade</Text>
+              </Pressable>
+            )}
+            <Pressable style={styles.action} onPress={() => onRetry(row.id)} hitSlop={6}>
+              <Text style={styles.actionText}>Try again</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
       <Text style={styles.listTotal}>{formatTotal(row)}</Text>
     </View>
@@ -234,6 +356,23 @@ function ReceiptListRow({
 
 const styles = StyleSheet.create({
   root: { flex: 1, alignItems: 'center' },
+
+  actionRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+  action: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  actionText: { fontFamily: typography.button.fontFamily, fontSize: 12, color: colors.textPrimary },
+  actionPrimary: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    backgroundColor: colors.textPrimary,
+  },
+  actionPrimaryText: { fontFamily: typography.button.fontFamily, fontSize: 12, color: colors.background },
 
   headerRow: {
     flexDirection: 'row',

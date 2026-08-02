@@ -2,28 +2,28 @@
   "phase": "b1",
   "status": "passed_local_backend",
   "note": "Local B1 app/backend/db checks passed. Official playbook 5/5 still requires device smoke runs and CI lock proof.",
-  "duration_ms": 33617,
-  "commit_sha": "f34acba4b1c686feeb9e832013ab3c68858e5a14",
+  "duration_ms": 35840,
+  "commit_sha": "a0fc37943939b0f2aef74db0f7de67292cecbab2",
   "tests": [
     {
       "id": "T1.frontend-static",
       "status": "passed",
-      "duration_ms": 5858
+      "duration_ms": 6352
     },
     {
       "id": "T1.backend-static",
       "status": "passed",
-      "duration_ms": 238
+      "duration_ms": 228
     },
     {
       "id": "T1.1-db-reset",
       "status": "passed",
-      "duration_ms": 25287
+      "duration_ms": 26620
     },
     {
       "id": "T1.2-db-drift",
       "status": "passed",
-      "duration_ms": 2234
+      "duration_ms": 2640
     }
   ]
 }

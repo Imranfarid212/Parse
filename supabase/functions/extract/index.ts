@@ -1,6 +1,8 @@
 // @ts-nocheck - Supabase Edge Functions run under Deno, outside the Expo app tsconfig.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
+import { evaluateQuota, refundScan } from '../_shared/quota.ts';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers':
@@ -366,8 +368,6 @@ function normalizeExtraction(raw: unknown, categories: string[], defaultCurrency
       is_receipt: false,
     };
   }
-  const isReceipt = r.is_receipt !== false;
-
   const lineItems = Array.isArray(r.line_items)
     ? r.line_items.map((item) => {
         const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
@@ -381,12 +381,29 @@ function normalizeExtraction(raw: unknown, categories: string[], defaultCurrency
 
   const promptItems = Array.isArray(r.items) ? r.items.map(lineItemFromText) : [];
   const category = normalizeText(r.suggested_category ?? r.category);
+  const total = Math.max(0, safeNumber(r.total) || 0);
+  const items = lineItems.length > 0 ? lineItems : promptItems;
+
+  // An explicit verdict is honoured either way. A *missing* one used to mean
+  // "receipt", which is the wrong direction to fail in now that the scan is
+  // charged before the model runs: only an explicit false triggers a refund, so
+  // an omitted field became a charge the user never got back. The schema marks
+  // the field required, so this is the model deviating — decide it from what
+  // was actually extracted. Same rule as extract-balanced, deliberately.
+  const claimed = typeof r.is_receipt === 'boolean' ? r.is_receipt : null;
+  // Item *count* is not evidence: an order list extracts named items with
+  // quantities and not one amount among them. A scan with no money in it
+  // produced nothing usable, so an explicit "receipt" does not stand without a
+  // single amount — the rejection path refunds it and asks for a retake.
+  const hasValue = total > 0 || items.some((item) => item.amount > 0);
+  const isReceipt = hasValue && claimed !== false;
+
   return {
     merchant: normalizeText(r.merchant ?? r.store, isReceipt ? 'Unknown merchant' : 'Rejected image').slice(0, 160),
     txn_date: isIsoDate(r.txn_date) ? String(r.txn_date) : toIsoDate(r.date),
     currency: isCurrency(r.currency) ? String(r.currency) : defaultCurrency,
-    total: Math.max(0, safeNumber(r.total) || 0),
-    line_items: lineItems.length > 0 ? lineItems : promptItems,
+    total,
+    line_items: items,
     suggested_category: categories.includes(category) ? category : 'Miscellaneous',
     handwritten_notes: normalizeText(r.handwritten_notes ?? r.notes).slice(0, 1000),
     is_receipt: isReceipt,
@@ -842,15 +859,22 @@ async function persistBalancedResult({
     if (itemsError) throw itemsError;
   }
 
-  if (extraction.is_receipt) {
-    const { error: ledgerError } = await admin
-      .from('scan_ledger')
-      .insert({ user_id: userId, delta: -1, reason: 'scan_used', ref_id: receiptId });
-    if (ledgerError && ledgerError.code !== '23505') throw ledgerError;
+  // Charged by can_scan() before the model ran; give it back if the image was
+  // not a receipt.
+  if (!extraction.is_receipt) {
+    await refundScan(admin, userId, captureId);
   }
 }
 
-async function handleExtract(req: Request) {
+/**
+ * Tracks the can_scan() debit for one request so the caller can give it back.
+ * `billable` is set only where a receipt is actually delivered, so anything
+ * else — an error, a rejected image — refunds by default rather than by
+ * someone remembering to add a call at a new return site.
+ */
+type ChargeGuard = { refund: (() => Promise<void>) | null; billable: boolean };
+
+async function handleExtract(req: Request, charge: ChargeGuard) {
   reqCount += 1;
   const startedAt = performance.now();
   const timing: ExtractTiming = {
@@ -1092,19 +1116,18 @@ async function handleExtract(req: Request) {
     });
 
   const quotaStartedAt = performance.now();
-  const subscriptionsPromise = userSupabase
-    .from('subscriptions')
-    .select('product_id, status, current_period_start')
-    .eq('user_id', userId)
-    .in('status', ['active', 'grace'])
-    .order('current_period_start', { ascending: false })
-    .limit(1);
+  // Shared with extract-balanced so the two modes can never enforce different
+  // limits — see functions/_shared/quota.ts.
+  const quotaPromise = evaluateQuota(admin, userId, captureId).then((verdict) => {
+    timing.quota_ms = Math.round(performance.now() - quotaStartedAt);
+    return verdict;
+  });
 
   const [
     { data: profile, error: profileError },
     { data: selectedCategories, error: categoriesError },
-    { data: subscriptions, error: subscriptionError },
-  ] = await Promise.all([profilePromise, categoriesPromise, subscriptionsPromise]);
+    quota,
+  ] = await Promise.all([profilePromise, categoriesPromise, quotaPromise]);
 
   if (profileError) return json(500, { code: 'VALIDATION_FAILED', message: profileError.message });
   const defaultCurrency = profile.default_currency ?? 'USD';
@@ -1114,29 +1137,17 @@ async function handleExtract(req: Request) {
   const categories = Array.from(new Set([...categoryRows.map((row) => row.name), 'Miscellaneous']));
   const categoryByName = new Map(categoryRows.map((row) => [row.name, row.id]));
 
-  if (subscriptionError) return json(500, { code: 'VALIDATION_FAILED', message: subscriptionError.message });
+  if (!quota.canScan) {
+    // Too fast is not out of scans: 429 is retryable, 402 is a verdict.
+    if (quota.reason === 'rate_limited') {
+      return json(429, { status: 429, code: 'RATE_LIMITED', retry_after_s: 60 });
+    }
+    return json(402, { status: 402, code: 'QUOTA_EXHAUSTED', paywall: quota.paywall });
+  }
 
-  const subscription = subscriptions?.[0];
-  const hasUnlimited = subscription?.product_id === 'rf_unlimited_1199_m';
-  const plusStart = subscription?.product_id === 'rf_plus_699_m' ? subscription.current_period_start : null;
-  let canScan = Boolean(hasUnlimited);
-  if (!canScan && plusStart) {
-    const { count, error } = await userSupabase
-      .from('scan_ledger')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .eq('reason', 'scan_used')
-      .gte('created_at', plusStart);
-    if (error) return json(500, { code: 'VALIDATION_FAILED', message: error.message });
-    canScan = (count ?? 0) < 500;
-  }
-  if (!canScan && !plusStart) {
-    const { data: ledger, error } = await userSupabase.from('scan_ledger').select('delta').eq('user_id', userId);
-    if (error) return json(500, { code: 'VALIDATION_FAILED', message: error.message });
-    canScan = (ledger ?? []).reduce((sum, row) => sum + Number(row.delta || 0), 0) > 0;
-  }
-  timing.quota_ms = Math.round(performance.now() - quotaStartedAt);
-  if (!canScan) return json(402, { status: 402, code: 'QUOTA_EXHAUSTED', paywall: 'plus' });
+  // From here on the user has been debited. Every exit below that is not a
+  // delivered receipt gives it back — see the finally in Deno.serve.
+  charge.refund = () => refundScan(admin, userId, captureId);
 
   if (req.headers.get('x-rf-force-storage-failure') === '1') {
     return json(503, { code: 'VALIDATION_FAILED', message: 'Forced Storage failure' });
@@ -1222,6 +1233,7 @@ async function handleExtract(req: Request) {
       timing.duplicate_hydrate_ms = Math.round(performance.now() - hydrateStartedAt);
       timing.db_ms = Math.round(performance.now() - dbStartedAt);
       finishTiming(timing, startedAt);
+      charge.billable = true;
       return json(200, {
         status: 200,
         receipt_id: duplicate.id,
@@ -1308,30 +1320,34 @@ async function handleExtract(req: Request) {
     });
   }
 
-  const ledgerStartedAt = performance.now();
-  const { error: ledgerError } = await admin
-    .from('scan_ledger')
-    .insert({ user_id: userId, delta: -1, reason: 'scan_used', ref_id: receipt.id });
-  timing.ledger_ms = Math.round(performance.now() - ledgerStartedAt);
-  if (ledgerError && ledgerError.code !== '23505') {
-    return json(500, { code: 'VALIDATION_FAILED', message: ledgerError.message });
-  }
+  // The debit happened in can_scan() before any model spend; nothing to do here.
+  timing.ledger_ms = 0;
 
   timing.db_ms = Math.round(performance.now() - dbStartedAt);
   finishTiming(timing, startedAt);
+  charge.billable = true;
   return json(200, {
     status: 200,
     receipt_id: receipt.id,
     image_path: imagePath,
     acked_at: ackedAt,
+    // Refreshes the client's cached balance off a call it already made. The
+    // verdict predates this scan's debit, so account for it here.
+    scans_remaining: quota.remaining == null ? null : Math.max(0, quota.remaining - 1),
     timing,
     result: extraction,
   });
 }
 
 Deno.serve(async (req) => {
+  // The scan is charged by can_scan() before the model runs, so anything that
+  // is not a delivered receipt has to refund it. Hanging that off one flag here
+  // rather than a call at each return site: three sites already missed it — the
+  // 500s on a profile or category read, the 422 on an empty extraction, and the
+  // 200 that reports a rejected image.
+  const charge: ChargeGuard = { refund: null, billable: false };
   try {
-    return await handleExtract(req);
+    return await handleExtract(req, charge);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const debug =
@@ -1343,5 +1359,16 @@ Deno.serve(async (req) => {
           }
         : {};
     return json(500, { code: 'VALIDATION_FAILED', message, ...debug });
+  } finally {
+    if (charge.refund && !charge.billable) {
+      // After the response, never before it: a refund must not add latency to
+      // the error the user is already waiting on. refund_scan is idempotent, so
+      // overlapping with the persist path's own refund cannot double-credit.
+      waitUntil(
+        charge.refund().catch((refundError) =>
+          console.error('[extract] refund failed', { error: String(refundError) }),
+        ),
+      );
+    }
   }
 });

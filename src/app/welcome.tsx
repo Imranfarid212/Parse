@@ -12,8 +12,8 @@ export default function WelcomeScreen() {
   const auth = useAuth();
 
   useEffect(() => {
-    if (!auth.loading && !auth.session) router.replace('/');
-  }, [auth.loading, auth.session, router]);
+    if (!auth.loading && !auth.authenticated) router.replace('/');
+  }, [auth.authenticated, auth.loading, router]);
 
   return (
     <View style={styles.screen}>

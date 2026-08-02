@@ -33,7 +33,7 @@
  * Drag down = edit. Axis is direction-locked on first movement.
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { BlurView } from 'expo-blur';
@@ -556,7 +556,7 @@ export function ReceiptReview({
             accessible
             accessibilityRole="summary"
             accessibilityLabel={
-              fields ? `Receipt from ${fields.store}, total ${fields.total.toFixed(2)}` : 'Reading receipt'
+              fields ? `Receipt from ${fields.store}, total ${fields.total.toFixed(2)}` : 'Checking photo'
             }
             // Drag-only confirm would lock out VoiceOver; these are invisible.
             accessibilityActions={[
@@ -572,9 +572,22 @@ export function ReceiptReview({
               {/* Measurement only refines `feedH` and the flight's landing
                   size — the feed no longer depends on it, so a 0 here can't
                   leave the card invisible. */}
-              <View onLayout={(e) => setCardH(e.nativeEvent.layout.height)}>
-                <ScannedFace width={cardW} fields={fields} loading={loading} />
-              </View>
+              {/* Until fields land the app knows only that a photo was taken —
+                  not that it is a receipt. Drawing the receipt face here meant a
+                  capture the preflight then rejected had already rendered as a
+                  record, so declining it read as something being created and
+                  withdrawn. The frozen frame plus a spinner says the true thing.
+                  Measuring a 0 height here is safe: feedH only refines the
+                  flight's landing size, per the note above. */}
+              {fields || !loading ? (
+                <View onLayout={(e) => setCardH(e.nativeEvent.layout.height)}>
+                  <ScannedFace width={cardW} fields={fields} loading={loading} />
+                </View>
+              ) : (
+                <View style={styles.checking} pointerEvents="none">
+                  <ActivityIndicator color="rgba(255,255,255,0.92)" />
+                </View>
+              )}
             </Animated.View>
           </Animated.View>
         </GestureDetector>
@@ -583,7 +596,7 @@ export function ReceiptReview({
           <Animated.View style={[styles.hints, hintStyle]} pointerEvents="none">
             <Feather name="arrow-up" size={15} color="rgba(255,255,255,0.9)" />
             <Text style={styles.hintText}>
-              {loading ? (fields ? 'Finalizing receipt…' : 'Reading receipt…') : 'Swipe up to confirm · down to edit'}
+              {loading ? (fields ? 'Finalizing receipt…' : 'Checking photo…') : 'Swipe up to confirm · down to edit'}
             </Text>
           </Animated.View>
         )}
@@ -625,6 +638,8 @@ const styles = StyleSheet.create({
   // Z-order is the whole trick: folder back (4) → receipt (5) → flap (6), so
   // the receipt lands as the FRONT card in the folder, under the flap.
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', zIndex: 5 },
+  // Stands in for the card before there is anything to put in it.
+  checking: { alignItems: 'center', justifyContent: 'center', paddingVertical: 48 },
   // The feed window. `hidden` while the sheet is coming out; dropped to
   // `visible` once it is, or iOS would keep clipping the card's own shadow.
   feedClip: { overflow: 'hidden' },

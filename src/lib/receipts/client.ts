@@ -44,6 +44,8 @@ export type ExtractCompletedAck = {
   response: ExtractResponse;
   attempts?: CaptureAttemptTrace[];
   duplicateCandidate?: DuplicateCandidate | null;
+  /** Server's post-debit balance; null means unlimited, undefined means not reported. */
+  scansRemaining?: number | null;
 };
 
 export type ExtractVisibleDeadlineAck = {
@@ -112,6 +114,7 @@ type ExtractFunctionPayload = {
   receipt_id: string;
   rejected?: boolean;
   duplicate?: boolean;
+  scans_remaining?: number | null;
   duplicate_candidate?: {
     matched_receipt_id?: string;
     match_rule?: string;
@@ -167,6 +170,8 @@ type ExtractFunctionPayload = {
   code?: 'PROVIDER_DELAY' | string;
   error?: string;
   message?: string;
+  /** A 429 carries the server's own "come back in N seconds". */
+  retry_after_s?: number;
   model_parse_stage?: string;
   model_preview?: string;
   model_preview_length?: number;
@@ -200,6 +205,8 @@ const BALANCED_HARD_DEADLINE_MS = 15_000;
 const BALANCED_WARMUP_TIMEOUT_MS = 5000;
 const PRECISE_VISIBLE_DEADLINE_MS = 4500;
 const PRECISE_WARMUP_TIMEOUT_MS = 5000;
+/** Confirm is a small write; anything this slow is a stalled connection. */
+const CONFIRM_TIMEOUT_MS = 20_000;
 const AUTH_REFRESH_WINDOW_MS = 30_000;
 let balancedWarmupInFlight: Promise<void> | null = null;
 let preciseWarmupInFlight: Promise<void> | null = null;
@@ -265,6 +272,24 @@ export function getCaptureAttempts(error: unknown): CaptureAttemptTrace[] {
   return [];
 }
 
+/** Pulls the server's error code (e.g. QUOTA_EXHAUSTED) off a rejected extract(). */
+export function getExtractErrorCode(error: unknown): string | null {
+  if (error instanceof Error && typeof (error as Error & { code?: unknown }).code === 'string') {
+    return (error as Error & { code: string }).code;
+  }
+  return null;
+}
+
+/**
+ * A 429 carries the server's own "come back in N seconds". Scheduling anything
+ * shorter is a call guaranteed to be refused, which is exactly how a throttled
+ * capture used to burn its retry budget and die before the window even cleared.
+ */
+export function getExtractRetryAfterMs(error: unknown): number | null {
+  const seconds = error instanceof Error ? (error as Error & { retryAfterS?: unknown }).retryAfterS : undefined;
+  return typeof seconds === 'number' && seconds > 0 ? seconds * 1000 : null;
+}
+
 function errorWithAttempts(message: string, attempts: CaptureAttemptTrace[]) {
   const error = new Error(message) as Error & { captureAttempts: CaptureAttemptTrace[] };
   error.captureAttempts = attempts;
@@ -284,13 +309,24 @@ function extractPayloadToAck(data: ExtractFunctionPayload, attempts?: CaptureAtt
       }
     : null;
   if (data.status === 202) throw errorWithAttempts(data.code ?? 'PROVIDER_DELAY', attempts ?? []);
-  if (data.rejected || data.result?.is_receipt === false) return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, attempts };
-  if (data.duplicate) return { receiptId: data.receipt_id, response: { error: 'duplicate_receipt' }, attempts, duplicateCandidate };
+  if (data.rejected || data.result?.is_receipt === false) {
+    return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, attempts, scansRemaining: data.scans_remaining };
+  }
+  if (data.duplicate) {
+    return {
+      receiptId: data.receipt_id,
+      response: { error: 'duplicate_receipt' },
+      attempts,
+      duplicateCandidate,
+      scansRemaining: data.scans_remaining,
+    };
+  }
 
   return {
     receiptId: data.receipt_id,
     attempts,
     duplicateCandidate,
+    scansRemaining: data.scans_remaining,
     response: {
       date: data.result?.txn_date ?? '',
       store: data.result?.merchant ?? '',
@@ -600,8 +636,14 @@ export const supabaseExtractClient: ExtractClient = {
 
           const message = attemptData?.message ?? attemptData?.error ?? attemptData?.code ?? `extract failed (${attemptResponse.status})`;
           trace.error_message = message;
-          const error = errorWithAttempts(message, attempts) as Error & { statusCode?: number };
+          const error = errorWithAttempts(message, attempts) as Error & {
+            statusCode?: number;
+            code?: string;
+            retryAfterS?: number;
+          };
           error.statusCode = attemptResponse.status;
+          error.code = attemptData?.code;
+          error.retryAfterS = attemptData?.retry_after_s;
           if (!isRetryableBalancedStatus(attemptResponse.status)) {
             terminalHttpError = error;
           }
@@ -751,7 +793,15 @@ export const supabaseExtractClient: ExtractClient = {
             previewLength: data.model_preview_length,
           });
         }
-        throw new Error(data?.message ?? data?.error ?? data?.code ?? `extract failed (${response.status})`);
+        const error = new Error(data?.message ?? data?.error ?? data?.code ?? `extract failed (${response.status})`) as Error & {
+          statusCode?: number;
+          code?: string;
+          retryAfterS?: number;
+        };
+        error.statusCode = response.status;
+        error.code = data?.code;
+        error.retryAfterS = data?.retry_after_s;
+        throw error;
       }
       if (!data) throw new Error('extract returned no data');
       const requestMs = Date.now() - requestStartedAt;
@@ -769,14 +819,15 @@ export const supabaseExtractClient: ExtractClient = {
       }
       if (data.status === 202) throw new Error(data.code ?? 'PROVIDER_DELAY');
       if (data.rejected || data.result?.is_receipt === false) {
-        return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' } };
+        return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, scansRemaining: data.scans_remaining };
       }
       if (data.duplicate) {
-        return { receiptId: data.receipt_id, response: { error: 'duplicate_receipt' } };
+        return { receiptId: data.receipt_id, response: { error: 'duplicate_receipt' }, scansRemaining: data.scans_remaining };
       }
 
       return {
         receiptId: data.receipt_id,
+        scansRemaining: data.scans_remaining,
         response: {
           date: data.result?.txn_date ?? '',
           store: data.result?.merchant ?? '',
@@ -878,15 +929,27 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const accessToken = await getAccessTokenForRequest();
 
-    const response = await fetch(`${env.supabaseUrl}/functions/v1/receipt-confirm`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        apikey: env.supabaseAnonKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ receipt_id: receiptId, fields }),
-    });
+    // Bounded on purpose. This request used to have no timeout at all, so a
+    // connection that never settled left the local row marked `syncing` with
+    // nothing to retry it and no error to show — the receipt looked saved on
+    // the device and never reached the server. A timeout turns that silence
+    // into an ordinary retryable failure.
+    const timeout = childTimeoutSignal(undefined, CONFIRM_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(`${env.supabaseUrl}/functions/v1/receipt-confirm`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          apikey: env.supabaseAnonKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ receipt_id: receiptId, fields }),
+        signal: timeout.signal,
+      });
+    } finally {
+      timeout.dispose();
+    }
 
     let data: ConfirmReceiptErrorPayload | null = null;
     try {
@@ -895,7 +958,13 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
       // A non-JSON edge/gateway response should still leave the local row queued.
     }
     if (!response.ok) {
-      throw new Error(data?.message ?? data?.error ?? data?.code ?? `confirm failed (${response.status})`);
+      const error = new Error(data?.message ?? data?.error ?? data?.code ?? `confirm failed (${response.status})`);
+      // The caller has to tell "the server is briefly unwell" from "the server
+      // will reject this forever" — one is worth retrying and the other never
+      // is. Without the status that distinction is unrecoverable, because a
+      // JSON error body replaces the only place it appeared.
+      (error as Error & { status?: number }).status = response.status;
+      throw error;
     }
   },
 };

@@ -29,8 +29,8 @@ export default function CategoryOnboardingScreen() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!auth.loading && !auth.session) router.replace('/');
-  }, [auth.loading, auth.session, router]);
+    if (!auth.loading && !auth.authenticated) router.replace('/');
+  }, [auth.authenticated, auth.loading, router]);
 
   useEffect(() => {
     if (selectedIds.length > 0 || defaultIds.length === 0) return;

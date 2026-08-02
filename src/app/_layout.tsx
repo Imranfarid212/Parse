@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import { AppState } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -13,9 +14,19 @@ import {
   InstrumentSans_600SemiBold_Italic,
 } from '@expo-google-fonts/instrument-sans';
 import { AuthProvider } from '@/lib/auth/auth-context';
+import { purgeAbandonedCaptures, retryPending } from '@/lib/receipts/capture';
 import { colors } from '@/theme/tokens';
 
 SplashScreen.preventAutoHideAsync();
+
+/**
+ * How often a foregrounded app looks for captures whose retry is due.
+ *
+ * retryPending() only dispatches rows whose own backoff has elapsed, so this is
+ * a heartbeat rather than a retry interval — the cost of a tick with nothing to
+ * do is one indexed read against the local store.
+ */
+const RETRY_TICK_MS = 20_000;
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
@@ -29,6 +40,41 @@ export default function RootLayout() {
   useEffect(() => {
     if (fontsLoaded) SplashScreen.hideAsync();
   }, [fontsLoaded]);
+
+  // A queued capture writes itself a retry time and used to have nothing to
+  // honour it: the drain ran on the camera screen mounting, on the network
+  // coming back, and 600ms after a capture. So a receipt throttled or failed
+  // while the user then sat on Search stayed "waiting to retry" indefinitely —
+  // the queue worked, nothing ever asked it to run.
+  //
+  // At the root, so it does not depend on which screen is open, and paused in
+  // the background where the OS would kill the work anyway.
+  const ticking = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    const start = () => {
+      if (ticking.current) return;
+      void retryPending();
+      // Blocked and failed captures keep their photo so the user can act on
+      // them; this is what stops that becoming an unbounded pile. Once per
+      // foreground, not per tick — nothing here changes in twenty seconds.
+      void purgeAbandonedCaptures();
+      ticking.current = setInterval(() => void retryPending(), RETRY_TICK_MS);
+    };
+    const stop = () => {
+      if (!ticking.current) return;
+      clearInterval(ticking.current);
+      ticking.current = null;
+    };
+
+    if (AppState.currentState === 'active') start();
+    // Coming back to the foreground is itself the most likely moment for a due
+    // retry, so drain immediately rather than waiting out a first tick.
+    const sub = AppState.addEventListener('change', (state) => (state === 'active' ? start() : stop()));
+    return () => {
+      sub.remove();
+      stop();
+    };
+  }, []);
 
   if (!fontsLoaded) return null;
 

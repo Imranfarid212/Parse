@@ -62,6 +62,34 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_receipt_metric_queue_retry ON receipt_metric_queue (next_retry_at, created_at);
+    CREATE TABLE IF NOT EXISTS quota_cache (
+      user_id    TEXT PRIMARY KEY NOT NULL,
+      remaining  INTEGER,
+      paywall    TEXT NOT NULL DEFAULT 'plus',
+      fetched_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS local_owner (
+      id         INTEGER PRIMARY KEY CHECK (id = 1),
+      user_id    TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sync_state (
+      user_id     TEXT PRIMARY KEY NOT NULL,
+      hydrated_at INTEGER,
+      pull_cursor TEXT,
+      updated_at  INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS auth_cache (
+      id            INTEGER PRIMARY KEY CHECK (id = 1),
+      user_id       TEXT NOT NULL,
+      user_json     TEXT,
+      profile_json  TEXT,
+      categories_json TEXT NOT NULL DEFAULT '[]',
+      selected_category_ids_json TEXT NOT NULL DEFAULT '[]',
+      fetched_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL
+    );
   `);
   await ensureColumn(db, 'capture_mode', "ALTER TABLE receipts ADD COLUMN capture_mode TEXT NOT NULL DEFAULT 'default'");
   await ensureColumn(db, 'extraction_mode', "ALTER TABLE receipts ADD COLUMN extraction_mode TEXT NOT NULL DEFAULT 'balanced'");
@@ -84,6 +112,9 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   await ensureColumn(db, 'next_retry_at', 'ALTER TABLE receipts ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0');
   await ensureColumn(db, 'receipt_id', 'ALTER TABLE receipts ADD COLUMN receipt_id TEXT');
   await ensureColumn(db, 'acked_at', 'ALTER TABLE receipts ADD COLUMN acked_at INTEGER');
+  // Where the image lives on the server. A row restored from the server has no
+  // local file, so this is the only way back to its photo.
+  await ensureColumn(db, 'remote_image_path', 'ALTER TABLE receipts ADD COLUMN remote_image_path TEXT');
   await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_dedupe ON receipts (dedupe_key, created_at DESC)');
   await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_duplicate_of ON receipts (duplicate_of, created_at DESC)');
   return db;
@@ -117,6 +148,7 @@ type Persisted = {
   next_retry_at: number;
   receipt_id: string | null;
   acked_at: number | null;
+  remote_image_path: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -153,6 +185,7 @@ const hydrate = (r: Persisted): ReceiptRow => ({
   nextRetryAt: r.next_retry_at,
   receiptId: r.receipt_id,
   ackedAt: r.acked_at,
+  remoteImagePath: r.remote_image_path ?? null,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -282,6 +315,7 @@ export async function insertCaptured(
     nextRetryAt: now,
     receiptId: null,
     ackedAt: null,
+    remoteImagePath: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -361,11 +395,17 @@ export async function setFields(id: string, fields: ReceiptFields, status: Recei
   ]);
 }
 
+/**
+ * Extraction landed. `attempts` and `next_retry_at` are reset because one pair
+ * of columns serves both queues: without this, a scan that needed three
+ * extract retries would start its confirm backoff already three deep, and used
+ * to inherit those attempts against the confirm retry budget too.
+ */
 export async function markDispatched(id: string, receiptId: string, fields: ReceiptFields): Promise<void> {
   const db = await getDb();
   const now = Date.now();
   await db.runAsync(
-    "UPDATE receipts SET fields = ?, local_ocr_text = NULL, status = 'extracted', receipt_id = ?, acked_at = ?, updated_at = ? WHERE id = ?",
+    "UPDATE receipts SET fields = ?, local_ocr_text = NULL, status = 'extracted', receipt_id = ?, acked_at = ?, attempts = 0, next_retry_at = 0, updated_at = ? WHERE id = ?",
     [JSON.stringify(fields), receiptId, now, now, id],
   );
 }
@@ -451,6 +491,157 @@ export async function getByReceiptId(receiptId: string): Promise<ReceiptRow | nu
   return r ? hydrate(r) : null;
 }
 
+/**
+ * Restore-from-server support.
+ *
+ * The app has no continuous pull — one device writes, the server records. What
+ * it does need is a way back after a reinstall, and this is the local half of
+ * that: a marker so the restore runs once, and an upsert keyed by the id the
+ * device minted in the first place (`receipts.capture_id` server-side), so a
+ * restored row lands under the key it had before.
+ *
+ * `pull_cursor` is unused today. It exists so that adding a delta pull later —
+ * if this ever becomes multi-device — needs no local migration.
+ */
+/**
+ * Which account the local receipts belong to.
+ *
+ * Rows in `receipts` carry no user id — the device has always assumed one
+ * account — so signing out and signing in as someone else showed the previous
+ * user's receipts. This is the marker that makes that detectable. It survives
+ * sign-out deliberately: the receipts do too, and a user signing back into
+ * their own account must not lose captures that never made it up.
+ */
+export async function getLocalOwner(): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ user_id: string }>('SELECT user_id FROM local_owner WHERE id = 1');
+  return row?.user_id ?? null;
+}
+
+export async function setLocalOwner(userId: string): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO local_owner (id, user_id, updated_at) VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at`,
+    [userId, now],
+  );
+}
+
+/** Every local image path, so the files can go when their rows do. */
+export async function listAllImageUris(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ image_uri: string }>(
+    "SELECT image_uri FROM receipts WHERE image_uri IS NOT NULL AND image_uri <> ''",
+  );
+  return rows.map((row) => row.image_uri);
+}
+
+/** Drop every receipt and the restore markers. Only for an account switch. */
+export async function clearReceiptData(): Promise<void> {
+  const db = await getDb();
+  await db.execAsync('DELETE FROM receipts; DELETE FROM sync_state; DELETE FROM receipt_metric_queue;');
+}
+
+export type SyncState = { hydratedAt: number | null; pullCursor: string | null };
+
+export async function getSyncState(userId: string): Promise<SyncState | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ hydrated_at: number | null; pull_cursor: string | null }>(
+    'SELECT hydrated_at, pull_cursor FROM sync_state WHERE user_id = ?',
+    [userId],
+  );
+  if (!row) return null;
+  return { hydratedAt: row.hydrated_at, pullCursor: row.pull_cursor };
+}
+
+/**
+ * A local row is the authority on itself until the server has acknowledged it.
+ * Anything short of fully settled is either mid-flight or holds user work that
+ * has not gone up yet, and a pull must not overwrite it — that is how a
+ * background sync eats somebody's edit.
+ */
+export function hasUnsyncedLocalWork(row: ReceiptRow): boolean {
+  return !(row.status === 'synced' && row.resultSyncStatus === 'synced');
+}
+
+export async function setPullCursor(userId: string, cursor: string): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO sync_state (user_id, hydrated_at, pull_cursor, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET pull_cursor = excluded.pull_cursor,
+       hydrated_at = COALESCE(sync_state.hydrated_at, excluded.hydrated_at),
+       updated_at = excluded.updated_at`,
+    [userId, now, cursor, now],
+  );
+}
+
+/** Overwrite a settled row with the server's version. */
+export async function updateFromServer(row: RestoredReceipt): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE receipts SET status = ?, fields = ?, receipt_id = ?, remote_image_path = ?, updated_at = ?
+      WHERE id = ?`,
+    [row.status, JSON.stringify(row.fields), row.receiptId, row.remoteImagePath, Date.now(), row.captureId],
+  );
+}
+
+export async function setHydrated(userId: string, cursor: string | null): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO sync_state (user_id, hydrated_at, pull_cursor, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET hydrated_at = excluded.hydrated_at,
+       pull_cursor = excluded.pull_cursor, updated_at = excluded.updated_at`,
+    [userId, now, cursor, now],
+  );
+}
+
+export async function countReceipts(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM receipts');
+  return row?.n ?? 0;
+}
+
+export type RestoredReceipt = {
+  captureId: string;
+  receiptId: string;
+  status: ReceiptStatus;
+  fields: ReceiptFields;
+  remoteImagePath: string | null;
+  createdAt: number;
+};
+
+/**
+ * Write a receipt that came from the server. Idempotent on the capture id, and
+ * it never overwrites a row this device already has — anything local is either
+ * newer or still on its way up, and the whole point of the outbox is that
+ * un-acked local work wins.
+ */
+export async function upsertRestored(row: RestoredReceipt): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, status, fields,
+       image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at,
+       remote_image_path, created_at, updated_at)
+     VALUES (?, '', 'default', 'balanced', ?, ?, ?, 'synced', 0, 0, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO NOTHING`,
+    [
+      row.captureId,
+      row.status,
+      JSON.stringify(row.fields),
+      row.remoteImagePath ? 'uploaded' : 'missing_local_file',
+      row.receiptId,
+      now,
+      row.remoteImagePath,
+      row.createdAt,
+      now,
+    ],
+  );
+}
+
 /** Newest first — what the folder's carousel shows. */
 export async function listRecent(limit = 20): Promise<ReceiptRow[]> {
   const db = await getDb();
@@ -494,6 +685,41 @@ export async function findLocalDuplicateCandidate(
   return null;
 }
 
+/**
+ * Put a blocked or permanently failed capture back in the queue.
+ *
+ * llm_failed_retryable rather than pending_extract, which is the obvious choice
+ * and the wrong one: listRecent hides pending_extract, so requeueing to it made
+ * the row disappear from Search the instant the user asked to retry it — the
+ * one thing this whole change exists to prevent. This status is in the drain's
+ * work list, stays visible as "Waiting to retry", and is one of the statuses
+ * Search polls, so the row visibly settles rather than blinking out.
+ */
+export async function requeueForExtract(id: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE receipts SET status = 'llm_failed_retryable', attempts = 0, next_retry_at = 0, updated_at = ? WHERE id = ?",
+    [Date.now(), id],
+  );
+}
+
+/**
+ * Captures the user can still act on but hasn't, past their keep-by date.
+ *
+ * Keeping a blocked capture's photo is what makes it recoverable, and is also
+ * why something has to expire it — otherwise the capture directory grows
+ * forever for anyone who never upgrades. Returned rather than deleted here so
+ * the caller can remove the files too.
+ */
+export async function listAbandoned(olderThanMs: number): Promise<ReceiptRow[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<Persisted>(
+    "SELECT * FROM receipts WHERE status IN ('blocked_quota', 'llm_failed_final') AND updated_at <= ? ORDER BY updated_at ASC",
+    [Date.now() - olderThanMs],
+  );
+  return rows.map(hydrate);
+}
+
 /** Scans whose extraction never landed — the retry queue's work list. */
 export async function listPendingExtract(): Promise<ReceiptRow[]> {
   const db = await getDb();
@@ -502,6 +728,32 @@ export async function listPendingExtract(): Promise<ReceiptRow[]> {
     [Date.now()],
   );
   return rows.map(hydrate);
+}
+
+/**
+ * Return rows stranded mid-flight to their queue.
+ *
+ * Both queues mark a row `syncing`/`uploading` before the network call, and
+ * neither work list selects those states — so anything that does not survive
+ * the request (app backgrounded, process killed, a request that never settles)
+ * sat there forever, with no error recorded and the receipt still looking saved
+ * on the device. The staleness window is what keeps this from interrupting a
+ * request that is genuinely still running.
+ */
+export async function reclaimStalledSyncs(staleMs: number): Promise<number> {
+  const db = await getDb();
+  const cutoff = Date.now() - staleMs;
+  const results = await Promise.all([
+    db.runAsync(
+      "UPDATE receipts SET result_sync_status = 'pending_sync', updated_at = ? WHERE result_sync_status = 'syncing' AND updated_at < ?",
+      [Date.now(), cutoff],
+    ),
+    db.runAsync(
+      "UPDATE receipts SET image_sync_status = 'pending_upload', updated_at = ? WHERE image_sync_status = 'uploading' AND updated_at < ?",
+      [Date.now(), cutoff],
+    ),
+  ]);
+  return results.reduce((total, result) => total + (result.changes ?? 0), 0);
 }
 
 /** Confirmed locally but not yet on the server — the sync queue's work list. */
@@ -530,6 +782,51 @@ export async function countPending(): Promise<number> {
     "SELECT COUNT(*) AS n FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'image_upload_pending', 'confirmed_local', 'result_sync_pending')",
   );
   return r?.n ?? 0;
+}
+
+/**
+ * The locally cached scan balance. Plain SQLite, deliberately not secure
+ * storage: this is not a secret and not the authority — the server re-checks
+ * every scan, so a tampered value buys nothing but a camera that opens onto a
+ * 402. `remaining: null` means unlimited.
+ */
+export type CachedQuota = { remaining: number | null; paywall: 'plus' | 'unlimited'; fetchedAt: number };
+
+export async function getCachedQuota(userId: string): Promise<CachedQuota | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ remaining: number | null; paywall: string; fetched_at: number }>(
+    'SELECT remaining, paywall, fetched_at FROM quota_cache WHERE user_id = ?',
+    [userId],
+  );
+  if (!row) return null;
+  return {
+    remaining: row.remaining == null ? null : Number(row.remaining),
+    paywall: row.paywall === 'unlimited' ? 'unlimited' : 'plus',
+    fetchedAt: row.fetched_at,
+  };
+}
+
+export async function setCachedQuota(
+  userId: string,
+  quota: { remaining: number | null; paywall: 'plus' | 'unlimited' },
+): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO quota_cache (user_id, remaining, paywall, fetched_at, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET remaining = excluded.remaining, paywall = excluded.paywall,
+       fetched_at = excluded.fetched_at, updated_at = excluded.updated_at`,
+    [userId, quota.remaining, quota.paywall, now, now],
+  );
+}
+
+/** Optimistic decrement after a scan is accepted, so the next tap gates without a round trip. */
+export async function decrementCachedQuota(userId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE quota_cache SET remaining = MAX(0, remaining - 1), updated_at = ? WHERE user_id = ? AND remaining IS NOT NULL',
+    [Date.now(), userId],
+  );
 }
 
 export async function enqueueCaptureMetric(payload: CaptureMetricsPayload): Promise<void> {

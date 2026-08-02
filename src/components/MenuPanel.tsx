@@ -93,7 +93,7 @@ export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; in
         {active === 0 ? (
           <ExportScreen />
         ) : active === 1 ? (
-          <SearchView />
+          <SearchView onOpenPlan={() => setActive(2)} />
         ) : active === 2 ? (
           <PlanScreen />
         ) : (

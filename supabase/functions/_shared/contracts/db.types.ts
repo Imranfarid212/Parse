@@ -856,6 +856,32 @@ export type Database = {
           },
         ]
       }
+      scan_attempts: {
+        Row: {
+          created_at: string
+          id: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scan_attempts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       scan_ledger: {
         Row: {
           created_at: string
@@ -970,6 +996,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      can_scan: {
+        Args: { p_capture_id: string; p_user_id: string }
+        Returns: {
+          out_allowed: boolean
+          out_paywall: string
+          out_reason: string
+          out_remaining: number
+        }[]
+      }
       complete_onboarding: {
         Args: {
           selected_category_ids: number[]
@@ -981,6 +1016,10 @@ export type Database = {
       health_check: { Args: never; Returns: number }
       refresh_receipt_search_text: {
         Args: { target_receipt_id: string }
+        Returns: undefined
+      }
+      refund_scan: {
+        Args: { p_capture_id: string; p_user_id: string }
         Returns: undefined
       }
     }
@@ -1715,3 +1754,4 @@ export const Constants = {
     },
   },
 } as const
+
