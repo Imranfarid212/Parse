@@ -46,7 +46,7 @@ const mirrorSchemas = read('supabase/functions/_shared/contracts/schemas.ts');
 const fixtures = read('packages/contracts/src/fixtures.ts');
 const grants = read('supabase/migrations/20260723000100_b4_extract_fast_path_grants.sql');
 const quotaReadGrants = read('supabase/migrations/20260723000200_b4_quota_read_grants.sql');
-const canScanSql = read('supabase/migrations/20260801000100_b4_can_scan_rate_limit.sql');
+const canScanSql = read('supabase/migrations/20260801000200_b4_can_scan_unambiguous.sql');
 
 if (schemas !== mirrorSchemas) fail('contracts mirror differs; run npm run contracts:sync');
 
@@ -127,15 +127,17 @@ includes(quotaModule, "from './contracts/quota.ts'", 'server quota defers to the
 // The decision and the debit have to happen in one transaction, so the
 // arithmetic lives in SQL and contracts/quota.ts is the client's advisory copy.
 // Nothing else pins the two together — these assertions do.
-includes(canScanSql, 'create or replace function public.can_scan', 'can_scan exists as a database function');
-includes(canScanSql, 'from public.profiles where id = p_user_id for update', 'can_scan locks the user row');
+includes(canScanSql, 'create function public.can_scan', 'can_scan exists as a database function');
+includes(canScanSql, 'from public.profiles p where p.id = p_user_id for update', 'can_scan locks the user row');
 includes(canScanSql, 'v_plus_cap       constant int  := 500', 'SQL Plus cap matches the shared rule');
 includes(canScanSql, "v_plus_product   constant text := 'rf_plus_699_m'", 'SQL Plus product id matches');
 includes(canScanSql, "v_unlim_product  constant text := 'rf_unlimited_1199_m'", 'SQL Unlimited product id matches');
 includes(canScanSql, 'v_burst_per_min  constant int  := 12', 'per-user burst limit is 12/min');
 includes(canScanSql, 'current_period_start', 'quota counts from the subscription period start');
 includes(canScanSql, "status in ('active', 'grace')", 'grace counts as active for quota');
-includes(canScanSql, "reason, ref_id) do nothing", 'debit is idempotent on a redelivered capture');
+includes(canScanSql, 'on conflict on constraint scan_ledger_user_id_reason_ref_id_key do nothing', 'debit is idempotent on a redelivered capture');
+// Outputs must never share a name with a column they sit alongside in a query.
+excludesPattern(canScanSql, /returns table \(allowed /, 'can_scan outputs must not shadow column names');
 includes(canScanSql, 'grant execute on function public.can_scan(uuid, uuid) to service_role', 'can_scan is service-role only');
 excludesPattern(canScanSql, /grant execute on function public\.can_scan\(uuid, uuid\) to authenticated/, 'can_scan must not be callable by users directly');
 

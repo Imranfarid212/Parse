@@ -34,11 +34,14 @@ export async function evaluateQuota(client: RpcClient, userId: string, captureId
   const row = Array.isArray(data) ? data[0] : data;
   if (!row) throw new Error('can_scan returned no verdict');
 
+  // out_ prefixed so nothing the function returns can shadow a column name
+  // inside its own body — the first cut named them `reason`/`allowed` and every
+  // scan failed on the ambiguity.
   return {
-    canScan: row.allowed === true,
-    reason: row.reason,
-    remaining: row.remaining == null ? null : Number(row.remaining),
-    paywall: row.paywall === 'unlimited' ? 'unlimited' : 'plus',
+    canScan: row.out_allowed === true,
+    reason: row.out_reason,
+    remaining: row.out_remaining == null ? null : Number(row.out_remaining),
+    paywall: row.out_paywall === 'unlimited' ? 'unlimited' : 'plus',
   };
 }
 
