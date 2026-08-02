@@ -368,8 +368,6 @@ function normalizeExtraction(raw: unknown, categories: string[], defaultCurrency
       is_receipt: false,
     };
   }
-  const isReceipt = r.is_receipt !== false;
-
   const lineItems = Array.isArray(r.line_items)
     ? r.line_items.map((item) => {
         const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
@@ -383,12 +381,29 @@ function normalizeExtraction(raw: unknown, categories: string[], defaultCurrency
 
   const promptItems = Array.isArray(r.items) ? r.items.map(lineItemFromText) : [];
   const category = normalizeText(r.suggested_category ?? r.category);
+  const total = Math.max(0, safeNumber(r.total) || 0);
+  const items = lineItems.length > 0 ? lineItems : promptItems;
+
+  // An explicit verdict is honoured either way. A *missing* one used to mean
+  // "receipt", which is the wrong direction to fail in now that the scan is
+  // charged before the model runs: only an explicit false triggers a refund, so
+  // an omitted field became a charge the user never got back. The schema marks
+  // the field required, so this is the model deviating — decide it from what
+  // was actually extracted. Same rule as extract-balanced, deliberately.
+  const claimed = typeof r.is_receipt === 'boolean' ? r.is_receipt : null;
+  // Item *count* is not evidence: an order list extracts named items with
+  // quantities and not one amount among them. A scan with no money in it
+  // produced nothing usable, so an explicit "receipt" does not stand without a
+  // single amount — the rejection path refunds it and asks for a retake.
+  const hasValue = total > 0 || items.some((item) => item.amount > 0);
+  const isReceipt = hasValue && claimed !== false;
+
   return {
     merchant: normalizeText(r.merchant ?? r.store, isReceipt ? 'Unknown merchant' : 'Rejected image').slice(0, 160),
     txn_date: isIsoDate(r.txn_date) ? String(r.txn_date) : toIsoDate(r.date),
     currency: isCurrency(r.currency) ? String(r.currency) : defaultCurrency,
-    total: Math.max(0, safeNumber(r.total) || 0),
-    line_items: lineItems.length > 0 ? lineItems : promptItems,
+    total,
+    line_items: items,
     suggested_category: categories.includes(category) ? category : 'Miscellaneous',
     handwritten_notes: normalizeText(r.handwritten_notes ?? r.notes).slice(0, 1000),
     is_receipt: isReceipt,
@@ -851,7 +866,15 @@ async function persistBalancedResult({
   }
 }
 
-async function handleExtract(req: Request) {
+/**
+ * Tracks the can_scan() debit for one request so the caller can give it back.
+ * `billable` is set only where a receipt is actually delivered, so anything
+ * else — an error, a rejected image — refunds by default rather than by
+ * someone remembering to add a call at a new return site.
+ */
+type ChargeGuard = { refund: (() => Promise<void>) | null; billable: boolean };
+
+async function handleExtract(req: Request, charge: ChargeGuard) {
   reqCount += 1;
   const startedAt = performance.now();
   const timing: ExtractTiming = {
@@ -1122,6 +1145,10 @@ async function handleExtract(req: Request) {
     return json(402, { status: 402, code: 'QUOTA_EXHAUSTED', paywall: quota.paywall });
   }
 
+  // From here on the user has been debited. Every exit below that is not a
+  // delivered receipt gives it back — see the finally in Deno.serve.
+  charge.refund = () => refundScan(admin, userId, captureId);
+
   if (req.headers.get('x-rf-force-storage-failure') === '1') {
     return json(503, { code: 'VALIDATION_FAILED', message: 'Forced Storage failure' });
   }
@@ -1206,6 +1233,7 @@ async function handleExtract(req: Request) {
       timing.duplicate_hydrate_ms = Math.round(performance.now() - hydrateStartedAt);
       timing.db_ms = Math.round(performance.now() - dbStartedAt);
       finishTiming(timing, startedAt);
+      charge.billable = true;
       return json(200, {
         status: 200,
         receipt_id: duplicate.id,
@@ -1297,6 +1325,7 @@ async function handleExtract(req: Request) {
 
   timing.db_ms = Math.round(performance.now() - dbStartedAt);
   finishTiming(timing, startedAt);
+  charge.billable = true;
   return json(200, {
     status: 200,
     receipt_id: receipt.id,
@@ -1311,8 +1340,14 @@ async function handleExtract(req: Request) {
 }
 
 Deno.serve(async (req) => {
+  // The scan is charged by can_scan() before the model runs, so anything that
+  // is not a delivered receipt has to refund it. Hanging that off one flag here
+  // rather than a call at each return site: three sites already missed it — the
+  // 500s on a profile or category read, the 422 on an empty extraction, and the
+  // 200 that reports a rejected image.
+  const charge: ChargeGuard = { refund: null, billable: false };
   try {
-    return await handleExtract(req);
+    return await handleExtract(req, charge);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const debug =
@@ -1324,5 +1359,16 @@ Deno.serve(async (req) => {
           }
         : {};
     return json(500, { code: 'VALIDATION_FAILED', message, ...debug });
+  } finally {
+    if (charge.refund && !charge.billable) {
+      // After the response, never before it: a refund must not add latency to
+      // the error the user is already waiting on. refund_scan is idempotent, so
+      // overlapping with the persist path's own refund cannot double-credit.
+      waitUntil(
+        charge.refund().catch((refundError) =>
+          console.error('[extract] refund failed', { error: String(refundError) }),
+        ),
+      );
+    }
   }
 });

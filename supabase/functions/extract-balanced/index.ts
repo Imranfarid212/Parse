@@ -192,15 +192,35 @@ function normalizeExtraction(raw: unknown, defaultCurrency: string, categoryName
   const promptItems = Array.isArray(r.items) ? r.items.map(lineItemFromText) : [];
   const category = normalizeText(r.suggested_category ?? r.category);
 
+  const merchant = normalizeText(r.merchant ?? r.store, 'Unknown merchant').slice(0, 160);
+  const total = Math.max(0, safeNumber(r.total) || 0);
+  const items = lineItems.length > 0 ? lineItems : promptItems;
+
+  // An explicit verdict is honoured either way. A *missing* one used to mean
+  // "receipt", which is the wrong direction to fail in now that the scan is
+  // charged before the model runs: only an explicit false triggers a refund, so
+  // an omitted field became a charge the user never got back. The schema marks
+  // the field required, so this is the model deviating — decide it from what
+  // was actually extracted rather than assuming either answer.
+  const claimed = typeof r.is_receipt === 'boolean' ? r.is_receipt : null;
+  // Item *count* is not evidence. An order list extracts seven named items with
+  // quantities and not one amount among them — receipt-shaped, worth nothing.
+  const hasValue = total > 0 || items.some((item) => item.amount > 0);
+
   return {
-    merchant: normalizeText(r.merchant ?? r.store, 'Unknown merchant').slice(0, 160),
+    merchant,
     txn_date: isIsoDate(r.txn_date) ? String(r.txn_date) : toIsoDate(r.date),
     currency: isCurrency(r.currency) ? String(r.currency) : defaultCurrency,
-    total: Math.max(0, safeNumber(r.total) || 0),
-    line_items: lineItems.length > 0 ? lineItems : promptItems,
+    total,
+    line_items: items,
     // Off-list output never reaches the DB: it becomes Miscellaneous here (D3).
     suggested_category: categoryNames.includes(category) ? category : MISCELLANEOUS,
-    is_receipt: r.is_receipt !== false,
+    // A scan with no money in it produced nothing usable, whether the photo was
+    // not a receipt or was one whose prices did not survive the capture. The
+    // user cannot expense a 0.00 row, so an explicit claim of "receipt" does not
+    // stand without a single amount: routing it down the rejection path gets
+    // them a retake notice and their scan back.
+    is_receipt: hasValue && claimed !== false,
   };
 }
 
@@ -992,6 +1012,14 @@ Deno.serve(async (req) => {
     req_count: reqCount,
     isolate_age_ms: Date.now() - BOOT_AT,
   };
+  // The scan is charged by can_scan() before the model runs, so every way out of
+  // this handler that is not a delivered receipt has to give it back. Sprinkling
+  // refundScan() across a dozen return sites is how one gets missed — three
+  // already were: the 503 on a failed reservation, the 422 on an empty
+  // extraction, and the catch-all 500 all charged and never refunded. So the
+  // refund hangs off one flag in a finally instead.
+  let refundCharge: (() => Promise<void>) | null = null;
+  let billable = false;
   try {
     if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
     if (req.method !== 'POST') return json(405, { code: 'VALIDATION_FAILED', message: 'POST required' });
@@ -1126,6 +1154,9 @@ Deno.serve(async (req) => {
       return json(402, { status: 402, code: 'QUOTA_EXHAUSTED', paywall: quota.paywall, timing });
     }
 
+    // From here on the user has been debited. Arm the refund.
+    refundCharge = () => refundScan(admin, userId, captureId);
+
     // The category read was started before the body was parsed, so this has
     // usually resolved already and costs nothing here.
     const categories = await categoriesPromise;
@@ -1188,6 +1219,11 @@ Deno.serve(async (req) => {
       }),
     );
 
+    // A receipt is being delivered, so the charge stands. If the model rejected
+    // the image, persistExtraction() refunds it on the background path; that is
+    // idempotent with this one, so neither can double-credit.
+    billable = extraction.is_receipt;
+
     return json(200, {
       status: 200,
       receipt_id: receiptId,
@@ -1208,5 +1244,17 @@ Deno.serve(async (req) => {
       message: error instanceof Error ? error.message : 'Unexpected balanced extraction failure',
       timing,
     });
+  } finally {
+    if (refundCharge && !billable) {
+      // After the response, never before it: a refund must not add latency to
+      // the error the user is already waiting on. waitUntil keeps the isolate
+      // alive for it, and refund_scan is idempotent, so overlapping with the
+      // background persist's own refund cannot double-credit.
+      waitUntil(
+        refundCharge().catch((refundError) =>
+          console.error('[extract-balanced] refund failed', { error: shortError(refundError) }),
+        ),
+      );
+    }
   }
 });
