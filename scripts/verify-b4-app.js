@@ -104,6 +104,9 @@ includes(capture, 'export async function retryBlockedCapture', 'a blocked captur
 includes(capture, 'export async function purgeAbandonedCaptures', 'kept photos expire instead of accumulating forever');
 includes(search, "blocked_quota: 'Out of scans'", 'a blocked capture is labelled, not silently absent');
 includes(search, 'retryBlockedCapture(id)', 'the list offers a way back');
+// listRecent hides pending_extract, so requeueing to it makes the row vanish
+// from Search the moment the user asks to retry it.
+includes(read('src/lib/receipts/store.ts'), "SET status = 'llm_failed_retryable', attempts = 0", 'a retried capture stays visible while it runs');
 if (/'blocked_quota'/.test(read('src/lib/receipts/store.ts').match(/listPendingExtract[\s\S]{0,400}/)?.[0] ?? '')) {
   fail('blocked captures must stay out of the retry queue; retrying cannot conjure scans');
 }

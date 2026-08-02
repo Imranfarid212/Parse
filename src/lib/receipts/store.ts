@@ -688,14 +688,17 @@ export async function findLocalDuplicateCandidate(
 /**
  * Put a blocked or permanently failed capture back in the queue.
  *
- * The photo was kept precisely so this is possible: the row goes back to
- * pending_extract with a cleared attempt count, and the next drain picks it up
- * like any other pending scan.
+ * llm_failed_retryable rather than pending_extract, which is the obvious choice
+ * and the wrong one: listRecent hides pending_extract, so requeueing to it made
+ * the row disappear from Search the instant the user asked to retry it — the
+ * one thing this whole change exists to prevent. This status is in the drain's
+ * work list, stays visible as "Waiting to retry", and is one of the statuses
+ * Search polls, so the row visibly settles rather than blinking out.
  */
 export async function requeueForExtract(id: string): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    "UPDATE receipts SET status = 'pending_extract', attempts = 0, next_retry_at = 0, updated_at = ? WHERE id = ?",
+    "UPDATE receipts SET status = 'llm_failed_retryable', attempts = 0, next_retry_at = 0, updated_at = ? WHERE id = ?",
     [Date.now(), id],
   );
 }
