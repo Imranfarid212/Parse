@@ -7,7 +7,7 @@ import {
   resolveCategoryId,
   type UserCategories,
 } from '../_shared/categories.ts';
-import { evaluateQuota, type QuotaVerdict } from '../_shared/quota.ts';
+import { evaluateQuota, refundScan, type ScanVerdict } from '../_shared/quota.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -772,11 +772,10 @@ async function persistResult({
     if (itemsError) throw itemsError;
   }
 
-  if (extraction.is_receipt) {
-    const { error: ledgerError } = await admin
-      .from('scan_ledger')
-      .insert({ user_id: userId, delta: -1, reason: 'scan_used', ref_id: receiptId });
-    if (ledgerError && ledgerError.code !== '23505') throw ledgerError;
+  // The scan was charged by can_scan() before the model ran, so the only work
+  // here is giving it back when the image turns out not to be a receipt.
+  if (!extraction.is_receipt) {
+    await refundScan(admin, userId, captureId);
   }
 
   console.log('[extract-balanced] background persist completed', {
@@ -1102,9 +1101,9 @@ Deno.serve(async (req) => {
     // arrive after the client's visible deadline — at which point the client has
     // stopped listening and the verdict is lost.
     const quotaStartedAt = performance.now();
-    let quota: QuotaVerdict;
+    let quota: ScanVerdict;
     try {
-      quota = await evaluateQuota(admin, userId);
+      quota = await evaluateQuota(admin, userId, captureId);
       timing.quota_ms = Math.round(performance.now() - quotaStartedAt);
       timing.quota_reason = quota.reason;
     } catch (error) {
@@ -1119,6 +1118,11 @@ Deno.serve(async (req) => {
       // Nothing has been reserved or sent to a model yet, so there is nothing to
       // undo — and the client gets this back in a few hundred ms.
       timing.total_ms = Math.round(performance.now() - startedAt);
+      // Too fast is not out of scans: 429 is retryable, 402 is a verdict, and
+      // the client already treats them differently.
+      if (quota.reason === 'rate_limited') {
+        return json(429, { status: 429, code: 'RATE_LIMITED', retry_after_s: 60, timing });
+      }
       return json(402, { status: 402, code: 'QUOTA_EXHAUSTED', paywall: quota.paywall, timing });
     }
 
@@ -1194,7 +1198,7 @@ Deno.serve(async (req) => {
       // The verdict was read before this scan's debit, so account for it here;
       // a rejected image is never charged.
       scans_remaining:
-        quota.remaining == null ? null : Math.max(0, quota.remaining - (extraction.is_receipt ? 1 : 0)),
+        quota.remaining == null ? null : quota.remaining + (extraction.is_receipt ? 0 : 1),
       timing,
       result: extraction,
     });

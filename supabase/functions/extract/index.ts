@@ -1,7 +1,7 @@
 // @ts-nocheck - Supabase Edge Functions run under Deno, outside the Expo app tsconfig.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
-import { evaluateQuota } from '../_shared/quota.ts';
+import { evaluateQuota, refundScan } from '../_shared/quota.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -844,11 +844,10 @@ async function persistBalancedResult({
     if (itemsError) throw itemsError;
   }
 
-  if (extraction.is_receipt) {
-    const { error: ledgerError } = await admin
-      .from('scan_ledger')
-      .insert({ user_id: userId, delta: -1, reason: 'scan_used', ref_id: receiptId });
-    if (ledgerError && ledgerError.code !== '23505') throw ledgerError;
+  // Charged by can_scan() before the model ran; give it back if the image was
+  // not a receipt.
+  if (!extraction.is_receipt) {
+    await refundScan(admin, userId, captureId);
   }
 }
 
@@ -1096,7 +1095,7 @@ async function handleExtract(req: Request) {
   const quotaStartedAt = performance.now();
   // Shared with extract-balanced so the two modes can never enforce different
   // limits — see functions/_shared/quota.ts.
-  const quotaPromise = evaluateQuota(userSupabase, userId).then((verdict) => {
+  const quotaPromise = evaluateQuota(admin, userId, captureId).then((verdict) => {
     timing.quota_ms = Math.round(performance.now() - quotaStartedAt);
     return verdict;
   });
@@ -1115,7 +1114,13 @@ async function handleExtract(req: Request) {
   const categories = Array.from(new Set([...categoryRows.map((row) => row.name), 'Miscellaneous']));
   const categoryByName = new Map(categoryRows.map((row) => [row.name, row.id]));
 
-  if (!quota.canScan) return json(402, { status: 402, code: 'QUOTA_EXHAUSTED', paywall: quota.paywall });
+  if (!quota.canScan) {
+    // Too fast is not out of scans: 429 is retryable, 402 is a verdict.
+    if (quota.reason === 'rate_limited') {
+      return json(429, { status: 429, code: 'RATE_LIMITED', retry_after_s: 60 });
+    }
+    return json(402, { status: 402, code: 'QUOTA_EXHAUSTED', paywall: quota.paywall });
+  }
 
   if (req.headers.get('x-rf-force-storage-failure') === '1') {
     return json(503, { code: 'VALIDATION_FAILED', message: 'Forced Storage failure' });
@@ -1287,14 +1292,8 @@ async function handleExtract(req: Request) {
     });
   }
 
-  const ledgerStartedAt = performance.now();
-  const { error: ledgerError } = await admin
-    .from('scan_ledger')
-    .insert({ user_id: userId, delta: -1, reason: 'scan_used', ref_id: receipt.id });
-  timing.ledger_ms = Math.round(performance.now() - ledgerStartedAt);
-  if (ledgerError && ledgerError.code !== '23505') {
-    return json(500, { code: 'VALIDATION_FAILED', message: ledgerError.message });
-  }
+  // The debit happened in can_scan() before any model spend; nothing to do here.
+  timing.ledger_ms = 0;
 
   timing.db_ms = Math.round(performance.now() - dbStartedAt);
   finishTiming(timing, startedAt);

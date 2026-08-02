@@ -1,56 +1,49 @@
 // @ts-nocheck - Supabase Edge Functions run under Deno, outside the Expo app tsconfig.
 /**
- * Server-side can_scan(): reads the counts, then defers to the shared rule in
- * contracts so the client's shutter gate and this cannot drift apart.
+ * Server-side quota: one call to public.can_scan(), which decides and debits
+ * inside a single transaction under a row lock on the user.
  *
- * This is the only authority. The client's copy is advisory UX.
+ * The arithmetic moved into SQL because it has to run in the same transaction
+ * as the debit — evaluating here and charging later left a window where two
+ * parallel captures could both spend the last scan, and left nothing bounding
+ * how fast a user could call a paid model. The rule in contracts/quota.ts
+ * remains the client's advisory copy for the shutter gate; the B4 gate pins the
+ * cap and the product ids in both places so they cannot drift.
+ *
+ * This is the only authority.
  */
-import {
-  decideQuota,
-  PRODUCT_PLUS,
-  PRODUCT_UNLIMITED,
-  type QuotaVerdict,
-} from './contracts/quota.ts';
+import { PRODUCT_PLUS, PRODUCT_UNLIMITED, type QuotaVerdict } from './contracts/quota.ts';
 
 export { PRODUCT_PLUS, PRODUCT_UNLIMITED };
 export type { QuotaVerdict };
 
 /** Just the slice of a supabase-js client this needs, so callers can pass either. */
-type QueryClient = { from: (table: string) => any };
+type RpcClient = { rpc: (name: string, params: Record<string, unknown>) => any };
 
-export async function evaluateQuota(client: QueryClient, userId: string): Promise<QuotaVerdict> {
-  const { data: subscriptions, error: subscriptionError } = await client
-    .from('subscriptions')
-    .select('product_id, status, current_period_start')
-    .eq('user_id', userId)
-    // Grace counts as active for quota — expiry flips on the webhook, not a clock.
-    .in('status', ['active', 'grace'])
-    .order('current_period_start', { ascending: false })
-    .limit(1);
-  if (subscriptionError) throw subscriptionError;
+/** Adds the burst verdict to the shared reasons; the client never sees it as a paywall. */
+export type ScanVerdict = QuotaVerdict & { reason: QuotaVerdict['reason'] | 'rate_limited' };
 
-  const subscription = subscriptions?.[0] ?? null;
-  const productId = subscription?.product_id ?? null;
-
-  if (productId === PRODUCT_UNLIMITED) {
-    return decideQuota({ productId, periodStart: null, usedThisPeriod: null, freeBalance: null });
-  }
-
-  // current_period_start is authoritative for the monthly window, not created_at.
-  const periodStart = productId === PRODUCT_PLUS ? subscription?.current_period_start ?? null : null;
-  if (periodStart) {
-    const { count, error } = await client
-      .from('scan_ledger')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .eq('reason', 'scan_used')
-      .gte('created_at', periodStart);
-    if (error) throw error;
-    return decideQuota({ productId, periodStart, usedThisPeriod: count ?? 0, freeBalance: null });
-  }
-
-  const { data: ledger, error } = await client.from('scan_ledger').select('delta').eq('user_id', userId);
+/**
+ * Decide and charge. `remaining` already accounts for this scan. Anything that
+ * turns out not to be billable must call refundScan() with the same capture id.
+ */
+export async function evaluateQuota(client: RpcClient, userId: string, captureId: string): Promise<ScanVerdict> {
+  const { data, error } = await client.rpc('can_scan', { p_user_id: userId, p_capture_id: captureId });
   if (error) throw error;
-  const freeBalance = (ledger ?? []).reduce((sum: number, row: { delta: unknown }) => sum + (Number(row.delta) || 0), 0);
-  return decideQuota({ productId, periodStart: null, usedThisPeriod: null, freeBalance });
+
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) throw new Error('can_scan returned no verdict');
+
+  return {
+    canScan: row.allowed === true,
+    reason: row.reason,
+    remaining: row.remaining == null ? null : Number(row.remaining),
+    paywall: row.paywall === 'unlimited' ? 'unlimited' : 'plus',
+  };
+}
+
+/** Give back a scan charged at decision time that turned out not to be billable. */
+export async function refundScan(client: RpcClient, userId: string, captureId: string): Promise<void> {
+  const { error } = await client.rpc('refund_scan', { p_user_id: userId, p_capture_id: captureId });
+  if (error) throw error;
 }

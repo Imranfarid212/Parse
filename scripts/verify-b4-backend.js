@@ -46,6 +46,7 @@ const mirrorSchemas = read('supabase/functions/_shared/contracts/schemas.ts');
 const fixtures = read('packages/contracts/src/fixtures.ts');
 const grants = read('supabase/migrations/20260723000100_b4_extract_fast_path_grants.sql');
 const quotaReadGrants = read('supabase/migrations/20260723000200_b4_quota_read_grants.sql');
+const canScanSql = read('supabase/migrations/20260801000100_b4_can_scan_rate_limit.sql');
 
 if (schemas !== mirrorSchemas) fail('contracts mirror differs; run npm run contracts:sync');
 
@@ -77,8 +78,7 @@ includes(confirmFn, "{ status: 'confirmed', confirmed_via: 'user' }", 'user conf
 includes(confirmFn, ".eq('user_id', userData.user.id)", 'confirmation ownership guard');
 includes(confirmFn, "receipt_id must be a UUID", 'confirmation id validation');
 includes(fn, ".from('receipt_items').insert", 'line item persistence');
-includes(fn, "reason: 'scan_used'", 'quota credit ledger debit');
-includes(fn, "ledgerError.code !== '23505'", 'duplicate scan ledger idempotency');
+includes(fn, 'refundScan(admin, userId, captureId)', 'rejected image gives the scan back');
 includes(fn, "return json(402, { status: 402, code: 'QUOTA_EXHAUSTED'", 'quota exhausted response');
 includes(fn, ".storage.from('receipts').remove([imagePath])", 'non-receipt image deletion');
 includes(fn, "x-rf-force-storage-failure", 'forced storage failure drill');
@@ -123,8 +123,29 @@ includes(contractsQuota, 'export function decideQuota', 'quota rule is one pure 
 excludesPattern(contractsQuota, /^import\s/m, 'contracts quota rule must stay dependency-free');
 
 includes(quotaModule, "from './contracts/quota.ts'", 'server quota defers to the shared rule');
-includes(quotaModule, 'current_period_start', 'quota counts from the subscription period start');
-includes(quotaModule, "'active', 'grace'", 'grace counts as active for quota');
+
+// The decision and the debit have to happen in one transaction, so the
+// arithmetic lives in SQL and contracts/quota.ts is the client's advisory copy.
+// Nothing else pins the two together — these assertions do.
+includes(canScanSql, 'create or replace function public.can_scan', 'can_scan exists as a database function');
+includes(canScanSql, 'from public.profiles where id = p_user_id for update', 'can_scan locks the user row');
+includes(canScanSql, 'v_plus_cap       constant int  := 500', 'SQL Plus cap matches the shared rule');
+includes(canScanSql, "v_plus_product   constant text := 'rf_plus_699_m'", 'SQL Plus product id matches');
+includes(canScanSql, "v_unlim_product  constant text := 'rf_unlimited_1199_m'", 'SQL Unlimited product id matches');
+includes(canScanSql, 'v_burst_per_min  constant int  := 12', 'per-user burst limit is 12/min');
+includes(canScanSql, 'current_period_start', 'quota counts from the subscription period start');
+includes(canScanSql, "status in ('active', 'grace')", 'grace counts as active for quota');
+includes(canScanSql, "reason, ref_id) do nothing", 'debit is idempotent on a redelivered capture');
+includes(canScanSql, 'grant execute on function public.can_scan(uuid, uuid) to service_role', 'can_scan is service-role only');
+excludesPattern(canScanSql, /grant execute on function public\.can_scan\(uuid, uuid\) to authenticated/, 'can_scan must not be callable by users directly');
+
+includes(quotaModule, "client.rpc('can_scan'", 'server quota decides through the atomic function');
+includes(quotaModule, "client.rpc('refund_scan'", 'server quota can give a scan back');
+includes(fn, "code: 'RATE_LIMITED'", 'precise returns 429 when the burst limit is hit');
+includes(balancedFn, "code: 'RATE_LIMITED'", 'balanced returns 429 when the burst limit is hit');
+includes(fn, 'evaluateQuota(admin, userId, captureId)', 'precise charges under the capture id');
+includes(balancedFn, 'evaluateQuota(admin, userId, captureId)', 'balanced charges under the capture id');
+includes(balancedFn, 'refundScan(admin, userId, captureId)', 'balanced gives back a rejected scan');
 includes(fn, "from '../_shared/quota.ts'", 'precise uses the shared quota module');
 includes(balancedFn, "from '../_shared/quota.ts'", 'balanced uses the shared quota module');
 excludes(fn, 'rf_plus_699_m', 'precise must not re-implement product tiers');
@@ -136,15 +157,18 @@ excludes(quotaModule, 'PLUS_MONTHLY_CAP = 500', 'server must not re-declare the 
 includes(fn, 'scans_remaining:', 'precise reports the remaining balance');
 includes(balancedFn, 'scans_remaining:', 'balanced reports the remaining balance');
 
-includes(balancedFn, 'evaluateQuota(admin, userId)', 'balanced runs can_scan');
+includes(balancedFn, 'evaluateQuota(admin, userId, captureId)', 'balanced runs can_scan');
 includes(balancedFn, 'if (!quota.canScan)', 'balanced enforces the quota verdict');
 includes(balancedFn, "code: 'QUOTA_EXHAUSTED'", 'balanced quota exhausted response');
-includes(balancedFn, "reason: 'scan_used'", 'balanced quota credit ledger debit');
-includes(balancedFn, "ledgerError.code !== '23505'", 'balanced duplicate scan ledger idempotency');
+// The debit now happens inside can_scan(), before the model runs, so neither
+// function may write the ledger directly — that was the window in which two
+// parallel captures could both spend the last scan.
+excludes(balancedFn, "reason: 'scan_used'", 'balanced must not debit outside can_scan');
+excludes(fn, "reason: 'scan_used'", 'precise must not debit outside can_scan');
 // Both anchors live in the request handler, so source order is execution order:
 // the verdict is checked, and an exhausted account returns, before anything is
 // persisted or charged.
-order(balancedFn, 'evaluateQuota(admin, userId)', 'if (!quota.canScan)', 'quota verdict is awaited before use');
+order(balancedFn, 'evaluateQuota(admin, userId, captureId)', 'if (!quota.canScan)', 'quota verdict is awaited before use');
 order(balancedFn, 'if (!quota.canScan)', 'persistResultWithJob({', 'exhausted accounts never reach persistence');
 
 // The receipt row is claimed before the model call, so the id returned to the
