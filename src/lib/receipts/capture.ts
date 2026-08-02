@@ -260,8 +260,8 @@ function draftFromOcr(text: string, defaultCurrency: string): ReceiptFields | nu
 }
 
 export type LocalDuplicateDecision = 'view_existing' | 'save_anyway';
-export type PrecisePreflightDecision = 'continue' | 'cancel';
-export type PrecisePreflightWarning = {
+export type PreflightDecision = 'continue' | 'cancel';
+export type PreflightWarning = {
   confidence: 'low' | 'uncertain';
   textLength: number;
   amountCount: number;
@@ -270,7 +270,7 @@ export type PrecisePreflightWarning = {
   timedOut: boolean;
 };
 
-function scoreReceiptPreflight(text: string | null, hasDocument: boolean, timedOut: boolean): PrecisePreflightWarning | null {
+function scoreReceiptPreflight(text: string | null, hasDocument: boolean, timedOut: boolean): PreflightWarning | null {
   const normalized = text ?? '';
   const amountCount = [...normalized.matchAll(/(?:rs\.?|inr|₹|\$|cad|usd)?\s*\d{1,7}(?:[.,]\d{2})/gi)].length;
   const keywordCount = [...normalized.matchAll(/\b(receipt|invoice|bill|total|subtotal|tax|gst|vat|paid|cash|card|debit|credit|amount|qty|item|change|balance)\b/gi)].length;
@@ -345,7 +345,7 @@ export async function processCapture(
       candidate: LocalDuplicateCandidate,
       draft: ReceiptFields,
     ) => Promise<LocalDuplicateDecision>;
-    onPrecisePreflightWarning?: (warning: PrecisePreflightWarning) => Promise<PrecisePreflightDecision>;
+    onPreflightWarning?: (warning: PreflightWarning) => Promise<PreflightDecision>;
     onPrecisePreflightAccepted?: () => void;
   },
 ): Promise<CaptureOutcome> {
@@ -419,6 +419,22 @@ export async function processCapture(
       textLength: localOcrText?.length ?? 0,
       timedOut: ocr.timedOut,
     });
+
+    // The same check Precise runs, on text this mode already read. Catching an
+    // obvious non-receipt here costs nothing and skips the model call outright,
+    // rather than paying for one and refunding it afterwards. It runs before
+    // the draft card so a non-receipt never renders as a receipt.
+    const balancedWarning = scoreReceiptPreflight(localOcrText, Boolean(corrected), ocr.timedOut);
+    logLatency('preflight_done', {
+      mode: 'balanced',
+      warning: balancedWarning?.confidence ?? null,
+      amountCount: balancedWarning?.amountCount ?? null,
+      keywordCount: balancedWarning?.keywordCount ?? null,
+    });
+    if (balancedWarning) {
+      const decision = await options?.onPreflightWarning?.(balancedWarning);
+      if (decision !== 'continue') return { kind: 'preflight_rejected' };
+    }
     const draft = localOcrText ? draftFromOcr(localOcrText, options?.defaultCurrency ?? 'USD') : null;
     if (draft) {
       logLatency('local_draft_ready', { captureId, merchant: draft.store, total: draft.total });
@@ -477,7 +493,7 @@ export async function processCapture(
       keywordCount: warning?.keywordCount ?? null,
     });
     if (warning) {
-      const decision = await options?.onPrecisePreflightWarning?.(warning);
+      const decision = await options?.onPreflightWarning?.(warning);
       if (decision !== 'continue') return { kind: 'preflight_rejected' };
     }
     options?.onPrecisePreflightAccepted?.();

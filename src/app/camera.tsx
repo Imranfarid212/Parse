@@ -41,7 +41,7 @@ import {
   syncImageBackups,
   uploadCaptureMetrics,
   type CaptureOutcome,
-  type PrecisePreflightWarning,
+  type PreflightWarning,
 } from '@/lib/receipts/capture';
 import { extractClient } from '@/lib/receipts/client';
 import { checkQuotaGate, refreshQuota } from '@/lib/receipts/quota';
@@ -465,8 +465,8 @@ export default function CameraScreen() {
     return false;
   }, [auth.user?.id, showQuotaExhaustedAlert]);
 
-  const promptPrecisePreflightWarning = useCallback(
-    (warning: PrecisePreflightWarning) =>
+  const promptPreflightWarning = useCallback(
+    (warning: PreflightWarning) =>
       new Promise<'continue' | 'cancel'>((resolve) => {
         const detail =
           warning.confidence === 'low'
@@ -474,7 +474,7 @@ export default function CameraScreen() {
             : 'This image has weak receipt signals, so extraction may be inaccurate.';
         Alert.alert(
           'This may not be a receipt',
-          `${detail}\n\nContinue anyway if the receipt is handwritten, blurry, or unusual. Precise processing can take a little longer.`,
+          `${detail}\n\nContinue anyway if the receipt is handwritten, blurry, or unusual.`,
           [
             { text: 'Retake', style: 'cancel', onPress: () => resolve('cancel') },
             { text: 'Continue Anyway', onPress: () => resolve('continue') },
@@ -682,7 +682,7 @@ export default function CameraScreen() {
             );
           },
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, photo.uri, startedAt),
-          onPrecisePreflightWarning: promptPrecisePreflightWarning,
+          onPreflightWarning: promptPreflightWarning,
           onPrecisePreflightAccepted: showPreciseWorking,
         });
         const out =
@@ -729,7 +729,7 @@ export default function CameraScreen() {
           userId: auth.user?.id,
           signal: ac.signal,
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, photo.uri, startedAt),
-          onPrecisePreflightWarning: promptPrecisePreflightWarning,
+          onPreflightWarning: promptPreflightWarning,
           onPrecisePreflightAccepted: showPreciseWorking,
         });
         const out =
@@ -802,7 +802,7 @@ export default function CameraScreen() {
             );
           },
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
-          onPrecisePreflightWarning: promptPrecisePreflightWarning,
+          onPreflightWarning: promptPreflightWarning,
           onPrecisePreflightAccepted: showPreciseWorking,
         });
         handleDefaultCaptureOutcome(out, uri, startedAt);
@@ -812,7 +812,7 @@ export default function CameraScreen() {
           userId: auth.user?.id,
           signal: ac.signal,
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
-          onPrecisePreflightWarning: promptPrecisePreflightWarning,
+          onPreflightWarning: promptPreflightWarning,
           onPrecisePreflightAccepted: showPreciseWorking,
         });
         const out =
