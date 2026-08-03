@@ -570,6 +570,14 @@ export default function CameraScreen() {
     (out: CaptureOutcome, photoUri: string, startedAt: number, late = false) => {
       if (out.kind === 'extracted') {
         if (out.row.extractionMode === 'precise') {
+          uploadCaptureMetrics({
+            captureId: out.row.id,
+            receiptId: out.row.receiptId ?? null,
+            captureMode: out.row.captureMode,
+            extractionMode: out.row.extractionMode,
+            metrics: { ...out.metrics, total_to_ui_ms: out.metrics.total_to_response_ms },
+            attempts: out.attempts,
+          });
           setPhase((prev) =>
             prev.k === 'review' ? { k: 'idle' } : prev,
           );

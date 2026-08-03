@@ -98,8 +98,11 @@
     "b4:preflight": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-b4-preflight.js",
     "b4:backend": "npm run contracts:sync && node scripts/verify-b4-backend.js",
     "b4:db:verify": "node scripts/verify-b4-db.js",
+    "b4:device:verify": "node scripts/verify-b4-device.js",
     "b4:http:verify": "node scripts/verify-b4-http.js",
-    "b4:all": "npm run b4:app && npm run b4:backend && npm run b3:db:verify && npm run b4:db:verify"
+    "b4:golden": "node scripts/golden-b4.js",
+    "b4:golden:verify": "node scripts/verify-b4-golden.js",
+    "b4:all": "npm run b4:app && npm run b4:backend && npm run b1:db:verify && npm run b3:db:verify && npm run b4:db:verify"
   },
   "private": true
 }

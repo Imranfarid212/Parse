@@ -1,9 +1,11 @@
 // @ts-nocheck - Supabase Edge Functions run under Deno, outside the Expo app tsconfig.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
+import { isActiveDevice, isDeviceId } from '../_shared/device.ts';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-rf-device-id',
 };
 
 const json = (status: number, body: unknown) =>
@@ -55,6 +57,11 @@ Deno.serve(async (req) => {
     const admin = createClient(supabaseUrl, serviceRoleKey);
     const { data: userData, error: userError } = await userSupabase.auth.getUser();
     if (userError || !userData.user) return json(401, { code: 'VALIDATION_FAILED', message: 'Authentication required' });
+    const deviceId = req.headers.get('x-rf-device-id') ?? '';
+    if (!isDeviceId(deviceId)) return json(400, { code: 'VALIDATION_FAILED', message: 'Device identifier required' });
+    if (!(await isActiveDevice(admin, userData.user.id, deviceId))) {
+      return json(409, { code: 'DEVICE_INACTIVE', message: 'This device is no longer active' });
+    }
 
     const body = await req.json().catch(() => null);
     const captureId = String(body?.capture_id ?? '');

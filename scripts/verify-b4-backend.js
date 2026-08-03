@@ -51,6 +51,11 @@ const quotaReadGrants = read('supabase/migrations/20260723000200_b4_quota_read_g
 // assertions quietly start proofreading a superseded file.
 const canScanSql = read('supabase/migrations/20260802000100_b4_can_scan_profile_guard.sql');
 const refundSql = read('supabase/migrations/20260801000200_b4_can_scan_unambiguous.sql');
+const deviceSql = read('supabase/migrations/20260803000100_b4_single_device_takeover.sql');
+const deviceClient = read('src/lib/auth/device.ts');
+const authContext = read('src/lib/auth/auth-context.tsx');
+const receiptClient = read('src/lib/receipts/client.ts');
+const metricsFn = read('supabase/functions/capture-metrics/index.ts');
 
 if (schemas !== mirrorSchemas) fail('contracts mirror differs; run npm run contracts:sync');
 
@@ -79,8 +84,14 @@ includes(fn, ".neq('capture_id', captureId)", 'duplicate ignores same capture id
 includes(fn, ".in('status', ['needs_review', 'confirmed'])", 'duplicate scans only terminal review/confirmed rows');
 includes(fn, "await admin.storage.from('receipts').remove([imagePath]);", 'duplicate image cleanup');
 includes(confirmFn, "{ status: 'confirmed', confirmed_via: 'user' }", 'user confirmation status transition');
-includes(confirmFn, ".eq('user_id', userData.user.id)", 'confirmation ownership guard');
+includes(confirmFn, "p_user_id: userData.user.id", 'confirmation ownership guard');
 includes(confirmFn, "receipt_id must be a UUID", 'confirmation id validation');
+includes(confirmFn, "admin.rpc('confirm_receipt_with_items'", 'confirmation commits structured items through one RPC');
+includes(confirmFn, 'const items = normalizeItems(body?.fields?.items)', 'confirmation validates structured items');
+const confirmItemsSql = read('supabase/migrations/20260803000200_b4_confirm_structured_items.sql');
+includes(confirmItemsSql, 'function public.confirm_receipt_with_items', 'transactional confirmation function exists');
+includes(confirmItemsSql, 'delete from public.receipt_items', 'confirmation replaces old item rows');
+includes(confirmItemsSql, 'jsonb_to_recordset(p_items)', 'confirmation inserts structured item rows');
 includes(fn, ".from('receipt_items').insert", 'line item persistence');
 includes(fn, 'refundScan(admin, userId, captureId)', 'rejected image gives the scan back');
 includes(fn, "return json(402, { status: 402, code: 'QUOTA_EXHAUSTED'", 'quota exhausted response');
@@ -88,8 +99,58 @@ includes(fn, ".storage.from('receipts').remove([imagePath])", 'non-receipt image
 includes(fn, "x-rf-force-storage-failure", 'forced storage failure drill');
 includes(fn, 'Promise.all([', 'storage and provider parallel fast path');
 order(fn, "req.headers.get('x-rf-force-storage-failure')", "admin.storage.from('receipts').upload", 'forced storage failure before upload');
+order(fn, "req.headers.get('x-rf-force-storage-failure')", 'if (uploadOnly && image instanceof File)', 'forced storage failure also covers upload_only backups');
 order(fn, "admin.storage.from('receipts').upload", ".upsert(\n      {", 'ack gate upload before receipt commit');
 orderBeforeLast(fn, ".upsert(\n      {", 'return json(200', 'ack gate receipt commit before response');
+
+/**
+ * T4.4 on the Balanced path.
+ *
+ * Every ack-gate assertion above runs against `fn` — extract/index.ts, the
+ * Precise path. `extract-balanced` is read separately as `balancedFn` and had no
+ * ack assertion of any kind, so T4.4 was green while the path the app actually
+ * defaults to was uncovered. It looked protected and was not.
+ *
+ * Under DL-002 the two paths carry different obligations, so each needs its own
+ * check rather than one shared one. Balanced never receives the image, so there
+ * is no Storage write to gate; what it owes instead is honesty — it must not
+ * name a path for an object that does not exist. It previously returned
+ * `${userId}/${captureId}.jpg` in its 200, which nothing consumed but the
+ * contract entitled a consumer to trust.
+ */
+includes(balancedFn, 'image_path: null,', 'balanced advertises no image path it cannot serve');
+if (/image_path:\s*`\$\{userId\}\/\$\{captureId\}\.jpg`/.test(balancedFn)) {
+  fail('balanced must not return a storage path for an image it never received');
+}
+if (/\.storage\s*\n?\s*\.from\('receipts'\)\s*\n?\s*\.upload\(/.test(balancedFn)) {
+  fail('balanced is text-first; an image upload here means the contract moved without DL-002 being revisited');
+}
+includes(schemas, 'image_path: z.string().min(1).nullable()', 'contract allows "no image stored yet"');
+
+// B4.8.3 — a soft UI prompt is not enforcement. The server owns the active
+// device state and every write path must prove the caller is still active.
+includes(deviceSql, 'create table if not exists public.user_devices', 'device policy table exists');
+includes(deviceSql, 'user_devices_one_active_per_user_idx', 'only one active device can exist');
+includes(deviceSql, 'function public.claim_user_device', 'claim RPC exists');
+includes(deviceSql, "'takeover_required'", 'claim asks before takeover');
+includes(deviceSql, 'function public.assert_active_device', 'edge enforcement RPC exists');
+includes(deviceSql, 'grant execute on function public.assert_active_device(uuid, uuid) to service_role', 'only edge functions can assert active device');
+includes(deviceClient, "SecureStore.getItemAsync(DEVICE_ID_KEY)", 'installation ID survives app restarts');
+includes(deviceClient, 'crypto.getRandomValues(bytes)', 'installation ID is random');
+includes(authContext, "supabase.rpc('claim_user_device'", 'login claims current device');
+includes(authContext, "p_takeover: true", 'takeover needs an explicit choice');
+includes(authContext, 'void syncFromServer(currentSession.user.id', 'receipt pull begins only after claim succeeds');
+includes(receiptClient, "'x-rf-device-id': deviceId", 'all receipt clients send installation ID');
+for (const [name, source] of [
+  ['precise extract', fn],
+  ['balanced extract', balancedFn],
+  ['receipt confirmation', confirmFn],
+  ['capture metrics', metricsFn],
+]) {
+  includes(source, "isActiveDevice(admin", `${name} checks active device`);
+  includes(source, "code: 'DEVICE_INACTIVE'", `${name} refuses displaced device`);
+  includes(source, 'x-rf-device-id', `${name} permits device header through CORS`);
+}
 
 includes(schemas, 'rejected: z.literal(true)', 'contract rejected 200 shape');
 includes(schemas, 'is_receipt: z.literal(false)', 'contract non-receipt result');
@@ -238,7 +299,7 @@ includes(confirmFn, 'patch.txn_date', 'confirm persists the edited date');
 includes(confirmFn, 'patch.total', 'confirm persists the edited total');
 includes(confirmFn, 'patch.currency', 'confirm persists the edited currency');
 includes(confirmFn, 'patch.category_id = resolveCategoryId(', 'confirm resolves the category through the shared rule');
-includes(confirmFn, '.update(patch)', 'confirm writes the field patch, not just a status');
+includes(confirmFn, 'p_merchant: patch.merchant', 'confirm writes the field patch, not just a status');
 excludesPattern(confirmFn, /\.update\(\{\s*status:\s*'confirmed',\s*confirmed_via:\s*'user'\s*\}\)/, 'confirm must not go back to writing only a status');
 
 console.log('[b4:backend] Grok fast path, balanced fast path, shared quota, validation, and ack-gate source checks passed');

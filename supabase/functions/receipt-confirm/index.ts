@@ -2,10 +2,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
 import { getUserCategories, resolveCategoryId } from '../_shared/categories.ts';
+import { isActiveDevice, isDeviceId } from '../_shared/device.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-rf-device-id',
 };
 
 const json = (status: number, body: unknown) =>
@@ -59,6 +60,18 @@ async function buildFieldPatch(
   return patch;
 }
 
+function normalizeItems(value: unknown) {
+  if (!Array.isArray(value) || value.length > 100) throw new Error('Items must contain at most 100 rows');
+  return value.map((item) => {
+    const row = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const name = normalizeText(row.name).slice(0, 160);
+    const qty = Number(row.qty);
+    const amount = Number(row.amount);
+    if (!name || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(amount) || amount < 0) throw new Error('Each item needs a name, quantity, and amount');
+    return { name, qty, amount };
+  });
+}
+
 Deno.serve(async (req) => {
   try {
     if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -76,25 +89,35 @@ Deno.serve(async (req) => {
     const admin = createClient(supabaseUrl, serviceRoleKey);
     const { data: userData, error: userError } = await userSupabase.auth.getUser();
     if (userError || !userData.user) return json(401, { code: 'VALIDATION_FAILED', message: 'Authentication required' });
+    const deviceId = req.headers.get('x-rf-device-id') ?? '';
+    if (!isDeviceId(deviceId)) return json(400, { code: 'VALIDATION_FAILED', message: 'Device identifier required' });
+    if (!(await isActiveDevice(admin, userData.user.id, deviceId))) {
+      return json(409, { code: 'DEVICE_INACTIVE', message: 'This device is no longer active' });
+    }
 
     const body = await req.json().catch(() => null);
     const receiptId = String(body?.receipt_id ?? '');
     if (!isUuid(receiptId)) return json(400, { code: 'VALIDATION_FAILED', message: 'receipt_id must be a UUID' });
 
     const patch = await buildFieldPatch(admin, userData.user.id, body?.fields ?? null);
+    const items = normalizeItems(body?.fields?.items);
 
-    const { data: receipt, error } = await admin
-      .from('receipts')
-      .update(patch)
-      .eq('id', receiptId)
-      .eq('user_id', userData.user.id)
-      .select('id, status, confirmed_via')
-      .maybeSingle();
+    const { data: receipt, error } = await admin.rpc('confirm_receipt_with_items', {
+      p_user_id: userData.user.id,
+      p_receipt_id: receiptId,
+      p_merchant: patch.merchant ?? null,
+      p_txn_date: patch.txn_date ?? null,
+      p_currency: patch.currency ?? null,
+      p_total: patch.total ?? null,
+      p_category_id: patch.category_id ?? null,
+      p_notes: patch.notes ?? '',
+      p_items: items,
+    });
 
     if (error) return json(500, { code: 'VALIDATION_FAILED', message: error.message });
-    if (!receipt) return json(404, { code: 'NOT_FOUND', message: 'Receipt not found' });
+    if (receipt !== true) return json(404, { code: 'NOT_FOUND', message: 'Receipt not found' });
 
-    return json(200, { status: 200, receipt_id: receipt.id, confirmed_via: receipt.confirmed_via });
+    return json(200, { status: 200, receipt_id: receiptId, confirmed_via: 'user' });
   } catch (error) {
     return json(500, {
       code: 'VALIDATION_FAILED',

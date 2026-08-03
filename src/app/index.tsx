@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { type Href, useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
@@ -33,9 +33,9 @@ export default function LandingScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (auth.loading || !auth.authenticated || !auth.profile) return;
+      if (auth.loading || auth.deviceStatus !== 'active' || !auth.authenticated || !auth.profile) return;
       router.replace((auth.profile.onboarding_complete ? '/camera' : '/welcome') as Href);
-    }, [auth.authenticated, auth.loading, auth.profile, router]),
+    }, [auth.authenticated, auth.deviceStatus, auth.loading, auth.profile, router]),
   );
 
   // Opacity-only entrance (no transform) so the text bounds we measure stay accurate.
@@ -63,10 +63,41 @@ export default function LandingScreen() {
     }
   };
 
-  if (auth.loading || auth.authenticated) {
+  if (auth.loading || auth.deviceStatus === 'checking') {
     return (
       <View style={styles.loadingGate}>
         <ActivityIndicator color={colors.accent} />
+      </View>
+    );
+  }
+
+  if (auth.deviceStatus === 'takeover_required') {
+    return (
+      <View style={styles.loadingGate}>
+        <Text style={styles.takeoverTitle}>Use Parse on this device?</Text>
+        <Text style={styles.takeoverBody}>This signs out the other device. Your receipts will then sync here.</Text>
+        <Pressable
+          style={({ pressed }) => [styles.takeoverPrimary, (pressed || busy) && styles.takeoverPressed]}
+          disabled={busy}
+          onPress={() => void runAuthAction(auth.takeOverDevice)}
+        >
+          <Text style={styles.takeoverPrimaryText}>{busy ? 'Switching device' : 'Use this device'}</Text>
+        </Pressable>
+        <Pressable style={({ pressed }) => [styles.takeoverSecondary, pressed && styles.takeoverPressed]} onPress={() => void auth.signOut()}>
+          <Text style={styles.takeoverSecondaryText}>Keep the other device</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (auth.deviceStatus === 'unavailable') {
+    return (
+      <View style={styles.loadingGate}>
+        <Text style={styles.takeoverTitle}>Could not verify this device</Text>
+        <Text style={styles.takeoverBody}>Check your connection and try again.</Text>
+        <Pressable style={({ pressed }) => [styles.takeoverPrimary, (pressed || busy) && styles.takeoverPressed]} disabled={busy} onPress={() => void runAuthAction(async () => { await auth.refreshProfile(); })}>
+          <Text style={styles.takeoverPrimaryText}>{busy ? 'Checking device' : 'Try again'}</Text>
+        </Pressable>
       </View>
     );
   }
@@ -101,6 +132,13 @@ export default function LandingScreen() {
 
 const styles = StyleSheet.create({
   loadingGate: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
+  takeoverTitle: { fontFamily: typography.display.fontFamily, fontSize: 28, color: '#000000', textAlign: 'center', paddingHorizontal: spacing.lg },
+  takeoverBody: { fontFamily: typography.subtitle.fontFamily, fontSize: 16, color: '#555555', textAlign: 'center', marginTop: spacing.sm, marginBottom: spacing.lg, paddingHorizontal: spacing.xl },
+  takeoverPrimary: { marginTop: spacing.md, minWidth: 240, minHeight: 48, paddingHorizontal: spacing.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111111', borderRadius: 6 },
+  takeoverPrimaryText: { fontFamily: typography.button.fontFamily, fontSize: 16, color: '#FFFFFF' },
+  takeoverSecondary: { marginTop: spacing.sm, minWidth: 240, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  takeoverSecondaryText: { fontFamily: typography.button.fontFamily, fontSize: 15, color: '#555555' },
+  takeoverPressed: { opacity: 0.7 },
   screen: { width: '100%', height: '100%', paddingHorizontal: 4 },
   heroText: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md },
   headline: {

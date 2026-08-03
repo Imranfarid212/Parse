@@ -7,11 +7,11 @@
  * *destroys a saved row* — hence `destructive`, which says so out loud rather
  * than quietly dropping data.
  */
-import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
-import { CATEGORIES, type Category, type ReceiptFields } from '@/lib/receipts/types';
+import { CATEGORIES, type Category, type ReceiptFields, type ReceiptLineItem } from '@/lib/receipts/types';
 import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
 
 export function EditSheet({
@@ -29,14 +29,15 @@ export function EditSheet({
   onRetake: () => void;
 }) {
   const [totalText, setTotalText] = useState(fields.total.toFixed(2));
+  const scrollRef = useRef<ScrollView>(null);
 
   const set = <K extends keyof ReceiptFields>(k: K, v: ReceiptFields[K]) => onChange({ ...fields, [k]: v });
 
   return (
-    <View style={styles.sheet}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.sheet}>
       <View style={styles.grabber} />
 
-      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: spacing.lg }}>
+      <ScrollView ref={scrollRef} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: spacing.xl * 2 }}>
         <Field label="Store">
           <TextInput
             style={styles.input}
@@ -74,14 +75,20 @@ export function EditSheet({
         </Field>
 
         <Field label="Items">
-          <TextInput
-            style={[styles.input, styles.multiline]}
-            value={fields.items.join('\n')}
-            onChangeText={(v) => set('items', v.split('\n'))}
-            multiline
-            placeholder="One item per line"
-            placeholderTextColor={colors.textFaint}
-          />
+          <View style={styles.itemList}>
+            {fields.items.map((item, index) => (
+              <EditableItemRow
+                key={`item-${index}`}
+                item={item}
+                onChange={(patch) => updateItem(fields.items, index, patch, set)}
+                onRemove={() => set('items', fields.items.filter((_, row) => row !== index))}
+              />
+            ))}
+            <Pressable onPress={() => set('items', [...fields.items, { name: '', qty: 1, amount: 0 }])} style={styles.addItem}>
+              <Feather name="plus" size={16} color={colors.textPrimary} />
+              <Text style={styles.addItemText}>Add item</Text>
+            </Pressable>
+          </View>
         </Field>
 
         <Field label="Category">
@@ -102,6 +109,7 @@ export function EditSheet({
             style={[styles.input, styles.multiline]}
             value={fields.handwritten_notes}
             onChangeText={(v) => set('handwritten_notes', v)}
+            onFocus={() => requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }))}
             multiline
             placeholder="Anything written on the receipt"
             placeholderTextColor={colors.textFaint}
@@ -119,8 +127,75 @@ export function EditSheet({
           </Pressable>
         </View>
       </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+function positiveNumber(value: string, fallback: number) {
+  const number = Number(value.replace(/[^0-9.]/g, ''));
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function EditableItemRow({ item, onChange, onRemove }: { item: ReceiptLineItem; onChange: (patch: Partial<ReceiptLineItem>) => void; onRemove: () => void }) {
+  const [qtyText, setQtyText] = useState(String(item.qty));
+  const [amountText, setAmountText] = useState(item.amount.toFixed(2));
+  const commitQty = () => {
+    const qty = positiveNumber(qtyText, item.qty);
+    setQtyText(String(qty));
+    onChange({ qty });
+  };
+  const commitAmount = () => {
+    const amount = nonnegativeNumber(amountText, item.amount);
+    setAmountText(amount.toFixed(2));
+    onChange({ amount });
+  };
+
+  return (
+    <View style={styles.itemEditorRow}>
+      <TextInput
+        style={[styles.input, styles.itemNameInput]}
+        value={item.name}
+        onChangeText={(name) => onChange({ name })}
+        placeholder="Item"
+        placeholderTextColor={colors.textFaint}
+      />
+      <TextInput
+        style={[styles.input, styles.itemNumberInput]}
+        value={qtyText}
+        onChangeText={(value) => { setQtyText(value); const qty = Number(value); if (Number.isFinite(qty) && qty > 0) onChange({ qty }); }}
+        onBlur={commitQty}
+        keyboardType="decimal-pad"
+        placeholder="Qty"
+        placeholderTextColor={colors.textFaint}
+      />
+      <TextInput
+        style={[styles.input, styles.itemAmountInput]}
+        value={amountText}
+        onChangeText={(value) => { setAmountText(value); const amount = Number(value); if (Number.isFinite(amount) && amount >= 0) onChange({ amount }); }}
+        onBlur={commitAmount}
+        keyboardType="decimal-pad"
+        placeholder="Amount"
+        placeholderTextColor={colors.textFaint}
+      />
+      <Pressable onPress={onRemove} hitSlop={8} style={styles.removeItem}>
+        <Feather name="x" size={17} color={colors.textSecondary} />
+      </Pressable>
     </View>
   );
+}
+
+function nonnegativeNumber(value: string, fallback: number) {
+  const number = Number(value.replace(/[^0-9.]/g, ''));
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function updateItem(
+  items: ReceiptLineItem[],
+  index: number,
+  patch: Partial<ReceiptLineItem>,
+  set: <K extends keyof ReceiptFields>(key: K, value: ReceiptFields[K]) => void,
+) {
+  set('items', items.map((item, row) => (row === index ? { ...item, ...patch } : item)));
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -168,6 +243,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   multiline: { minHeight: 72, textAlignVertical: 'top' },
+  itemList: { gap: 8 },
+  itemEditorRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  itemNameInput: { flex: 1, minWidth: 0 },
+  itemNumberInput: { width: 54, textAlign: 'right' },
+  itemAmountInput: { width: 74, textAlign: 'right' },
+  removeItem: { width: 24, height: 38, alignItems: 'center', justifyContent: 'center' },
+  addItem: { minHeight: 38, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4 },
+  addItemText: { fontFamily: fontFamily.semibold, fontSize: 14, color: colors.textPrimary },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border },
   chipOn: { backgroundColor: colors.accent, borderColor: colors.accent },

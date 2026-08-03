@@ -66,7 +66,17 @@ export const extractRequestSchema = z.object({
 export const extractAckSchema = z.object({
   status: z.union([z.literal(200), z.literal(202)]),
   receipt_id: uuidSchema,
-  image_path: z.string().min(1),
+  /**
+   * Where the image is stored, or null when no image is stored yet.
+   *
+   * Nullable per DL-002. Precise holds the image at ack time and always has a
+   * path. Balanced is text-first — the server never receives the image — so it
+   * has nothing to point at until the separate upload lands. This used to be a
+   * non-null string, which left Balanced no way to say "not yet" and so it
+   * returned a path to an object that did not exist. Nothing consumed it, but
+   * the contract entitled someone to.
+   */
+  image_path: z.string().min(1).nullable(),
   acked_at: z.string().datetime(),
 });
 

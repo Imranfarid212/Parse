@@ -33,13 +33,13 @@ import type { Category } from '@/../packages/contracts/src/types';
 import { supabase } from '@/lib/auth/supabase';
 import { clearLocalReceiptsForAccountSwitch, deleteLocalReceipt } from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
-import { CATEGORIES, isCategory, type ReceiptFields, type ReceiptStatus } from '@/lib/receipts/types';
+import { CATEGORIES, isCategory, type ReceiptFields, type ReceiptLineItem, type ReceiptStatus } from '@/lib/receipts/types';
 
 const PAGE_SIZE = 200;
 /** Guard against an unbounded loop if the server keeps handing back full pages. */
 const MAX_PAGES = 50;
 
-type ServerItem = { name: string | null; amount: number | string | null };
+type ServerItem = { name: string | null; qty: number | string | null; amount: number | string | null };
 type ServerReceipt = {
   id: string;
   capture_id: string;
@@ -64,8 +64,8 @@ export type SyncResult = { added: number; updated: number; deleted: number; skip
  * text, so this matches the formatting the extract client already applies — a
  * synced receipt should read exactly like a scanned one.
  */
-const toItemLines = (items: ServerItem[] | null): string[] =>
-  (items ?? []).map((item) => `${item.name ?? ''}  ${(Number(item.amount) || 0).toFixed(2)}`);
+const toItems = (items: ServerItem[] | null): ReceiptLineItem[] =>
+  (items ?? []).map((item) => ({ name: item.name?.trim() || 'Item', qty: Number(item.qty) > 0 ? Number(item.qty) : 1, amount: Math.max(0, Number(item.amount) || 0) }));
 
 /** Server `status` is its own vocabulary; map it onto the device's. */
 const toLocalStatus = (status: string): ReceiptStatus => (status === 'confirmed' ? 'synced' : 'extracted');
@@ -75,7 +75,7 @@ function toFields(row: ServerReceipt, categoryNameById: Map<number, string>): Re
   return {
     date: row.txn_date,
     store: row.merchant ?? '',
-    items: toItemLines(row.receipt_items),
+    items: toItems(row.receipt_items),
     currency: /^[A-Z]{3}$/.test(row.currency ?? '') ? (row.currency as string) : 'USD',
     total: Number(row.total) || 0,
     category: isCategory(categoryName) ? categoryName : CATEGORIES[CATEGORIES.length - 1],
@@ -153,7 +153,7 @@ export async function syncFromServer(userId: string, categories: Category[]): Pr
     let query = supabase
       .from('receipts')
       .select(
-        'id,capture_id,merchant,txn_date,currency,total,category_id,notes,image_path,status,created_at,updated_at,deleted_at,receipt_items(name,amount)',
+        'id,capture_id,merchant,txn_date,currency,total,category_id,notes,image_path,status,created_at,updated_at,deleted_at,receipt_items(name,qty,amount)',
       )
       .eq('user_id', userId)
       .order('updated_at', { ascending: true })

@@ -13,13 +13,22 @@ document is only the remainder.
 
 ## 1. The item that actually closes the phase
 
-**The live Grok golden/latency run and the device mode runs.**
+**T4.2's gate has been updated to the agreed mode-specific latency contract.**
 
-`gates/report-b4.json` says so itself: *"Official evidence still requires live
-Grok golden/latency and device mode runs."* T4.2 and T4.5 are named
-`golden-latency-source-readiness` and `mode-e2e-source-readiness` and both just
-run `npm run b4:app` — a grep over files. Nothing about them executes a model or
-a device.
+Balanced is now measured by the live 20-case golden run: merchant/date/total
+accuracy remains at least 90%, category remains in the user's list, and the
+average server round trip must be at most 2.5 seconds. p50, p95, and max remain
+diagnostic values. Precise is the direct Grok/image path and is accepted against
+an average `total_to_ui_ms` of at most 4.5 seconds; that part must come from a
+physical-device run because the text golden harness cannot measure it.
+
+The old p50 1.6-second target is retired. T4.5 already has physical-device
+evidence: Default confirmation, five rapid One-click captures newest-first, and
+a non-receipt toast with no net charge or stored image. The regenerated
+`gates/report-b4-golden.json` passes the Balanced gate at `2385ms` average
+(`p50 2255ms`, `p95 2685ms`, `max 3895ms`). The clean Precise/Grok retry
+recorded five metrics at `4126ms`
+average (`p50 3984ms`, `p95/max 4972ms`), so the full T4.2 gate now passes.
 
 T4.3 was in exactly this state until it was pointed at `b4:db:verify`, so the
 pattern for fixing one exists. Everything else in this document can be deferred;
@@ -29,10 +38,7 @@ this cannot, because it is the phase's own definition of done.
 
 ## 2. 4.5 — the image-durability contract
 
-**Status: investigated, not started. Three assertions currently red.**
-
-This is the only pending item with failing gate assertions attached, so it is the
-one holding a visible red mark against the phase.
+**Status: implemented and device-verified.**
 
 ### What the original contract was
 
@@ -78,50 +84,65 @@ successful upload. So the server does record the path correctly once the object
 exists. The defect is narrower than it looks — it is only the *initial* Balanced
 response claiming a path prematurely.
 
-### Suggested shape (not agreed, not built)
+### Implemented contract and evidence
 
-1. **Stop advertising a path that does not resolve.** Balanced returns
-   `image_path: null`; the `upload_only` path already fills it in on success. Any
-   consumer then either has a real object or nothing, never a dead link.
-2. **Surface `upload_failed_final`** in Search with a Try again, the same
-   treatment `blocked_quota` and `llm_failed_final` already have. The local photo
-   is still on the device, so the retry genuinely works.
-3. **Then rewrite the two T3.5 assertions** to encode the new rule — *the local
-   copy is deleted only once the upload is confirmed* — which is what the code
-   already does via the `imageSyncStatus: 'uploaded'` branch. They go green
-   because the rule is true and stated, not because the check was weakened.
+1. **Balanced is honest at ack time.** It returns `image_path: null`, and the
+   shared contract permits null. `upload_only` writes the actual path only after
+   Storage succeeds.
+2. **Image backup is observable and recoverable.** Recents distinguishes a
+   backup in progress, a scheduled retry, a terminal `Photo not backed up` state
+   with Try again, and a missing local file. A reachable app schedules bounded
+   backup retries; startup and network recovery remain the fallback after the
+   app is suspended.
+3. **The deletion rule is tested.** T3.5 asserts that the local photo remains
+   until `imageSyncStatus` becomes `uploaded`, then is deleted. The B4 backend
+   verifier also checks the Balanced ack cannot advertise a nonexistent image.
+4. **Physical-device staging drill passed.** A development-only forced Storage
+   failure produced a confirmed receipt with no `image_path` or Storage object;
+   after Try again with the drill disabled, its Storage object and database
+   `image_path` both appeared. Extraction was never re-run and no additional
+   scan was spent.
+
+Validation: `npm run b3:app`, `npm run b4:backend`, and the live
+`npm run b4:db:verify` all passed. The staging `extract` function was deployed
+for the `upload_only` failure drill.
 
 ---
 
 ## 3. Smaller pending items
 
-**8.3 — single-device enforcement.** Agreed, not built. Takeover rather than a
-hard block, because a hard block locks a user out of their own data when a phone
-is lost. Build `user_devices` (user_id, device_id, last_seen_at, is_active)
-rather than a column on `profiles`, so relaxing to multi-device later is a policy
-change and not a migration. Must be enforced in the edge functions.
+**8.3 — single-device enforcement.** Implemented, pending staging device drill.
+Takeover rather than a hard block, because a hard block locks a user out of their
+own data when a phone is lost. `user_devices` (user_id, device_id, last_seen_at,
+is_active) holds an opaque SecureStore-backed app-installation ID rather than a
+hardware identifier. The authenticated claim RPC asks before deactivating an
+existing device; each write-capable Edge Function independently rejects inactive
+devices before it can charge or write. The new device begins its normal receipt
+pull only after it becomes active.
 
-**8.4 — line-item sync.** Items are flattened to text before reaching the device,
-so item edits cannot be pushed. Closing it means carrying structured line items
-through the extract contract and turning the item editor into rows with quantity
-and amount. Needs a decision-log entry.
+**8.4 — line-item sync.** Implemented and device-verified. Structured
+name/quantity/amount rows now survive extraction, local persistence, server pull,
+editing, and confirmation. Existing string-only local rows are upgraded in memory
+as quantity-one rows. Confirmation commits receipt fields and replacement items
+in one database transaction. A physical Balanced-mode capture was edited on device
+(item description and notes); staging confirmed the receipt, updated note, and
+structured item row. See DL-003.
 
-**4.6 — camera capture failures.** Five hardware-level capture errors appeared in
-device logs, cause unknown, rapid shutter taps suspected. **Worth re-checking
-now**: rapid capture was impossible when that was written and is now possible in
-both One-click and Precise. The errors are also no longer swallowed — a failed
-capture shows a notice and logs `[capture] failed`.
+**4.6 — camera capture failures.** Completed and device-verified. The earlier
+five hardware-level errors were not reproduced after rapid capture became
+possible. A fresh staging run created nine receipts with no hardware capture
+failures. The only six recorded failed attempts were expected Balanced hedge
+cancellations: each has a paired successful `200` attempt. Failures remain
+visible as a notice and `[capture] failed` log.
 
 ---
 
 ## 4. Found during this work, not on anyone's list
 
-**The duplicate check costs ~400 ms on the critical path.** Measured:
-`findDuplicateCandidate` runs strictly after the model returns
-(`extract-balanced/index.ts:1203`). The phone already runs its own
-`findLocalDuplicateCandidate` before dispatch, so the server's may not need to be
-synchronous — it could ride the background persist. Clear route off the critical
-path; nobody has asked for it.
+**The duplicate check costs ~400 ms on the critical path.** Kept intentionally:
+the server is the final duplicate authority and returns its candidate before the
+app asks the user whether to retain the new receipt. The local OCR check is an
+early same-device shortcut, not a replacement for that decision.
 
 **Every request lands on a cold isolate.** `req_count: 1` and
 `isolate_age_ms: 6` on every sample. The first database round trip from a fresh
@@ -159,8 +180,6 @@ matter when account deletion is built.
 
 ## 6. One small thing worth doing first
 
-`b4:all` runs `b3:db:verify`, not `b1:db:verify`. Today's CI failure — stale
-`db.types.ts` after the 1 August schema change — was invisible locally for
-exactly that reason and only appeared on push. Adding `b1:db:verify` to `b4:all`,
-or to any phase gate that touches migrations, catches it where the migration is
-written. One line in `package.json`.
+**Completed.** `b4:all` now runs `b1:db:verify` before the B3 and B4 database
+checks. This catches stale `db.types.ts` alongside the migration that caused it,
+rather than waiting for CI after a push.

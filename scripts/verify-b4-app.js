@@ -67,6 +67,11 @@ includes(quota, 'export async function checkQuotaGate', 'shutter gate helper');
 includes(quota, 'export async function applyServerQuota', 'server balance refreshes the cache');
 includes(camera, 'await passesQuotaGate()', 'capture paths run the gate');
 includes(capture, 'applyServerQuota(options?.userId', 'extract responses refresh the cached balance');
+includes(
+  camera,
+  "if (out.row.extractionMode === 'precise') {\n          uploadCaptureMetrics({",
+  'default Precise captures upload latency metrics',
+);
 
 // A rate limit is "not now", not "not ever". The server answers 429 rather than
 // 402 precisely so the capture retries — but the client ignored retry_after_s

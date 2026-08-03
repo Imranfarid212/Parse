@@ -9,6 +9,7 @@
 import { normalizeReceiptDate } from '@/lib/dates';
 import { getFoundationEnv } from '@/lib/foundations/env';
 import { supabase } from '@/lib/auth/supabase';
+import { getDeviceId } from '@/lib/auth/device';
 import * as FileSystem from 'expo-file-system/legacy';
 import { AppState } from 'react-native';
 import {
@@ -23,6 +24,8 @@ import {
   type ExtractResponse,
   type ExtractSuccess,
   type ReceiptFields,
+  type ReceiptLineItem,
+  normalizeReceiptItems,
 } from '@/lib/receipts/types';
 
 export type ExtractInput = {
@@ -163,7 +166,7 @@ type ExtractFunctionPayload = {
     currency?: string;
     total?: number;
     suggested_category?: string;
-    line_items: { name: string; qty?: number; amount: number }[];
+    line_items: ReceiptLineItem[];
     handwritten_notes?: string | null;
     is_receipt?: boolean;
   };
@@ -330,7 +333,7 @@ function extractPayloadToAck(data: ExtractFunctionPayload, attempts?: CaptureAtt
     response: {
       date: data.result?.txn_date ?? '',
       store: data.result?.merchant ?? '',
-      items: data.result?.line_items.map((item) => `${item.name}  ${(Number(item.amount) || 0).toFixed(2)}`) ?? [],
+      items: data.result?.line_items ?? [],
       currency: data.result?.currency ?? 'USD',
       total: data.result?.total ?? 0,
       category: data.result?.suggested_category ?? 'Miscellaneous',
@@ -440,7 +443,7 @@ export const mockExtractClient: ExtractClient = {
       response: {
         date: printed,
         store: s.store,
-        items: s.items,
+        items: normalizeReceiptItems(s.items),
         currency: s.currency,
         total: s.total,
         category: s.category,
@@ -460,12 +463,14 @@ export const supabaseExtractClient: ExtractClient = {
     const requestStartedAt = Date.now();
     balancedWarmupInFlight = getAccessTokenForRequest()
       .then(async (accessToken) => {
+        const deviceId = await getDeviceId();
         const warmupSignal = childTimeoutSignal(undefined, BALANCED_WARMUP_TIMEOUT_MS);
         const response = await fetch(`${supabaseUrl}/functions/v1/extract-balanced`, {
           method: 'POST',
           signal: warmupSignal.signal,
           headers: {
             Authorization: `Bearer ${accessToken}`,
+            'x-rf-device-id': deviceId,
             apikey: supabaseAnonKey,
             'Content-Type': 'application/json',
           },
@@ -501,12 +506,14 @@ export const supabaseExtractClient: ExtractClient = {
     const requestStartedAt = Date.now();
     preciseWarmupInFlight = getAccessTokenForRequest()
       .then(async (accessToken) => {
+        const deviceId = await getDeviceId();
         const warmupSignal = childTimeoutSignal(undefined, PRECISE_WARMUP_TIMEOUT_MS);
         const response = await fetch(`${supabaseUrl}/functions/v1/extract`, {
           method: 'POST',
           signal: warmupSignal.signal,
           headers: {
             Authorization: `Bearer ${accessToken}`,
+            'x-rf-device-id': deviceId,
             apikey: supabaseAnonKey,
             'Content-Type': 'application/json',
           },
@@ -551,6 +558,7 @@ export const supabaseExtractClient: ExtractClient = {
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const supabaseAnonKey = env.supabaseAnonKey;
     let accessToken = await getAccessTokenForRequest();
+    const deviceId = await getDeviceId();
 
     if (__DEV__) {
       console.log('[extract] invoking', { environment: env.environment, mockBackend: env.mockBackend, mode, extractionMode });
@@ -604,6 +612,7 @@ export const supabaseExtractClient: ExtractClient = {
             signal: attemptSignal.signal,
             headers: {
               Authorization: `Bearer ${accessToken}`,
+              'x-rf-device-id': deviceId,
               apikey: supabaseAnonKey,
               'Content-Type': 'application/json',
             },
@@ -773,6 +782,7 @@ export const supabaseExtractClient: ExtractClient = {
         },
         headers: {
           Authorization: `Bearer ${accessToken}`,
+          'x-rf-device-id': deviceId,
           apikey: supabaseAnonKey,
         },
       });
@@ -831,7 +841,7 @@ export const supabaseExtractClient: ExtractClient = {
         response: {
           date: data.result?.txn_date ?? '',
           store: data.result?.merchant ?? '',
-          items: data.result?.line_items.map((item) => `${item.name}  ${(Number(item.amount) || 0).toFixed(2)}`) ?? [],
+          items: data.result?.line_items ?? [],
           currency: data.result?.currency ?? 'USD',
           total: data.result?.total ?? 0,
           category: data.result?.suggested_category ?? 'Miscellaneous',
@@ -863,6 +873,7 @@ export const supabaseImageBackupClient: ImageBackupClient = {
     const env = getFoundationEnv();
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const accessToken = await getAccessTokenForRequest();
+    const deviceId = await getDeviceId();
 
     const response = await FileSystem.uploadAsync(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
       uploadType: FileSystem.FileSystemUploadType.MULTIPART,
@@ -878,7 +889,14 @@ export const supabaseImageBackupClient: ImageBackupClient = {
       },
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        'x-rf-device-id': deviceId,
         apikey: env.supabaseAnonKey,
+        // Only development bundles can opt into the failure drill. The switch
+        // is intentionally absent from release behavior and exercises the
+        // upload_only path without changing Storage permissions or credentials.
+        ...(__DEV__ && process.env.EXPO_PUBLIC_FORCE_IMAGE_BACKUP_FAILURE === '1'
+          ? { 'x-rf-force-storage-failure': '1' }
+          : {}),
       },
     });
 
@@ -894,12 +912,14 @@ export const supabaseCaptureMetricsClient: CaptureMetricsClient = {
     const env = getFoundationEnv();
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const accessToken = await getAccessTokenForRequest();
+    const deviceId = await getDeviceId();
 
     const startedAt = Date.now();
     const response = await fetch(`${env.supabaseUrl}/functions/v1/capture-metrics`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        'x-rf-device-id': deviceId,
         apikey: env.supabaseAnonKey,
         'Content-Type': 'application/json',
       },
@@ -928,6 +948,7 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
     const env = getFoundationEnv();
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const accessToken = await getAccessTokenForRequest();
+    const deviceId = await getDeviceId();
 
     // Bounded on purpose. This request used to have no timeout at all, so a
     // connection that never settled left the local row marked `syncing` with
@@ -941,6 +962,7 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
+          'x-rf-device-id': deviceId,
           apikey: env.supabaseAnonKey,
           'Content-Type': 'application/json',
         },

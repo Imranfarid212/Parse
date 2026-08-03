@@ -1,12 +1,14 @@
 // @ts-nocheck - Supabase Edge Functions run under Deno, outside the Expo app tsconfig.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
+import { isActiveDevice, isDeviceId } from '../_shared/device.ts';
+
 import { evaluateQuota, refundScan } from '../_shared/quota.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers':
-    'authorization, x-client-info, apikey, content-type, x-rf-force-storage-failure, x-rf-fixture-case',
+    'authorization, x-client-info, apikey, content-type, x-rf-device-id, x-rf-force-storage-failure, x-rf-fixture-case',
 };
 
 const CATEGORIES = [
@@ -937,6 +939,12 @@ async function handleExtract(req: Request, charge: ChargeGuard) {
   timing.auth_ms = Math.round(performance.now() - authStartedAt);
   timing.auth_method = authMethod;
 
+  const deviceId = req.headers.get('x-rf-device-id') ?? '';
+  if (!isDeviceId(deviceId)) return json(400, { code: 'VALIDATION_FAILED', message: 'Device identifier required', timing });
+  if (!(await isActiveDevice(admin, userId, deviceId))) {
+    return json(409, { code: 'DEVICE_INACTIVE', message: 'This device is no longer active', timing });
+  }
+
   const contentType = req.headers.get('content-type') ?? '';
   const isJson = contentType.toLowerCase().includes('application/json');
   const bodyStartedAt = performance.now();
@@ -1001,6 +1009,13 @@ async function handleExtract(req: Request, charge: ChargeGuard) {
     .eq('capture_id', captureId)
     .maybeSingle();
   timing.existing_lookup_ms = Math.round(performance.now() - existingLookupStartedAt);
+  // Development verification needs to exercise the text-first image backup,
+  // which is the upload_only branch below. Keep this before that branch so the
+  // existing forced Storage failure is faithful for both extraction modes.
+  if (req.headers.get('x-rf-force-storage-failure') === '1') {
+    return json(503, { code: 'VALIDATION_FAILED', message: 'Forced Storage failure' });
+  }
+
   if (uploadOnly && image instanceof File) {
     const storageStartedAt = performance.now();
     const bytes = new Uint8Array(await image.arrayBuffer());
@@ -1148,10 +1163,6 @@ async function handleExtract(req: Request, charge: ChargeGuard) {
   // From here on the user has been debited. Every exit below that is not a
   // delivered receipt gives it back — see the finally in Deno.serve.
   charge.refund = () => refundScan(admin, userId, captureId);
-
-  if (req.headers.get('x-rf-force-storage-failure') === '1') {
-    return json(503, { code: 'VALIDATION_FAILED', message: 'Forced Storage failure' });
-  }
 
   const imageReadStartedAt = performance.now();
   const bytes = image instanceof File ? new Uint8Array(await image.arrayBuffer()) : null;
