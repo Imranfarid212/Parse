@@ -85,11 +85,16 @@ order(capture, 'if (throttleMs != null) {', 'if (attempts >= MAX_EXTRACT_ATTEMPT
 // model answered and every capture aborted the one before it, so the burst limit
 // guarded a rate the UI could not reach.
 includes(camera, 'releaseShutter();', 'the shutter is freed as soon as the photo exists');
-includes(camera, 'oneClickAborts.current.add(oneClickAc)', 'each One-click capture carries its own controller');
-order(camera, 'releaseShutter();', 'void runOneClickCapture(', 'One-click frees the shutter before the scan runs');
-if (/void runOneClickCapture\([\s\S]{0,200}abortRef/.test(camera)) {
-  fail('One-click must not share abortRef; a new shot would cancel the previous capture');
+includes(camera, 'detachedAborts.current.add(detachedAc)', 'each detached capture carries its own controller');
+order(camera, 'releaseShutter();', 'void runDetachedCapture(', 'the shutter is freed before the scan runs');
+// Precise joins One-click: it shows no card, and it has just said it finishes in
+// the background, so holding the shutter contradicts what the user was told.
+includes(camera, "if (mode !== 'default' || extractionMode === 'precise') {", 'Precise is detached too, not just One-click');
+if (/void runDetachedCapture\([\s\S]{0,200}abortRef/.test(camera)) {
+  fail('detached captures must not share abortRef; a new shot would cancel the previous one');
 }
+// The race existed only to release a blocked UI. Nothing blocks now.
+if (/waitForVisibleDeadline/.test(camera)) fail('the visible-deadline race has no job left once nothing is held');
 
 // A quota rejection used to delete the row and the photo. That was defensible
 // only while it could not happen without the user watching — offline capture

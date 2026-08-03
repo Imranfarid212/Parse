@@ -51,7 +51,6 @@ import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/th
 import { fontFamily, radius, spacing } from '@/theme/tokens';
 
 type Mode = 'default' | 'oneclick';
-const PRECISE_SCREEN_VISIBLE_DEADLINE_MS = 4500;
 /** MenuPanel's TABS order: Export, Search, Plan, Settings. */
 const PLAN_TAB_INDEX = 2;
 
@@ -90,12 +89,6 @@ const LATE_QUOTA_TOAST = 'Out of scans — the photo is saved in Recents';
 const PRECISE_UPFRONT_TITLE = 'This one takes a little longer';
 const PRECISE_UPFRONT_BODY =
   "Precise reads the whole receipt, so it runs in the background. You can keep scanning — it will appear in Recents when it's ready.";
-
-function waitForVisibleDeadline(ms: number): Promise<'visible_deadline'> {
-  return new Promise((resolve) => {
-    setTimeout(() => resolve('visible_deadline'), ms);
-  });
-}
 
 /**
  * Post-shutter phases.
@@ -239,9 +232,9 @@ export default function CameraScreen() {
    * "cancel the thing on screen". Sharing it made every new shot abort the
    * previous one, which is half of why five rapid scans were impossible.
    */
-  const oneClickAborts = useRef(new Set<AbortController>());
+  const detachedAborts = useRef(new Set<AbortController>());
   useEffect(() => {
-    const inFlight = oneClickAborts.current;
+    const inFlight = detachedAborts.current;
     return () => {
       inFlight.forEach((ac) => ac.abort());
       inFlight.clear();
@@ -696,9 +689,22 @@ export default function CameraScreen() {
    * scans impossible. Each capture carries its own AbortController so shots do
    * not cancel one another.
    */
-  const runOneClickCapture = useCallback(
-    async (uri: string, ac: AbortController, startedAt: number) => {
-      const outPromise = processCapture(uri, 'one_click', extractionMode, {
+  /**
+   * A capture with nothing on screen to wait on, run detached from the shutter.
+   *
+   * That is One-click in either mode, and Precise in either capture mode: neither
+   * shows a review card, and Precise has just said in as many words that it
+   * finishes in the background. Holding the shutter for them bought nothing and
+   * stopped the user taking the next photo. Only Balanced + Default stays
+   * inline, because it has a card on screen and a Retake that must cancel it.
+   *
+   * Every controller is its own, or a second shot would abort the first. And
+   * every outcome here is late by definition — the user was told and moved on —
+   * so verdicts arrive as toasts rather than modals.
+   */
+  const runDetachedCapture = useCallback(
+    async (uri: string, captureMode: CaptureMode, ac: AbortController, startedAt: number) => {
+      const out = await processCapture(uri, captureMode, extractionMode, {
         defaultCurrency,
         userId: auth.user?.id,
         signal: ac.signal,
@@ -706,33 +712,18 @@ export default function CameraScreen() {
         onPreflightWarning: promptPreflightWarning,
         onPrecisePreflightAccepted: showPreciseUpFrontNotice,
       });
-      const out =
-        extractionMode === 'precise'
-          ? await Promise.race([outPromise, waitForVisibleDeadline(PRECISE_SCREEN_VISIBLE_DEADLINE_MS)])
-          : await outPromise;
-
-      if (out === 'visible_deadline') {
-        // No dialog here: the up-front notice already promised exactly this,
-        // and a second one is the stacking it was moved to avoid.
-        void outPromise
-          .then((lateOut) => {
-            if (lateOut.kind === 'queued' && lateOut.offline) {
-              showQueuedOfflineNotice(true);
-              return;
-            }
-            handleOneClickCaptureOutcome(lateOut, uri, startedAt, true);
-          })
-          .catch((error) => {
-            if (__DEV__) console.warn('[camera] one-click precise background capture stayed queued', error instanceof Error ? error.message : String(error));
-          });
+      if (out.kind === 'queued' && out.offline) {
+        showQueuedOfflineNotice(true);
         return;
       }
-      handleOneClickCaptureOutcome(out, uri, startedAt);
+      if (captureMode === 'one_click') handleOneClickCaptureOutcome(out, uri, startedAt, true);
+      else handleDefaultCaptureOutcome(out, uri, startedAt, true);
     },
     [
       auth.user?.id,
       defaultCurrency,
       extractionMode,
+      handleDefaultCaptureOutcome,
       handleOneClickCaptureOutcome,
       promptLocalDuplicateCandidate,
       promptPreflightWarning,
@@ -772,25 +763,27 @@ export default function CameraScreen() {
       const photo = { uri: path.startsWith('file://') ? path : `file://${path}` };
       if (!photo.uri) return;
 
-      if (mode !== 'default') {
-        // The photo exists; that is all the shutter was ever waiting for.
-        const oneClickAc = new AbortController();
-        oneClickAborts.current.add(oneClickAc);
+      // Nothing on screen to wait on: One-click never shows a card, and Precise
+      // has just said it finishes in the background. The photo exists, which is
+      // all the shutter was ever waiting for.
+      if (mode !== 'default' || extractionMode === 'precise') {
+        const detachedAc = new AbortController();
+        detachedAborts.current.add(detachedAc);
         releaseShutter();
-        void runOneClickCapture(photo.uri, oneClickAc, startedAt)
-          .catch((error) => {
-            console.warn('[capture] one-click failed', error);
+        void runDetachedCapture(photo.uri, toCaptureMode(mode), detachedAc, startedAt)
+          .catch((error: unknown) => {
+            console.warn('[capture] detached capture failed', error);
             flashNotice("That didn't go through — try again");
           })
           .finally(() => {
-            oneClickAborts.current.delete(oneClickAc);
+            detachedAborts.current.delete(detachedAc);
             setTimeout(flushBackgroundQueues, 600);
           });
         return;
       }
 
-      // Default keeps one in flight: there is a card on screen, and Retake
-      // means cancel that card's capture.
+      // Balanced + Default is the only one that stays inline: there is a card on
+      // screen, and Retake means cancel that card's capture.
       abortRef.current?.abort();
       const ac = new AbortController();
       abortRef.current = ac;
@@ -815,44 +808,10 @@ export default function CameraScreen() {
           onPreflightWarning: promptPreflightWarning,
           onPrecisePreflightAccepted: showPreciseUpFrontNotice,
         });
-        const out =
-          extractionMode === 'precise'
-            ? await Promise.race([outPromise, waitForVisibleDeadline(PRECISE_SCREEN_VISIBLE_DEADLINE_MS)])
-            : await outPromise;
-
-        if (out === 'visible_deadline') {
-          if (__DEV__) {
-            console.warn('[camera] precise screen deadline reached; capture continues in background', {
-              visibleDeadlineMs: PRECISE_SCREEN_VISIBLE_DEADLINE_MS,
-            });
-          }
-          // No dialog here: the up-front notice already promised exactly this,
-          // and a second one is the stacking it was moved to avoid.
-          void outPromise
-            .then((lateOut) => {
-              if (__DEV__) console.log('[camera] precise background capture completed', { kind: lateOut.kind });
-              if (lateOut.kind === 'queued' && lateOut.deferred) {
-                void lateOut.deferred.then((finalOut) => {
-                  if (__DEV__) console.log('[camera] precise deferred outcome ready', { kind: finalOut.kind });
-                  handleDefaultCaptureOutcome(finalOut, photo.uri, startedAt, true);
-                });
-                return;
-              }
-              // Offline is the one late queue reason worth naming. Without
-              // this the deadline dialog was the last thing the user heard,
-              // and the receipt simply appeared in Recents unexplained.
-              if (lateOut.kind === 'queued') {
-                if (lateOut.offline) showQueuedOfflineNotice(true);
-                return;
-              }
-              handleDefaultCaptureOutcome(lateOut, photo.uri, startedAt, true);
-            })
-            .catch((error) => {
-              if (__DEV__) console.warn('[camera] precise background capture stayed queued', error instanceof Error ? error.message : String(error));
-            });
-          return;
-        }
-        handleDefaultCaptureOutcome(out, photo.uri, startedAt);
+        // Balanced only now, so there is nothing to race: the card is on screen
+        // and the user is watching it fill in. A deferred outcome is picked up
+        // by handleDefaultCaptureOutcome's own queued branch.
+        handleDefaultCaptureOutcome(await outPromise, photo.uri, startedAt);
       }
     } catch (e) {
       console.warn('[capture] failed', e);
@@ -887,13 +846,25 @@ export default function CameraScreen() {
     try {
       setBusy(true);
       busyRef.current = true;
+      // Same split as the shutter: only Balanced + Default has a card to wait
+      // on, so everything else is handed off and the picker returns at once.
+      if (mode !== 'default' || extractionMode === 'precise') {
+        const detachedAc = new AbortController();
+        detachedAborts.current.add(detachedAc);
+        void runDetachedCapture(uri, toCaptureMode(mode), detachedAc, startedAt)
+          .catch((error: unknown) => {
+            console.warn('[capture] detached gallery capture failed', error);
+            flashNotice("That didn't go through — try again");
+          })
+          .finally(() => detachedAborts.current.delete(detachedAc));
+        return;
+      }
+
       abortRef.current?.abort();
       const ac = new AbortController();
       abortRef.current = ac;
-      if (mode === 'default') {
-        if (extractionMode === 'balanced') {
-          setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true, startedAt });
-        }
+      {
+        setPhase({ k: 'review', photoUri: uri, rowId: null, fields: null, loading: true, startedAt });
         const out = await processCapture(uri, 'default', extractionMode, {
           defaultCurrency,
           userId: auth.user?.id,
@@ -910,37 +881,6 @@ export default function CameraScreen() {
           onPrecisePreflightAccepted: showPreciseUpFrontNotice,
         });
         handleDefaultCaptureOutcome(out, uri, startedAt);
-      } else {
-        const outPromise = processCapture(uri, 'one_click', extractionMode, {
-          defaultCurrency,
-          userId: auth.user?.id,
-          signal: ac.signal,
-          onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
-          onPreflightWarning: promptPreflightWarning,
-          onPrecisePreflightAccepted: showPreciseUpFrontNotice,
-        });
-        const out =
-          extractionMode === 'precise'
-            ? await Promise.race([outPromise, waitForVisibleDeadline(PRECISE_SCREEN_VISIBLE_DEADLINE_MS)])
-            : await outPromise;
-
-        if (out === 'visible_deadline') {
-          // No dialog here: the up-front notice already promised exactly this,
-          // and a second one is the stacking it was moved to avoid.
-          void outPromise
-            .then((lateOut) => {
-              if (lateOut.kind === 'queued' && lateOut.offline) {
-                showQueuedOfflineNotice(true);
-                return;
-              }
-              handleOneClickCaptureOutcome(lateOut, uri, startedAt, true);
-            })
-            .catch((error) => {
-              if (__DEV__) console.warn('[camera] one-click gallery precise background capture stayed queued', error instanceof Error ? error.message : String(error));
-            });
-          return;
-        }
-        handleOneClickCaptureOutcome(out, uri, startedAt);
       }
     } finally {
       // Same guard as onCapture: never leave the working overlay up.
