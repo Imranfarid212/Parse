@@ -49,7 +49,11 @@ includes(store, 'newCaptureId', 'T3.2 unique capture ids');
 includes(camera, "processCapture(photo.uri, toCaptureMode(mode)", 'T3.2 camera captures enqueue selected mode');
 // Trailing paren dropped: B4 added the extraction-mode argument to these calls.
 includes(camera, "processCapture(uri, 'default'", 'T3.2 gallery default mode');
-includes(camera, "processCapture(uri, 'one_click'", 'T3.2 gallery one-click mode');
+// One-click no longer calls processCapture inline: it is detached from the
+// shutter so shots do not block each other, and both entry points share
+// runDetachedCapture, which passes the mode through. Same capability, one call
+// site instead of two.
+includes(camera, 'void runDetachedCapture(uri, toCaptureMode(mode)', 'T3.2 gallery one-click mode');
 includes(camera, 'Network.addNetworkStateListener', 'T3.3 reconnect listener');
 includes(camera, 'void retryPending();', 'T3.3 retry on mount/reconnect');
 
