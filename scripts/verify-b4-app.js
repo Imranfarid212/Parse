@@ -111,4 +111,15 @@ if (/'blocked_quota'/.test(read('src/lib/receipts/store.ts').match(/listPendingE
   fail('blocked captures must stay out of the retry queue; retrying cannot conjure scans');
 }
 
+// 4.3: Precise promises the background workflow once, up front, and shows no
+// spinner — there is nothing on screen for the user to wait on. Announcing it at
+// preflight was unsafe while quota could still be refused afterwards; it is not
+// now, because the shutter gate catches that before a photo is taken.
+includes(camera, 'onPrecisePreflightAccepted: showPreciseUpFrontNotice', 'Precise says what will happen before it happens');
+if (/k: 'working'/.test(camera)) fail('the Precise spinner phase is scaffolding and should be gone');
+// Anything landing after that dialog is news, not a decision — a modal there is
+// the second dialog the up-front notice exists to prevent.
+includes(camera, 'if (late) flashNotice(LATE_NOT_A_RECEIPT_TOAST)', 'a late rejection is a toast, not a dialog');
+includes(camera, 'if (late) flashNotice(LATE_QUOTA_TOAST)', 'a late quota refusal is a toast, not a dialog');
+
 console.log('[b4:app] rejected/non-receipt UX and secret-boundary checks passed');

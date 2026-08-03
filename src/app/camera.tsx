@@ -70,6 +70,26 @@ const OFFLINE_QUEUED_TOAST = "Saved — we'll process it when you're back online
  * nothing at all; the raw reason still reaches Metro from capture.ts.
  */
 const QUEUED_RETRY_TOAST = "Saved — we're still reading this one";
+/**
+ * Late equivalents of the two dialogs. Once Precise has said it is working in
+ * the background the user has moved on, so a verdict arriving afterwards is
+ * news, not a decision to make — and a modal for it would be the second dialog
+ * the up-front notice exists to prevent.
+ */
+const LATE_NOT_A_RECEIPT_TOAST = "Couldn't read a receipt — you weren't charged";
+const LATE_QUOTA_TOAST = 'Out of scans — the photo is saved in Recents';
+/**
+ * Precise, promised up front rather than after a spinner and a deadline.
+ *
+ * Announcing this at preflight used to stack on top of "Out of scans" and "not
+ * a receipt", which is why it was moved behind a 4.5s deadline. It is safe now:
+ * quota is refused at the shutter before a photo is taken, and every outcome
+ * after this dialog is a toast, so there is no second dialog left to collide
+ * with. Precise then finishes in the background with the camera live.
+ */
+const PRECISE_UPFRONT_TITLE = 'This one takes a little longer';
+const PRECISE_UPFRONT_BODY =
+  "Precise reads the whole receipt, so it runs in the background. You can keep scanning — it will appear in Recents when it's ready.";
 
 function waitForVisibleDeadline(ms: number): Promise<'visible_deadline'> {
   return new Promise((resolve) => {
@@ -81,14 +101,14 @@ function waitForVisibleDeadline(ms: number): Promise<'visible_deadline'> {
  * Post-shutter phases.
  *  idle       — live camera
  *  review     — Default: frozen frame + card (loading → fields)
- *  working    — Precise: the server has been asked, nothing claimed yet
  *
- * A queued capture has no phase of its own: it is a toast over a live camera,
- * because there is nothing left on screen for the user to wait on.
+ * Precise has no phase of its own, and neither does a queued capture: both are
+ * a dialog or a toast over a live camera, because there is nothing left on
+ * screen for the user to wait on. A spinner there only invites them to wait for
+ * something that was never going to arrive.
  */
 type Phase =
   | { k: 'idle' }
-  | { k: 'working' }
   | {
       k: 'review';
       photoUri: string;
@@ -383,24 +403,14 @@ export default function CameraScreen() {
   );
 
   /**
-   * Precise, post-preflight: an honest "still working" state. It claims nothing
-   * — the server has not answered yet, and it may still come back with a
-   * rejection, a duplicate, or no scans left.
+   * Precise, post-preflight: say what is about to happen, once, and hand the
+   * camera back. No spinner — there is nothing for the user to watch, and a
+   * spinner over a live camera only invites them to wait for something that was
+   * never going to arrive on screen.
    */
-  const showPreciseWorking = useCallback(() => setPhase({ k: 'working' }), []);
-
-  /**
-   * Only once the visible deadline passes without an answer do we promise the
-   * background workflow. Announcing it at preflight (before the server had said
-   * anything) is what stacked this on top of "Out of scans" / "not a receipt".
-   */
-  const showPreciseProcessingAlert = useCallback(() => {
+  const showPreciseUpFrontNotice = useCallback(() => {
     setPhase({ k: 'idle' });
-    Alert.alert(
-      'Receipt is being processed',
-      "This receipt may take a little longer. We'll finish processing it in the background and it will appear in Recents when ready.",
-      [{ text: 'OK' }],
-    );
+    Alert.alert(PRECISE_UPFRONT_TITLE, PRECISE_UPFRONT_BODY, [{ text: 'OK' }]);
   }, []);
 
   const defaultCurrency = auth.profile?.default_currency ?? auth.bootstrapLocale.defaultCurrency;
@@ -564,11 +574,11 @@ export default function CameraScreen() {
   );
 
   const handleDefaultCaptureOutcome = useCallback(
-    (out: CaptureOutcome, photoUri: string, startedAt: number) => {
+    (out: CaptureOutcome, photoUri: string, startedAt: number, late = false) => {
       if (out.kind === 'extracted') {
         if (out.row.extractionMode === 'precise') {
           setPhase((prev) =>
-            prev.k === 'review' || prev.k === 'working' ? { k: 'idle' } : prev,
+            prev.k === 'review' ? { k: 'idle' } : prev,
           );
           flashNotice('Receipt saved to Recents');
           return;
@@ -585,7 +595,8 @@ export default function CameraScreen() {
         showDuplicateCandidatePrompt(out.duplicateCandidate, out.row.id, photoUri, startedAt);
       } else if (out.kind === 'not_a_receipt') {
         setPhase({ k: 'idle' });
-        showNotReceiptAlert();
+        if (late) flashNotice(LATE_NOT_A_RECEIPT_TOAST);
+        else showNotReceiptAlert();
       } else if (out.kind === 'duplicate') {
         setPhase({ k: 'idle' });
         flashNotice('This receipt is already saved');
@@ -595,7 +606,8 @@ export default function CameraScreen() {
         setPhase({ k: 'idle' });
       } else if (out.kind === 'quota_exhausted') {
         setPhase({ k: 'idle' });
-        showQuotaExhaustedAlert();
+        if (late) flashNotice(LATE_QUOTA_TOAST);
+        else showQuotaExhaustedAlert();
       } else {
         // Offline is the one queue reason we can name, and it applies to both
         // modes — Precise previously showed nothing at all here.
@@ -603,14 +615,13 @@ export default function CameraScreen() {
         else {
           // Precise clears its working overlay first; both modes then say the
           // same thing, because to the user they are the same outcome.
-          if (out.row.extractionMode === 'precise') setPhase((prev) => (prev.k === 'working' ? { k: 'idle' } : prev));
-          else setPhase({ k: 'idle' });
+          setPhase({ k: 'idle' });
           flashNotice(QUEUED_RETRY_TOAST);
         }
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
             if (__DEV__) console.log('[camera] queued deferred outcome ready', { kind: finalOut.kind });
-            handleDefaultCaptureOutcome(finalOut, photoUri, startedAt);
+            handleDefaultCaptureOutcome(finalOut, photoUri, startedAt, true);
           });
         }
       }
@@ -619,7 +630,7 @@ export default function CameraScreen() {
   );
 
   const handleOneClickCaptureOutcome = useCallback(
-    (out: CaptureOutcome, photoUri: string, startedAt: number) => {
+    (out: CaptureOutcome, photoUri: string, startedAt: number, late = false) => {
       if (out.kind === 'extracted') {
         void (async () => {
           await confirm(out.row.id, out.fields, auth.user?.id);
@@ -638,7 +649,8 @@ export default function CameraScreen() {
         })();
       } else if (out.kind === 'not_a_receipt') {
         setPhase({ k: 'idle' });
-        showNotReceiptAlert();
+        if (late) flashNotice(LATE_NOT_A_RECEIPT_TOAST);
+        else showNotReceiptAlert();
       } else if (out.kind === 'duplicate') {
         setPhase({ k: 'idle' });
         flashNotice('This receipt is already saved');
@@ -648,7 +660,8 @@ export default function CameraScreen() {
         setPhase({ k: 'idle' });
       } else if (out.kind === 'quota_exhausted') {
         setPhase({ k: 'idle' });
-        showQuotaExhaustedAlert();
+        if (late) flashNotice(LATE_QUOTA_TOAST);
+        else showQuotaExhaustedAlert();
       } else {
         if (out.offline) {
           showQueuedOfflineNotice();
@@ -659,7 +672,7 @@ export default function CameraScreen() {
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
             if (__DEV__) console.log('[camera] one-click precise deferred outcome ready', { kind: finalOut.kind });
-            handleOneClickCaptureOutcome(finalOut, photoUri, startedAt);
+            handleOneClickCaptureOutcome(finalOut, photoUri, startedAt, true);
           });
         }
       }
@@ -691,7 +704,7 @@ export default function CameraScreen() {
         signal: ac.signal,
         onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
         onPreflightWarning: promptPreflightWarning,
-        onPrecisePreflightAccepted: showPreciseWorking,
+        onPrecisePreflightAccepted: showPreciseUpFrontNotice,
       });
       const out =
         extractionMode === 'precise'
@@ -699,14 +712,15 @@ export default function CameraScreen() {
           : await outPromise;
 
       if (out === 'visible_deadline') {
-        showPreciseProcessingAlert();
+        // No dialog here: the up-front notice already promised exactly this,
+        // and a second one is the stacking it was moved to avoid.
         void outPromise
           .then((lateOut) => {
             if (lateOut.kind === 'queued' && lateOut.offline) {
               showQueuedOfflineNotice(true);
               return;
             }
-            handleOneClickCaptureOutcome(lateOut, uri, startedAt);
+            handleOneClickCaptureOutcome(lateOut, uri, startedAt, true);
           })
           .catch((error) => {
             if (__DEV__) console.warn('[camera] one-click precise background capture stayed queued', error instanceof Error ? error.message : String(error));
@@ -722,8 +736,7 @@ export default function CameraScreen() {
       handleOneClickCaptureOutcome,
       promptLocalDuplicateCandidate,
       promptPreflightWarning,
-      showPreciseProcessingAlert,
-      showPreciseWorking,
+      showPreciseUpFrontNotice,
       showQueuedOfflineNotice,
     ],
   );
@@ -800,7 +813,7 @@ export default function CameraScreen() {
           },
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, photo.uri, startedAt),
           onPreflightWarning: promptPreflightWarning,
-          onPrecisePreflightAccepted: showPreciseWorking,
+          onPrecisePreflightAccepted: showPreciseUpFrontNotice,
         });
         const out =
           extractionMode === 'precise'
@@ -813,14 +826,15 @@ export default function CameraScreen() {
               visibleDeadlineMs: PRECISE_SCREEN_VISIBLE_DEADLINE_MS,
             });
           }
-          showPreciseProcessingAlert();
+          // No dialog here: the up-front notice already promised exactly this,
+          // and a second one is the stacking it was moved to avoid.
           void outPromise
             .then((lateOut) => {
               if (__DEV__) console.log('[camera] precise background capture completed', { kind: lateOut.kind });
               if (lateOut.kind === 'queued' && lateOut.deferred) {
                 void lateOut.deferred.then((finalOut) => {
                   if (__DEV__) console.log('[camera] precise deferred outcome ready', { kind: finalOut.kind });
-                  handleDefaultCaptureOutcome(finalOut, photo.uri, startedAt);
+                  handleDefaultCaptureOutcome(finalOut, photo.uri, startedAt, true);
                 });
                 return;
               }
@@ -831,7 +845,7 @@ export default function CameraScreen() {
                 if (lateOut.offline) showQueuedOfflineNotice(true);
                 return;
               }
-              handleDefaultCaptureOutcome(lateOut, photo.uri, startedAt);
+              handleDefaultCaptureOutcome(lateOut, photo.uri, startedAt, true);
             })
             .catch((error) => {
               if (__DEV__) console.warn('[camera] precise background capture stayed queued', error instanceof Error ? error.message : String(error));
@@ -842,7 +856,7 @@ export default function CameraScreen() {
       }
     } catch (e) {
       console.warn('[capture] failed', e);
-      // Only 'working' was reset here, which is the Precise overlay. In Balanced
+      // Only the Precise overlay was reset here. In Balanced
       // the skeleton card is not set until after the photo is taken, so a throw
       // before that — the camera session, the temp-file spill — left the screen
       // exactly as it was: no card, no alert, nothing to say the shutter had
@@ -893,7 +907,7 @@ export default function CameraScreen() {
           },
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
           onPreflightWarning: promptPreflightWarning,
-          onPrecisePreflightAccepted: showPreciseWorking,
+          onPrecisePreflightAccepted: showPreciseUpFrontNotice,
         });
         handleDefaultCaptureOutcome(out, uri, startedAt);
       } else {
@@ -903,7 +917,7 @@ export default function CameraScreen() {
           signal: ac.signal,
           onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
           onPreflightWarning: promptPreflightWarning,
-          onPrecisePreflightAccepted: showPreciseWorking,
+          onPrecisePreflightAccepted: showPreciseUpFrontNotice,
         });
         const out =
           extractionMode === 'precise'
@@ -911,14 +925,15 @@ export default function CameraScreen() {
             : await outPromise;
 
         if (out === 'visible_deadline') {
-          showPreciseProcessingAlert();
+          // No dialog here: the up-front notice already promised exactly this,
+          // and a second one is the stacking it was moved to avoid.
           void outPromise
             .then((lateOut) => {
               if (lateOut.kind === 'queued' && lateOut.offline) {
                 showQueuedOfflineNotice(true);
                 return;
               }
-              handleOneClickCaptureOutcome(lateOut, uri, startedAt);
+              handleOneClickCaptureOutcome(lateOut, uri, startedAt, true);
             })
             .catch((error) => {
               if (__DEV__) console.warn('[camera] one-click gallery precise background capture stayed queued', error instanceof Error ? error.message : String(error));
@@ -929,7 +944,7 @@ export default function CameraScreen() {
       }
     } finally {
       // Same guard as onCapture: never leave the working overlay up.
-      setPhase((prev) => (prev.k === 'working' ? { k: 'idle' } : prev));
+      setPhase({ k: 'idle' });
       busyRef.current = false;
       setBusy(false);
       setTimeout(flushBackgroundQueues, 600);
@@ -1154,13 +1169,6 @@ export default function CameraScreen() {
         />
       )}
 
-      {phase.k === 'working' && (
-        <View style={styles.processing}>
-          <ActivityIndicator color="#fff" />
-          <Text style={styles.processingText}>Reading receipt…</Text>
-        </View>
-      )}
-
     </View>
   );
 }
@@ -1242,16 +1250,4 @@ const styles = StyleSheet.create({
   },
   noticeText: { color: '#fff', fontFamily: fontFamily.semibold, fontSize: 13 },
 
-  processing: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-  },
-  processingText: { color: '#fff', fontFamily: fontFamily.semibold, fontSize: 17 },
 });
