@@ -10,6 +10,63 @@ so, not editing the old one.
 
 ---
 
+## DL-004 - B5 uses hybrid provider fallback with durable server jobs
+
+**Date:** 2026-08-03 · **Status:** accepted · **Supersedes:** nothing ·
+**Touches:** B5, Blueprint §5, D15
+
+### Context
+
+B4 split extraction into a fast text-first Balanced path and a photo-first
+Precise path. Balanced already races Gemini providers and returns the first
+valid result. Precise still calls Grok directly with the image. The client also
+has visible deadlines: 3.8 seconds for Balanced and 4.5 seconds for Precise.
+Those deadlines are UI behavior only; a slow request can still finish after the
+screen has moved on, and device-local retry covers network failures.
+
+The original Blueprint B5 design assumed one photo-first `extract` endpoint with
+server-owned durable images before any 200 or 202. DL-002 amended D14 for the
+Balanced path because Balanced never receives the image at extraction ack time.
+B5 therefore cannot blindly restore the original single-path design without
+undoing B4's latency work.
+
+### Decision
+
+B5 keeps the successful B4 fast paths unchanged and adds durability only at the
+point where the server has accepted responsibility for delayed provider work.
+
+- Normal Balanced success remains the current Gemini race and returns 200.
+- Normal Precise success remains the current Grok image path and returns 200.
+- A provider failure after the configured Grok attempts commits the Precise
+  receipt in `processing` with its durable Storage image and commits exactly one
+  `extraction_jobs` row in the same database transaction, then returns 202
+  `PROVIDER_DELAY`.
+- A 202 row is server-owned work. The device shows the canonical pending copy
+  and does not create a new server job or repeatedly resubmit the image for that
+  capture.
+- A transport failure with no server response remains a device-local silent
+  requeue. It is not shown as `PROVIDER_DELAY`.
+- The sweeper is the correctness mechanism: it claims due jobs with leases and
+  `FOR UPDATE SKIP LOCKED`, runs Gemini, completes or reschedules with backoff,
+  and treats late duplicate workers as no-ops by re-checking receipt status.
+- Terminal job failure marks the receipt `failed`, writes an idempotent refund
+  ledger row, and updates the receipt so Realtime/polling can notify the user.
+- The Grok breaker opens after 3 failures inside 120 seconds. While open, new
+  Precise scans route synchronously to Gemini and return normal 200s, with
+  `provider='gemini'`. A 15-minute provider probe closes the breaker after a
+  successful Grok canary.
+
+### Consequences
+
+- No server job is created on the ordinary 200 path.
+- The current B4 latency gates stay mode-specific: Balanced 2.5-second average
+  acceptance and Precise 4.5-second temporary acceptance are not changed.
+- `extraction_jobs` remains unique by `receipt_id`; `receipts.capture_id` remains
+  the capture idempotency key.
+- B4's `extraction_persist_jobs` table stays as background persistence
+  bookkeeping. B5's durable retry queue is the canonical `extraction_jobs` table
+  that already exists from the Blueprint schema.
+
 ## DL-003 — Line items remain structured on the device
 
 **Date:** 2026-08-03 · **Status:** accepted · **Touches:** B4.8.4

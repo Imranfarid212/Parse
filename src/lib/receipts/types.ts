@@ -115,6 +115,7 @@ export type ReceiptStatus =
   | 'pending_extract'
   | 'llm_processing'
   | 'llm_failed_retryable'
+  | 'provider_delayed'
   | 'llm_failed_final'
   /**
    * Refused for quota. Terminal for the retry queue — retrying cannot conjure

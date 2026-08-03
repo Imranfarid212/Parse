@@ -30,7 +30,7 @@ import { TapToFocusLayer, useFocusReticle } from '@/components/camera/TapToFocus
 import { TrackingDebug, TrackingQuad, useDocumentTracking } from '@/components/camera/TrackingQuad';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { TOAST_REFERRAL_PROMPT, useAuth } from '@/lib/auth/auth-context';
-import { COPY_QUOTA_EXHAUSTED_BODY, COPY_QUOTA_EXHAUSTED_TITLE } from '@/../packages/contracts/src/copy';
+import { COPY_PROVIDER_DELAY, COPY_QUOTA_EXHAUSTED_BODY, COPY_QUOTA_EXHAUSTED_TITLE } from '@/../packages/contracts/src/copy';
 import { markReferralPromptSeen, shouldShowReferralPrompt } from '@/lib/auth/referralPrompt';
 import {
   confirm,
@@ -45,6 +45,7 @@ import {
 } from '@/lib/receipts/capture';
 import { extractClient } from '@/lib/receipts/client';
 import { checkQuotaGate, refreshQuota } from '@/lib/receipts/quota';
+import { syncFromServer } from '@/lib/receipts/server-sync';
 import * as store from '@/lib/receipts/store';
 import type { CaptureMode, DuplicateCandidate, ExtractionMode, LocalDuplicateCandidate, ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
@@ -54,12 +55,6 @@ type Mode = 'default' | 'oneclick';
 /** MenuPanel's TABS order: Export, Search, Plan, Settings. */
 const PLAN_TAB_INDEX = 2;
 
-/** How long before an offline capture earns another dialog rather than a toast. */
-const OFFLINE_NOTICE_REPEAT_MS = 60_000;
-const OFFLINE_QUEUED_TITLE = 'No network connection';
-const OFFLINE_QUEUED_BODY =
-  "Your receipt is saved. We'll process it automatically once you're back online, and it will appear in Recents when it's ready.";
-const OFFLINE_QUEUED_TOAST = "Saved — we'll process it when you're back online";
 /**
  * Every other reason a capture queues: throttled, a timeout, a 5xx, a slow
  * model. The user is told the photo is safe and nothing else — the cause is our
@@ -77,6 +72,7 @@ const QUEUED_RETRY_TOAST = "Saved — we're still reading this one";
  */
 const LATE_NOT_A_RECEIPT_TOAST = "Couldn't read a receipt — you weren't charged";
 const LATE_QUOTA_TOAST = 'Out of scans — the photo is saved in Recents';
+const isProviderDelayOutcome = (out: CaptureOutcome) => out.kind === 'queued' && out.reason === 'PROVIDER_DELAY';
 /**
  * Precise, promised up front rather than after a spinner and a deadline.
  *
@@ -267,7 +263,8 @@ export default function CameraScreen() {
     void syncConfirmed();
     void syncImageBackups();
     void flushCaptureMetrics();
-  }, []);
+    if (auth.user?.id) void syncFromServer(auth.user.id, auth.categories);
+  }, [auth.categories, auth.user]);
 
   useEffect(() => {
     const sub = Network.addNetworkStateListener((s) => {
@@ -283,12 +280,12 @@ export default function CameraScreen() {
     if (extractionMode === 'balanced') {
       if (now - balancedWarmupAt.current < 30_000) return;
       balancedWarmupAt.current = now;
-      extractClient.warmUpBalanced?.();
+      void extractClient.warmUpBalanced?.().catch(() => {});
       return;
     }
     if (now - preciseWarmupAt.current < 30_000) return;
     preciseWarmupAt.current = now;
-    extractClient.warmUpPrecise?.();
+    void extractClient.warmUpPrecise?.().catch(() => {});
   }, [appActive, auth.session, extractionMode, isFocused]);
 
   // Keep the cached balance honest: on landing, and whenever the app comes back
@@ -363,37 +360,6 @@ export default function CameraScreen() {
       withSpring(1, { damping: 9, stiffness: 220 }),
     );
   }, [digest]);
-
-  /**
-   * A scan queued because the device is offline. The capture is safe and the
-   * retry queue owns it, but until now the only sign of that was a 1.8s
-   * spinner whose explanation was stripped outside __DEV__ — so the user was
-   * told nothing at all about why the receipt had not been read.
-   *
-   * The first one in an episode gets a dialog, because it changes what the
-   * user should expect. Repeats inside the window drop to a toast: someone
-   * scanning a stack of receipts on a plane should not have to dismiss a
-   * dialog for each one.
-   */
-  const offlineNoticeAt = useRef(0);
-  const showQueuedOfflineNotice = useCallback(
-    /**
-     * `toastOnly` is for outcomes that land after Precise's "Receipt is being
-     * processed" dialog. A second dialog there would contradict the first —
-     * late failures are always non-blocking.
-     */
-    (toastOnly = false) => {
-      setPhase({ k: 'idle' });
-      const now = Date.now();
-      if (toastOnly || now - offlineNoticeAt.current < OFFLINE_NOTICE_REPEAT_MS) {
-        flashNotice(OFFLINE_QUEUED_TOAST);
-        return;
-      }
-      offlineNoticeAt.current = now;
-      Alert.alert(OFFLINE_QUEUED_TITLE, OFFLINE_QUEUED_BODY, [{ text: 'OK' }]);
-    },
-    [flashNotice],
-  );
 
   /**
    * Precise, post-preflight: say what is about to happen, once, and hand the
@@ -612,7 +578,12 @@ export default function CameraScreen() {
       } else {
         // Offline is the one queue reason we can name, and it applies to both
         // modes — Precise previously showed nothing at all here.
-        if (out.offline) showQueuedOfflineNotice();
+        if (isProviderDelayOutcome(out)) {
+          setPhase({ k: 'idle' });
+          flashNotice(COPY_PROVIDER_DELAY);
+        } else if (out.offline) {
+          setPhase({ k: 'idle' });
+        }
         else {
           // Precise clears its working overlay first; both modes then say the
           // same thing, because to the user they are the same outcome.
@@ -627,7 +598,7 @@ export default function CameraScreen() {
         }
       }
     },
-    [flashNotice, showDuplicateCandidatePrompt, showQueuedOfflineNotice, showQuotaExhaustedAlert],
+    [flashNotice, showDuplicateCandidatePrompt, showQuotaExhaustedAlert],
   );
 
   const handleOneClickCaptureOutcome = useCallback(
@@ -664,8 +635,13 @@ export default function CameraScreen() {
         if (late) flashNotice(LATE_QUOTA_TOAST);
         else showQuotaExhaustedAlert();
       } else {
+        if (isProviderDelayOutcome(out)) {
+          setPhase({ k: 'idle' });
+          flashNotice(COPY_PROVIDER_DELAY);
+          return;
+        }
         if (out.offline) {
-          showQueuedOfflineNotice();
+          setPhase({ k: 'idle' });
           return;
         }
         setPhase({ k: 'idle' });
@@ -683,7 +659,6 @@ export default function CameraScreen() {
       flashNotice,
       popFolder,
       showDuplicateCandidatePrompt,
-      showQueuedOfflineNotice,
       showQuotaExhaustedAlert,
     ],
   );
@@ -721,7 +696,7 @@ export default function CameraScreen() {
         onPrecisePreflightAccepted: showPreciseUpFrontNotice,
       });
       if (out.kind === 'queued' && out.offline) {
-        showQueuedOfflineNotice(true);
+        setPhase({ k: 'idle' });
         return;
       }
       if (captureMode === 'one_click') handleOneClickCaptureOutcome(out, uri, startedAt, true);
@@ -736,7 +711,6 @@ export default function CameraScreen() {
       promptLocalDuplicateCandidate,
       promptPreflightWarning,
       showPreciseUpFrontNotice,
-      showQueuedOfflineNotice,
     ],
   );
 
@@ -761,7 +735,7 @@ export default function CameraScreen() {
       // used to reject onCapture itself — an unhandled rejection, which on the
       // device looks exactly like the tap never registered.
       if (!(await passesQuotaGate())) return;
-      if (extractionMode === 'precise') extractClient.warmUpPrecise?.();
+      if (extractionMode === 'precise') void extractClient.warmUpPrecise?.().catch(() => {});
       // VisionCamera hands back a native Photo object rather than a URI. Spill
       // it to a temp file for the pipeline, then dispose — the underlying
       // buffer is native memory and won't be reclaimed by GC.

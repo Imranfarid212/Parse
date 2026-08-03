@@ -27,6 +27,7 @@ const IN_FLIGHT_STATUSES = new Set<ReceiptStatus>([
   'pending_extract',
   'llm_processing',
   'llm_failed_retryable',
+  'provider_delayed',
   'image_upload_pending',
 ]);
 
@@ -68,7 +69,7 @@ const formatTotal = (row: ReceiptRow) => {
 const receiptTitle = (row: ReceiptRow) => {
   const store = row.fields?.store?.trim();
   if (store) return store;
-  if (row.status === 'llm_failed_retryable' || row.status === 'pending_extract') return 'Processing receipt';
+  if (row.status === 'llm_failed_retryable' || row.status === 'pending_extract' || row.status === 'provider_delayed') return 'Processing receipt';
   return 'Receipt';
 };
 
@@ -90,6 +91,7 @@ const STATUS_LABELS: Record<ReceiptStatus, string> = {
   pending_extract: 'Waiting to retry',
   llm_processing: 'Processing…',
   llm_failed_retryable: 'Waiting to retry',
+  provider_delayed: 'Processing…',
   llm_failed_final: 'Could not be processed',
   blocked_quota: 'Out of scans',
   user_confirmation_pending: 'Needs review',

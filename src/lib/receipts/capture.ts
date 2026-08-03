@@ -187,6 +187,12 @@ function getErrorStatus(error: unknown): number | null {
   return typeof value === 'number' ? value : null;
 }
 
+function getProviderDelayReceiptId(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const value = (error as { receiptId?: unknown }).receiptId;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 /**
  * Whether a failed confirm is worth trying again. The shared classifier only
  * counts 0 and 5xx as transient, so 408 and 429 would read as verdicts — and
@@ -737,6 +743,22 @@ export async function processCapture(
       metrics: { ...metrics, total_to_ui_ms: metrics.total_to_response_ms },
       attempts,
     });
+    if (getExtractErrorCode(error) === 'PROVIDER_DELAY') {
+      const receiptId = getProviderDelayReceiptId(error);
+      await store.markProviderDelayed(row.id, row.attempts);
+      if (receiptId) {
+        await store.setServerReceipt(row.id, receiptId);
+      }
+      if (durableImagePromise) durableImageUri = await durableImagePromise;
+      if (row.extractionMode === 'balanced' && localOcrText) {
+        await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
+        void syncImageBackups();
+      } else {
+        await store.setSyncStatus(row.id, { imageSyncStatus: 'uploaded' });
+        await deleteLocalFile(durableImageUri);
+      }
+      return { kind: 'queued', row, reason: 'PROVIDER_DELAY', offline: false, attempts };
+    }
     if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
       // Retrying can't fix "out of scans" — treat it as a verdict, not a transient
       // failure, so it never enters the backoff/retry queue. But it is the user's
@@ -1120,6 +1142,19 @@ async function dispatchPending(): Promise<number> {
       }
       recovered += 1;
     } catch (error) {
+      if (getExtractErrorCode(error) === 'PROVIDER_DELAY') {
+        const receiptId = getProviderDelayReceiptId(error);
+        await store.markProviderDelayed(row.id, row.attempts);
+        if (receiptId) await store.setServerReceipt(row.id, receiptId);
+        if (row.extractionMode === 'balanced' && row.localOcrText) {
+          await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
+          void syncImageBackups();
+        } else {
+          await store.setSyncStatus(row.id, { imageSyncStatus: 'uploaded' });
+          await deleteLocalFile(row.imageUri);
+        }
+        continue;
+      }
       if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
         // Nobody is watching this one: it is the reconnect drain. Which is
         // exactly why it must not delete anything — a receipt photographed

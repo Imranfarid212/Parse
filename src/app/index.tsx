@@ -63,7 +63,10 @@ export default function LandingScreen() {
     }
   };
 
-  if (auth.loading || auth.deviceStatus === 'checking') {
+  // Device ownership is meaningful only after a session exists. A fresh
+  // signed-out launch deliberately resets it to `checking`, which must not
+  // hide the sign-in screen behind an indefinite spinner.
+  if (auth.loading || (auth.authenticated && auth.deviceStatus === 'checking')) {
     return (
       <View style={styles.loadingGate}>
         <ActivityIndicator color={colors.accent} />

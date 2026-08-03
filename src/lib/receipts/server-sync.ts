@@ -68,7 +68,12 @@ const toItems = (items: ServerItem[] | null): ReceiptLineItem[] =>
   (items ?? []).map((item) => ({ name: item.name?.trim() || 'Item', qty: Number(item.qty) > 0 ? Number(item.qty) : 1, amount: Math.max(0, Number(item.amount) || 0) }));
 
 /** Server `status` is its own vocabulary; map it onto the device's. */
-const toLocalStatus = (status: string): ReceiptStatus => (status === 'confirmed' ? 'synced' : 'extracted');
+const toLocalStatus = (status: string): ReceiptStatus => {
+  if (status === 'confirmed') return 'synced';
+  if (status === 'processing') return 'provider_delayed';
+  if (status === 'failed') return 'llm_failed_final';
+  return 'extracted';
+};
 
 function toFields(row: ServerReceipt, categoryNameById: Map<number, string>): ReceiptFields {
   const categoryName = row.category_id === null ? null : categoryNameById.get(row.category_id) ?? null;

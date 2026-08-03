@@ -443,6 +443,24 @@ export async function markExtractRetry(id: string, attempts: number, nextRetryAt
   );
 }
 
+export async function markProviderDelayed(id: string, attempts = 0): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE receipts SET status = 'provider_delayed', attempts = ?, next_retry_at = 0, updated_at = ? WHERE id = ?",
+    [attempts, Date.now(), id],
+  );
+}
+
+export async function setServerReceipt(id: string, receiptId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE receipts SET receipt_id = ?, acked_at = COALESCE(acked_at, ?), updated_at = ? WHERE id = ?', [
+    receiptId,
+    Date.now(),
+    Date.now(),
+    id,
+  ]);
+}
+
 export async function setStatus(id: string, status: ReceiptStatus): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE receipts SET status = ?, updated_at = ? WHERE id = ?', [status, Date.now(), id]);
@@ -568,6 +586,7 @@ export async function getSyncState(userId: string): Promise<SyncState | null> {
  * background sync eats somebody's edit.
  */
 export function hasUnsyncedLocalWork(row: ReceiptRow): boolean {
+  if (row.status === 'provider_delayed' || row.status === 'llm_failed_final') return false;
   return !(row.status === 'synced' && row.resultSyncStatus === 'synced');
 }
 
@@ -830,9 +849,18 @@ export async function listPendingImageBackups(): Promise<ReceiptRow[]> {
 export async function countPending(): Promise<number> {
   const db = await getDb();
   const r = await db.getFirstAsync<{ n: number }>(
-    "SELECT COUNT(*) AS n FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'image_upload_pending', 'confirmed_local', 'result_sync_pending')",
+    "SELECT COUNT(*) AS n FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'provider_delayed', 'image_upload_pending', 'confirmed_local', 'result_sync_pending')",
   );
   return r?.n ?? 0;
+}
+
+/** Server-owned B5 jobs are completed by the sweeper, not the local dispatcher. */
+export async function countProviderDelayed(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM receipts WHERE status = 'provider_delayed'",
+  );
+  return row?.n ?? 0;
 }
 
 /**

@@ -3,12 +3,13 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
 import { isActiveDevice, isDeviceId } from '../_shared/device.ts';
 
+import { extractWithGeminiImage } from '../_shared/extraction-jobs.ts';
 import { evaluateQuota, refundScan } from '../_shared/quota.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers':
-    'authorization, x-client-info, apikey, content-type, x-rf-device-id, x-rf-force-storage-failure, x-rf-fixture-case',
+    'authorization, x-client-info, apikey, content-type, x-rf-device-id, x-rf-force-storage-failure, x-rf-force-provider-failure, x-rf-fixture-case',
 };
 
 const CATEGORIES = [
@@ -29,6 +30,8 @@ const DEFAULT_XAI_MODEL = 'grok-4.5';
 const XAI_CHAT_COMPLETIONS_URL = 'https://api.x.ai/v1/chat/completions';
 const OPENROUTER_CHAT_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_OPENROUTER_BALANCED_MODEL = 'google/gemini-2.5-flash-lite';
+const PROVIDER_FAILURE_THRESHOLD = 3;
+const PROVIDER_FAILURE_WINDOW_SECONDS = 120;
 const MAX_IMAGE_BYTES = 2_000_000;
 const XAI_MAX_TOKENS = 500;
 const JWKS_CACHE_MS = 10 * 60 * 1000;
@@ -630,8 +633,9 @@ async function extractWithGrok(
   categories: string[],
   defaultCurrency: string,
   timing?: ExtractTiming,
+  timeoutOverrideMs?: number,
 ) {
-  const timeoutMs = Number(Deno.env.get('GROK_TIMEOUT_MS') || 3500);
+  const timeoutMs = timeoutOverrideMs ?? Number(Deno.env.get('GROK_TIMEOUT_MS') || 3500);
   let raw: unknown;
   try {
     raw = await withTimeout(timeoutMs, (signal) => callGrok(imageBytes, imageType, categories, defaultCurrency, timing, signal));
@@ -656,6 +660,23 @@ async function extractWithGrok(
       if (repairError instanceof ModelJsonError) throw repairError;
       throw new ModelJsonError('grok_primary', raw, error);
     }
+  }
+}
+
+async function extractWithGrokRetry(
+  imageBytes: Uint8Array,
+  imageType: string,
+  categories: string[],
+  defaultCurrency: string,
+  timing?: ExtractTiming,
+) {
+  const firstTimeoutMs = Number(Deno.env.get('GROK_TIMEOUT_MS') || 3500);
+  const retryTimeoutMs = Number(Deno.env.get('GROK_RETRY_TIMEOUT_MS') || 1200);
+  try {
+    return await extractWithGrok(imageBytes, imageType, categories, defaultCurrency, timing, firstTimeoutMs);
+  } catch (firstError) {
+    console.warn('[extract] grok primary attempt failed', { error: firstError instanceof Error ? firstError.message : String(firstError) });
+    return extractWithGrok(imageBytes, imageType, categories, defaultCurrency, timing, retryTimeoutMs);
   }
 }
 
@@ -866,6 +887,47 @@ async function persistBalancedResult({
   if (!extraction.is_receipt) {
     await refundScan(admin, userId, captureId);
   }
+}
+
+async function isProviderBreakerOpen(admin: ReturnType<typeof createClient>): Promise<boolean> {
+  const { data, error } = await admin.rpc('get_provider_state');
+  if (error) {
+    console.error('[extract] provider state read failed; keeping Grok primary', { error: String(error.message ?? error) });
+    return false;
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return row?.out_state === 'open';
+}
+
+async function enqueueProviderDelay(args: {
+  admin: ReturnType<typeof createClient>;
+  userId: string;
+  captureId: string;
+  captureMode: CaptureMode;
+  extractionMode: ExtractionMode;
+  imagePath: string;
+  imageByteSize: number;
+  ackedAt: string;
+  error: unknown;
+}) {
+  const { admin, userId, captureId, captureMode, extractionMode, imagePath, imageByteSize, ackedAt, error } = args;
+  const { data, error: rpcError } = await admin.rpc('enqueue_provider_delay_job', {
+    p_user_id: userId,
+    p_capture_id: captureId,
+    p_capture_mode: captureMode,
+    p_extraction_mode: extractionMode,
+    p_image_path: imagePath,
+    p_image_byte_size: imageByteSize,
+    p_acked_at: ackedAt,
+    p_provider_attempted: 'grok',
+    p_last_error: error instanceof Error ? error.message : String(error),
+    p_failure_window_seconds: PROVIDER_FAILURE_WINDOW_SECONDS,
+    p_failure_threshold: PROVIDER_FAILURE_THRESHOLD,
+  });
+  if (rpcError) throw rpcError;
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row?.out_receipt_id) throw new Error('enqueue_provider_delay_job returned no receipt id');
+  return { receiptId: row.out_receipt_id as string, breakerState: row.out_breaker_state as string | null };
 }
 
 /**
@@ -1174,19 +1236,63 @@ async function handleExtract(req: Request, charge: ChargeGuard) {
         return result;
       })
     : Promise.resolve({ error: null });
+  const userCategories = {
+    names: categories,
+    idByName: categoryByName,
+    fallbackId: categoryByName.get('Miscellaneous') ?? 10,
+  };
+  const forceProviderFailure =
+    req.headers.get('x-rf-force-provider-failure') === '1' && Deno.env.get('RF_B5_TEST_FORCE_GROK_FAILURE') === '1';
+  const breakerOpen = extractionMode === 'precise' ? await isProviderBreakerOpen(admin) : false;
   const grokStartedAt = performance.now();
   const extractionPromise = extractionMode === 'balanced' && extractedText
     ? extractWithOpenRouterText(extractedText, categories, defaultCurrency)
-    : extractWithGrok(bytes!, image instanceof File ? image.type : 'image/jpeg', categories, defaultCurrency, timing);
+    : forceProviderFailure
+      ? Promise.reject(new Error('Forced Grok provider failure for B5 staging verification'))
+    : breakerOpen
+      ? extractWithGeminiImage({
+          imageBytes: bytes!,
+          imageType: image instanceof File ? image.type : 'image/jpeg',
+          categories: userCategories,
+          defaultCurrency,
+        })
+      : extractWithGrokRetry(bytes!, image instanceof File ? image.type : 'image/jpeg', categories, defaultCurrency, timing);
   const grokPromise = extractionPromise.then((result) => {
     timing.grok_ms = Math.round(performance.now() - grokStartedAt);
     return result;
   });
-  const [{ error: uploadError }, extraction] = await Promise.all([
-    storagePromise,
-    grokPromise,
-  ]);
+  const [storageResult, extractionResult] = await Promise.allSettled([storagePromise, grokPromise]);
+  if (storageResult.status === 'rejected') throw storageResult.reason;
+  const uploadError = storageResult.value.error;
   if (uploadError) return json(503, { code: 'VALIDATION_FAILED', message: uploadError.message });
+  const providerError = extractionResult.status === 'rejected' ? extractionResult.reason : null;
+  if (providerError && extractionMode === 'precise') {
+    const ackedAt = new Date().toISOString();
+    const { receiptId, breakerState } = await enqueueProviderDelay({
+      admin,
+      userId,
+      captureId,
+      captureMode: mode,
+      extractionMode,
+      imagePath,
+      imageByteSize: image instanceof File ? image.size : 0,
+      ackedAt,
+      error: providerError,
+    });
+    finishTiming(timing, startedAt);
+    charge.billable = true;
+    return json(202, {
+      status: 202,
+      code: 'PROVIDER_DELAY',
+      receipt_id: receiptId,
+      image_path: imagePath,
+      acked_at: ackedAt,
+      breaker_state: breakerState,
+      timing,
+    });
+  }
+  if (providerError) throw providerError;
+  const extraction = extractionResult.value;
 
   const ackedAt = new Date().toISOString();
   const categoryId = categoryByName.get(extraction.suggested_category) ?? categoryByName.get('Miscellaneous') ?? 10;
@@ -1279,7 +1385,7 @@ async function handleExtract(req: Request, charge: ChargeGuard) {
         extraction_mode: extractionMode,
         status,
         confirmed_via: confirmedVia,
-        provider: extractionMode === 'balanced' && extractedText ? 'gemini' : 'grok',
+        provider: extractionMode === 'balanced' && extractedText ? 'gemini' : breakerOpen ? 'gemini' : 'grok',
         image_path: extraction.is_receipt && image instanceof File ? imagePath : null,
         image_byte_size: image instanceof File ? image.size : null,
         merchant: extraction.is_receipt ? extraction.merchant : null,

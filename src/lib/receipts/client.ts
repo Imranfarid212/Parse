@@ -115,6 +115,7 @@ type ConfirmReceiptErrorPayload = {
 type ExtractFunctionPayload = {
   status: 200 | 202;
   receipt_id: string;
+  acked_at?: string;
   rejected?: boolean;
   duplicate?: boolean;
   scans_remaining?: number | null;
@@ -211,6 +212,8 @@ const PRECISE_WARMUP_TIMEOUT_MS = 5000;
 /** Confirm is a small write; anything this slow is a stalled connection. */
 const CONFIRM_TIMEOUT_MS = 20_000;
 const AUTH_REFRESH_WINDOW_MS = 30_000;
+const forceB5ProviderFailure = __DEV__ && process.env.EXPO_PUBLIC_B5_TEST_FORCE_PROVIDER_FAILURE === '1';
+const forceB5OfflineTransport = __DEV__ && process.env.EXPO_PUBLIC_B5_TEST_FORCE_OFFLINE_TRANSPORT === '1';
 let balancedWarmupInFlight: Promise<void> | null = null;
 let preciseWarmupInFlight: Promise<void> | null = null;
 let lastBalancedWarmupCompletedAt: number | null = null;
@@ -293,9 +296,21 @@ export function getExtractRetryAfterMs(error: unknown): number | null {
   return typeof seconds === 'number' && seconds > 0 ? seconds * 1000 : null;
 }
 
-function errorWithAttempts(message: string, attempts: CaptureAttemptTrace[]) {
-  const error = new Error(message) as Error & { captureAttempts: CaptureAttemptTrace[] };
+function errorWithAttempts(message: string, attempts: CaptureAttemptTrace[], receiptId?: string, ackedAt?: string) {
+  const error = new Error(message) as Error & {
+    captureAttempts: CaptureAttemptTrace[];
+    code?: string;
+    statusCode?: number;
+    receiptId?: string;
+    ackedAt?: string;
+  };
   error.captureAttempts = attempts;
+  if (message === 'PROVIDER_DELAY') {
+    error.code = 'PROVIDER_DELAY';
+    error.statusCode = 202;
+    error.receiptId = receiptId;
+    error.ackedAt = ackedAt;
+  }
   return error;
 }
 
@@ -311,7 +326,7 @@ function extractPayloadToAck(data: ExtractFunctionPayload, attempts?: CaptureAtt
         total: typeof data.duplicate_candidate.total === 'number' ? data.duplicate_candidate.total : null,
       }
     : null;
-  if (data.status === 202) throw errorWithAttempts(data.code ?? 'PROVIDER_DELAY', attempts ?? []);
+  if (data.status === 202) throw errorWithAttempts(data.code ?? 'PROVIDER_DELAY', attempts ?? [], data.receipt_id, data.acked_at);
   if (data.rejected || data.result?.is_receipt === false) {
     return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, attempts, scansRemaining: data.scans_remaining };
   }
@@ -765,6 +780,7 @@ export const supabaseExtractClient: ExtractClient = {
       });
     }
     const completion = (async (): Promise<ExtractCompletedAck> => {
+      if (forceB5OfflineTransport) throw new Error('The internet connection appears to be offline');
       const response = await FileSystem.uploadAsync(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         httpMethod: 'POST',
@@ -784,6 +800,7 @@ export const supabaseExtractClient: ExtractClient = {
           Authorization: `Bearer ${accessToken}`,
           'x-rf-device-id': deviceId,
           apikey: supabaseAnonKey,
+          ...(forceB5ProviderFailure ? { 'x-rf-force-provider-failure': '1' } : {}),
         },
       });
 
@@ -827,7 +844,19 @@ export const supabaseExtractClient: ExtractClient = {
           rejected: data.rejected === true,
         });
       }
-      if (data.status === 202) throw new Error(data.code ?? 'PROVIDER_DELAY');
+      if (data.status === 202) {
+        const error = new Error(data.code ?? 'PROVIDER_DELAY') as Error & {
+          code?: string;
+          statusCode?: number;
+          receiptId?: string;
+          ackedAt?: string;
+        };
+        error.code = data.code ?? 'PROVIDER_DELAY';
+        error.statusCode = 202;
+        error.receiptId = data.receipt_id;
+        error.ackedAt = data.acked_at;
+        throw error;
+      }
       if (data.rejected || data.result?.is_receipt === false) {
         return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, scansRemaining: data.scans_remaining };
       }

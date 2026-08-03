@@ -32,6 +32,15 @@ export type DeviceStatus = 'checking' | 'active' | 'takeover_required' | 'unavai
 
 /** Foreground revalidation is skipped if the snapshot is fresher than this. */
 const REVALIDATE_AFTER_MS = 5 * 60 * 1000;
+const SESSION_RESTORE_TIMEOUT_MS = 8_000;
+const BOOTSTRAP_DEADLINE_MS = 12_000;
+
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), SESSION_RESTORE_TIMEOUT_MS)),
+  ]);
+}
 
 type AuthContextValue = {
   configured: boolean;
@@ -91,7 +100,8 @@ function getCallbackParam(url: string, param: string) {
  */
 async function readStoredSession(): Promise<{ session: Session | null; unreachable: boolean }> {
   try {
-    const { data, error } = await supabase.auth.getSession();
+    const result = await withTimeout(supabase.auth.getSession(), 'Session restore');
+    const { data, error } = result;
     if (data.session) return { session: data.session, unreachable: false };
     return { session: null, unreachable: Boolean(error) };
   } catch {
@@ -300,22 +310,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return run;
   }, [refreshProfile]);
 
+  // Native storage and an interrupted device RPC have both been observed to
+  // remain pending indefinitely. Startup must always leave the loading gate.
+  useEffect(() => {
+    const deadline = setTimeout(() => {
+      if (statusRef.current === 'restoring') void applySignedOut();
+      else if (statusRef.current === 'authenticated' && deviceStatus === 'checking') setDeviceStatus('unavailable');
+    }, BOOTSTRAP_DEADLINE_MS);
+    return () => clearTimeout(deadline);
+  }, [applySignedOut, deviceStatus]);
+
   // Startup: restore locally, then revalidate over the network. Routing waits
   // only on the local half, so it cannot be blocked by a dead connection.
   useEffect(() => {
     let alive = true;
 
     async function restore() {
+      if (__DEV__) console.log('[auth] restore:start');
       if (!isSupabaseConfigured) {
         applyStatus('signed_out');
         return;
       }
 
-      const cached = await getCachedAuth().catch((error: unknown) => {
+      const cached = await withTimeout(getCachedAuth(), 'Cached auth restore').catch((error: unknown) => {
         if (__DEV__) console.warn('Reading the auth snapshot failed', error);
         return null;
       });
+      if (__DEV__) console.log('[auth] restore:cache', Boolean(cached));
       const stored = await readStoredSession();
+      if (__DEV__) console.log('[auth] restore:session', Boolean(stored.session), stored.unreachable);
       if (!alive) return;
 
       // A snapshot belonging to a different account is worse than none.
@@ -339,10 +362,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // what the capture queue exists for — but the user is not signed out.
         applyStatus('authenticated');
       } else {
+        if (__DEV__) console.log('[auth] restore:signed-out');
         await applySignedOut();
         return;
       }
 
+      if (__DEV__) console.log('[auth] restore:revalidate');
       void revalidate();
     }
 
