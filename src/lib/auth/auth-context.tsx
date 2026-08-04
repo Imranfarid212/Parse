@@ -32,6 +32,8 @@ export type DeviceStatus = 'checking' | 'active' | 'takeover_required' | 'unavai
 
 /** Foreground revalidation is skipped if the snapshot is fresher than this. */
 const REVALIDATE_AFTER_MS = 5 * 60 * 1000;
+/** An active foreground installation notices a remote takeover promptly. */
+const DEVICE_OWNERSHIP_HEARTBEAT_MS = 5_000;
 const SESSION_RESTORE_TIMEOUT_MS = 8_000;
 const BOOTSTRAP_DEADLINE_MS = 12_000;
 
@@ -287,6 +289,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refreshProfile]);
 
   /**
+   * Writes are rejected by the Edge Functions immediately after a takeover.
+   * This lightweight foreground check gives the displaced installation the same
+   * answer without waiting for its next launch or the five-minute profile pull.
+   */
+  const checkDeviceOwnership = useCallback(async () => {
+    if (statusRef.current !== 'authenticated' || !sessionRef.current) return;
+
+    const deviceId = await getDeviceId();
+    const { data, error } = await supabase.rpc('claim_user_device', {
+      p_device_id: deviceId,
+      p_takeover: false,
+    });
+    if (error) throw error;
+
+    const claim = Array.isArray(data) ? data[0] : data;
+    if (claim?.out_status === 'takeover_required') {
+      // This installation had already been active. The new one completed an
+      // explicit takeover, so clear only this device's local auth state.
+      await applySignedOut();
+      return;
+    }
+    if (claim?.out_status !== 'active') throw new Error('Could not verify this device.');
+  }, [applySignedOut]);
+
+  /**
    * Background revalidation: stale-while-revalidate over the cached snapshot.
    * Deduped, and a failure is never surfaced — the cached copy is already on
    * screen and stays there.
@@ -421,6 +448,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       void supabase.auth.stopAutoRefresh();
     };
   }, [revalidate]);
+
+  // Keep a foreground session honest after another installation takes over.
+  // Network trouble is intentionally silent here: it must never look like a
+  // remote sign-out, and the server will still reject writes until it recovers.
+  useEffect(() => {
+    if (!isSupabaseConfigured || deviceStatus !== 'active') return undefined;
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const check = () => {
+      void checkDeviceOwnership().catch((error: unknown) => {
+        if (__DEV__) console.warn('Foreground device ownership check failed', error);
+      });
+    };
+    const start = () => {
+      if (timer) return;
+      check();
+      timer = setInterval(check, DEVICE_OWNERSHIP_HEARTBEAT_MS);
+    };
+    const stop = () => {
+      if (!timer) return;
+      clearInterval(timer);
+      timer = null;
+    };
+
+    if (AppState.currentState === 'active') start();
+    const subscription = AppState.addEventListener('change', (state) => (state === 'active' ? start() : stop()));
+    return () => {
+      subscription.remove();
+      stop();
+    };
+  }, [checkDeviceOwnership, deviceStatus]);
 
   // Recovery for the offline-restored case: the moment the network is back,
   // pick up the session we could not refresh at launch.
