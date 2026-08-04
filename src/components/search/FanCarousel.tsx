@@ -1,137 +1,201 @@
 /**
- * FanCarousel — native Reanimated rebuild of the web GSAP "social cards" fan.
- * Receipt cards fan out around a centered card. Tapping a side card swaps it to
- * the centre; chevrons rotate the fan; dots track the centre.
+ * A continuous receipt carousel that renders at most five overlapping cards.
+ * The selected receipt advances through the full result set; the five-card
+ * window follows it, keeping rendering bounded even for large searches.
  */
-import React, { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
-import { ReceiptCard } from '@/components/ui/ReceiptCard';
+import { ReceiptCard, type ReceiptCardDetails } from '@/components/ui/ReceiptCard';
 import { colors } from '@/theme/tokens';
 
-export type FanItem = { id: string; total: string };
+export type FanItem = { id: string; total: string; details: ReceiptCardDetails };
 
 const CARD_W = 168;
 const CARD_H = 280;
+const MAX_VISIBLE_CARDS = 5;
+const CENTER_SLOT = Math.floor(MAX_VISIBLE_CARDS / 2);
+const SWIPE_THRESHOLD = 60;
 const SPRING = { damping: 15, stiffness: 130 };
 
-// Fan transform for a given slot, derived from distance to the visible centre.
-function slotConfig(slot: number, center: number) {
-  const d = slot - center;
-  const ad = Math.abs(d);
+function slotConfig(slot: number, activeSlot: number) {
+  const distance = slot - activeSlot;
+  const magnitude = Math.abs(distance);
   return {
-    x: d * CARD_W * 0.3,
-    y: ad * ad * (CARD_H * 0.035),
-    rot: d * 7,
-    scale: 1 - 0.075 * ad,
-    z: 10 - ad,
+    x: distance * CARD_W * 0.3,
+    y: magnitude * magnitude * (CARD_H * 0.035),
+    rotation: distance * 7,
+    scale: 1 - 0.075 * magnitude,
+    zIndex: MAX_VISIBLE_CARDS - magnitude,
   };
 }
 
-function FanCard({
-  slot,
-  center,
-  left,
-  top,
-  item,
-  onPress,
-}: {
-  slot: number;
-  center: number;
-  left: number;
-  top: number;
+function FanCard({ item, slot, activeSlot, left, active, onPress }: {
   item: FanItem;
+  slot: number;
+  activeSlot: number;
+  left: number;
+  active: boolean;
   onPress: () => void;
 }) {
-  const c = slotConfig(slot, center);
-  const x = useSharedValue(c.x);
-  const y = useSharedValue(c.y);
-  const rot = useSharedValue(c.rot);
-  const sc = useSharedValue(c.scale);
+  const initial = slotConfig(slot, activeSlot);
+  const x = useSharedValue(initial.x);
+  const y = useSharedValue(initial.y);
+  const rotation = useSharedValue(initial.rotation);
+  const scale = useSharedValue(initial.scale);
 
   useEffect(() => {
-    const t = slotConfig(slot, center);
-    x.value = withSpring(t.x, SPRING);
-    y.value = withSpring(t.y, SPRING);
-    rot.value = withSpring(t.rot, SPRING);
-    sc.value = withSpring(t.scale, SPRING);
-  }, [center, slot, x, y, rot, sc]);
+    const next = slotConfig(slot, activeSlot);
+    x.value = withSpring(next.x, SPRING);
+    y.value = withSpring(next.y, SPRING);
+    rotation.value = withSpring(next.rotation, SPRING);
+    scale.value = withSpring(next.scale, SPRING);
+  }, [activeSlot, rotation, scale, slot, x, y]);
 
-  const style = useAnimatedStyle(() => ({
-    transform: [{ translateX: x.value }, { translateY: y.value }, { rotate: `${rot.value}deg` }, { scale: sc.value }],
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: x.value },
+      { translateY: y.value },
+      { rotate: `${rotation.value}deg` },
+      { scale: scale.value },
+    ],
   }));
 
   return (
-    <Animated.View style={[styles.card, { left, top, width: CARD_W, height: CARD_H, zIndex: slotConfig(slot, center).z }, style]}>
-      <Pressable onPress={onPress} style={StyleSheet.absoluteFill}>
-        <ReceiptCard width={CARD_W} height={CARD_H} total={item.total} />
+    <Animated.View
+      style={[
+        styles.card,
+        { left, top: 20, width: CARD_W, height: CARD_H, zIndex: slotConfig(slot, activeSlot).zIndex },
+        animatedStyle,
+      ]}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${item.details.merchant}, ${item.total}${active ? ', tap to edit' : ', tap to select'}`}
+        onPress={onPress}
+        style={StyleSheet.absoluteFill}
+      >
+        <ReceiptCard width={CARD_W} height={CARD_H} total={item.total} details={item.details} />
       </Pressable>
     </Animated.View>
   );
 }
 
-export function FanCarousel({ items }: { items: FanItem[] }) {
+export function FanCarousel({ items, onOpenItem, onDeleteItem }: {
+  items: FanItem[];
+  onOpenItem?: (id: string) => void;
+  onDeleteItem?: (id: string) => void;
+}) {
   const { width } = useWindowDimensions();
-  const n = items.length;
-  const center = Math.floor((n - 1) / 2);
-  // `order[slot] = index into items`. Starts centered on the middle item.
-  const [order, setOrder] = useState<number[]>(() => items.map((_, i) => i));
+  const [activeIndex, setActiveIndex] = useState(0);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const itemIds = useMemo(() => items.map((item) => item.id).join('|'), [items]);
 
-  // Keep order in sync if the item set changes.
   useEffect(() => {
-    setOrder(items.map((_, i) => i));
-  }, [items]);
+    setActiveIndex((current) => Math.min(current, Math.max(0, items.length - 1)));
+  }, [itemIds, items.length]);
 
-  const slotOfItem = (itemIdx: number) => order.indexOf(itemIdx);
-
-  const tapItem = (itemIdx: number) => {
-    const slot = slotOfItem(itemIdx);
-    if (slot === center) return;
-    setOrder((prev) => {
-      const next = [...prev];
-      [next[slot], next[center]] = [next[center], next[slot]];
-      return next;
-    });
-  };
-
-  const rotate = (dir: 1 | -1) => {
-    setOrder((prev) => (dir === 1 ? [...prev.slice(1), prev[0]] : [prev[prev.length - 1], ...prev.slice(0, -1)]));
-  };
-
+  const visibleEntries = useMemo(() => {
+    if (items.length === 0) return [];
+    const offsets = items.length >= MAX_VISIBLE_CARDS ? [-2, -1, 0, 1, 2] : [0, 1, -1, 2, -2];
+    const seen = new Set<number>();
+    return offsets.flatMap((offset) => {
+      const index = (activeIndex + offset + items.length) % items.length;
+      if (seen.has(index)) return [];
+      seen.add(index);
+      return [{ item: items[index], index, slot: CENTER_SLOT + offset }];
+    }).sort((a, b) => a.slot - b.slot);
+  }, [activeIndex, items]);
+  const selectedItem = items[activeIndex];
+  const activeDotIndex = visibleEntries.length > 0 ? activeIndex % visibleEntries.length : 0;
   const centerLeft = (width - CARD_W) / 2;
-  const centerItem = order[center];
+  const canMove = items.length > 1;
+
+  const previous = () => setActiveIndex((current) => (current - 1 + items.length) % items.length);
+  const next = () => setActiveIndex((current) => (current + 1) % items.length);
+
+  const finishSwipe = (x: number, y: number) => {
+    const start = touchStart.current;
+    touchStart.current = null;
+    if (!start) return;
+    const deltaX = x - start.x;
+    const deltaY = y - start.y;
+    if (Math.abs(deltaX) < SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return;
+    if (deltaX < 0 && canMove) next();
+    if (deltaX > 0 && canMove) previous();
+  };
 
   return (
-    <View style={styles.root}>
+    <View
+      style={styles.root}
+      onTouchStart={(event) => {
+        touchStart.current = { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY };
+      }}
+      onTouchEnd={(event) => finishSwipe(event.nativeEvent.pageX, event.nativeEvent.pageY)}
+      onTouchCancel={() => { touchStart.current = null; }}
+    >
       <View style={[styles.stage, { height: CARD_H + CARD_H * 0.24 }]}>
-        {items.map((item, itemIdx) => (
-          <FanCard
-            key={item.id}
-            slot={slotOfItem(itemIdx)}
-            center={center}
-            left={centerLeft}
-            top={20}
-            item={item}
-            onPress={() => tapItem(itemIdx)}
-          />
-        ))}
+        {visibleEntries.map(({ item, index, slot }) => {
+          const active = index === activeIndex;
+          return (
+            <FanCard
+              key={item.id}
+              item={item}
+              slot={slot}
+              activeSlot={CENTER_SLOT}
+              left={centerLeft}
+              active={active}
+              onPress={() => active ? onOpenItem?.(item.id) : setActiveIndex(index)}
+            />
+          );
+        })}
       </View>
 
       <View style={styles.controls}>
-        <Pressable style={styles.arrow} onPress={() => rotate(-1)} hitSlop={8}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Previous receipt"
+          style={[styles.arrow, !canMove && styles.disabled]}
+          onPress={previous}
+          hitSlop={8}
+          disabled={!canMove}
+        >
           <Ionicons name="chevron-back" size={20} color={colors.textPrimary} />
         </Pressable>
         <View style={styles.dots}>
-          {items.map((_, i) => (
-            <View key={i} style={[styles.dot, i === centerItem && styles.dotActive]} />
+          {visibleEntries.map(({ item }, dotIndex) => (
+            <View key={item.id} style={[styles.dot, dotIndex === activeDotIndex && styles.dotActive]} />
           ))}
         </View>
-        <Pressable style={styles.arrow} onPress={() => rotate(1)} hitSlop={8}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Next receipt"
+          style={[styles.arrow, !canMove && styles.disabled]}
+          onPress={next}
+          hitSlop={8}
+          disabled={!canMove}
+        >
           <Ionicons name="chevron-forward" size={20} color={colors.textPrimary} />
         </Pressable>
       </View>
+
+      {selectedItem && (onOpenItem || onDeleteItem) ? (
+        <View style={styles.actions}>
+          {onOpenItem ? (
+            <Pressable accessibilityRole="button" onPress={() => onOpenItem(selectedItem.id)} style={styles.actionButton} hitSlop={6}>
+              <Ionicons name="create-outline" size={16} color={colors.textPrimary} />
+              <Text style={styles.actionText}>Edit receipt</Text>
+            </Pressable>
+          ) : null}
+          {onDeleteItem ? (
+            <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${selectedItem.details.merchant}`} onPress={() => onDeleteItem(selectedItem.id)} style={styles.deleteButton} hitSlop={6}>
+              <Ionicons name="trash-outline" size={17} color="#B42318" />
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -141,15 +205,13 @@ const styles = StyleSheet.create({
   stage: { alignSelf: 'stretch' },
   card: { position: 'absolute' },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 8 },
-  arrow: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(120,120,128,0.10)',
-  },
+  arrow: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(120,120,128,0.10)' },
+  disabled: { opacity: 0.35 },
   dots: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: 'rgba(0,0,0,0.15)' },
   dotActive: { backgroundColor: colors.textPrimary, transform: [{ scale: 1.3 }] },
+  actions: { minHeight: 40, marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  actionButton: { minHeight: 36, paddingHorizontal: 14, borderRadius: 18, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(120,120,128,0.10)' },
+  actionText: { fontFamily: 'InstrumentSans_600SemiBold', fontSize: 13, color: colors.textPrimary },
+  deleteButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FEF3F2' },
 });

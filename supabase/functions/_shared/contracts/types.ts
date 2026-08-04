@@ -42,3 +42,16 @@ export type ExtractionResult = {
   suggested_category: string;
   is_receipt: boolean;
 };
+
+export type ReceiptView = 'card' | 'list';
+
+export type SearchQuery = {
+  text?: string;
+  date_from?: string;
+  date_to?: string;
+  category_ids?: number[];
+  amount_min?: number;
+  amount_max?: number;
+  amount_currency?: string;
+  view?: ReceiptView;
+};

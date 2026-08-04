@@ -47,6 +47,9 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       attempts   INTEGER NOT NULL DEFAULT 0,
       next_retry_at INTEGER NOT NULL DEFAULT 0,
       receipt_id TEXT,
+      category_id INTEGER,
+      server_revision INTEGER NOT NULL DEFAULT 0,
+      server_updated_at TEXT,
       acked_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
@@ -79,6 +82,9 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       user_id     TEXT PRIMARY KEY NOT NULL,
       hydrated_at INTEGER,
       pull_cursor TEXT,
+      last_attempt_at INTEGER,
+      last_success_at INTEGER,
+      last_error TEXT,
       updated_at  INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS auth_cache (
@@ -90,6 +96,11 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       selected_category_ids_json TEXT NOT NULL DEFAULT '[]',
       fetched_at    INTEGER NOT NULL,
       updated_at    INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS receipt_preferences (
+      key        TEXT PRIMARY KEY NOT NULL,
+      value      TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     );
   `);
   await ensureColumn(db, 'capture_mode', "ALTER TABLE receipts ADD COLUMN capture_mode TEXT NOT NULL DEFAULT 'default'");
@@ -112,23 +123,113 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   await ensureColumn(db, 'attempts', 'ALTER TABLE receipts ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0');
   await ensureColumn(db, 'next_retry_at', 'ALTER TABLE receipts ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0');
   await ensureColumn(db, 'receipt_id', 'ALTER TABLE receipts ADD COLUMN receipt_id TEXT');
+  await ensureColumn(db, 'category_id', 'ALTER TABLE receipts ADD COLUMN category_id INTEGER');
+  await ensureColumn(db, 'server_revision', 'ALTER TABLE receipts ADD COLUMN server_revision INTEGER NOT NULL DEFAULT 0');
+  await ensureColumn(db, 'server_updated_at', 'ALTER TABLE receipts ADD COLUMN server_updated_at TEXT');
   await ensureColumn(db, 'acked_at', 'ALTER TABLE receipts ADD COLUMN acked_at INTEGER');
   // Where the image lives on the server. A row restored from the server has no
   // local file, so this is the only way back to its photo.
   await ensureColumn(db, 'remote_image_path', 'ALTER TABLE receipts ADD COLUMN remote_image_path TEXT');
+  await ensureTableColumn(db, 'sync_state', 'last_attempt_at', 'ALTER TABLE sync_state ADD COLUMN last_attempt_at INTEGER');
+  await ensureTableColumn(db, 'sync_state', 'last_success_at', 'ALTER TABLE sync_state ADD COLUMN last_success_at INTEGER');
+  await ensureTableColumn(db, 'sync_state', 'last_error', 'ALTER TABLE sync_state ADD COLUMN last_error TEXT');
+  await db.execAsync(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS receipt_search_fts USING fts5(
+      local_id UNINDEXED,
+      merchant,
+      notes,
+      item_names,
+      tokenize = 'unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER IF NOT EXISTS receipt_search_fts_insert AFTER INSERT ON receipts BEGIN
+      INSERT INTO receipt_search_fts(local_id, merchant, notes, item_names)
+      SELECT new.id,
+        COALESCE(json_extract(new.fields, '$.store'), ''),
+        COALESCE(json_extract(new.fields, '$.handwritten_notes'), ''),
+        COALESCE((SELECT group_concat(json_extract(value, '$.name'), ' ')
+          FROM json_each(json_extract(new.fields, '$.items'))), '')
+      WHERE new.fields IS NOT NULL AND new.receipt_id IS NOT NULL
+        AND new.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted');
+    END;
+    CREATE TRIGGER IF NOT EXISTS receipt_search_fts_update
+    AFTER UPDATE OF fields, status, receipt_id ON receipts BEGIN
+      DELETE FROM receipt_search_fts WHERE local_id = old.id;
+      INSERT INTO receipt_search_fts(local_id, merchant, notes, item_names)
+      SELECT new.id,
+        COALESCE(json_extract(new.fields, '$.store'), ''),
+        COALESCE(json_extract(new.fields, '$.handwritten_notes'), ''),
+        COALESCE((SELECT group_concat(json_extract(value, '$.name'), ' ')
+          FROM json_each(json_extract(new.fields, '$.items'))), '')
+      WHERE new.fields IS NOT NULL AND new.receipt_id IS NOT NULL
+        AND new.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted');
+    END;
+    CREATE TRIGGER IF NOT EXISTS receipt_search_fts_delete AFTER DELETE ON receipts BEGIN
+      DELETE FROM receipt_search_fts WHERE local_id = old.id;
+    END;
+  `);
+  const indexed = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM receipt_search_fts');
+  const searchable = await db.getFirstAsync<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM receipts WHERE fields IS NOT NULL AND receipt_id IS NOT NULL AND status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted')",
+  );
+  if ((indexed?.n ?? 0) !== (searchable?.n ?? 0)) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync('DELETE FROM receipt_search_fts');
+      await db.execAsync(`
+        INSERT INTO receipt_search_fts(local_id, merchant, notes, item_names)
+        SELECT r.id, COALESCE(json_extract(r.fields, '$.store'), ''),
+          COALESCE(json_extract(r.fields, '$.handwritten_notes'), ''),
+          COALESCE((SELECT group_concat(json_extract(value, '$.name'), ' ')
+            FROM json_each(json_extract(r.fields, '$.items'))), '')
+        FROM receipts r WHERE r.fields IS NOT NULL AND r.receipt_id IS NOT NULL
+          AND r.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted');
+      `);
+    });
+  }
+  // category_id/revision were added after the original mirror shipped. A
+  // cursor-only pull would never revisit older rows, so invalidate hydration
+  // exactly once and let the normal full pull backfill their metadata.
+  const metadataVersion = await db.getFirstAsync<{ value: string }>(
+    "SELECT value FROM receipt_preferences WHERE key = 'sync.metadata_version'",
+  );
+  if (metadataVersion?.value !== '2') {
+    const now = Date.now();
+    await db.withTransactionAsync(async () => {
+      await db.execAsync('UPDATE sync_state SET hydrated_at = NULL, pull_cursor = NULL');
+      await db.runAsync(
+        `INSERT INTO receipt_preferences(key, value, updated_at) VALUES ('sync.metadata_version', '2', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        [now],
+      );
+    });
+  }
   await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_dedupe ON receipts (dedupe_key, created_at DESC)');
   await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_duplicate_of ON receipts (duplicate_of, created_at DESC)');
   return db;
 }
 
 async function ensureColumn(db: SQLite.SQLiteDatabase, name: string, sql: string): Promise<void> {
-  const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(receipts)');
+  return ensureTableColumn(db, 'receipts', name, sql);
+}
+
+async function ensureTableColumn(
+  db: SQLite.SQLiteDatabase,
+  table: 'receipts' | 'sync_state',
+  name: string,
+  sql: string,
+): Promise<void> {
+  const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
   if (!columns.some((column) => column.name === name)) await db.execAsync(sql);
 }
 
 export function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) dbPromise = open();
   return dbPromise;
+}
+
+/** Batch mirror writes into one WAL commit during hydration/delta pulls. */
+export async function runInTransaction(task: () => Promise<void>): Promise<void> {
+  const db = await getDb();
+  await db.withTransactionAsync(task);
 }
 
 type Persisted = {
@@ -148,6 +249,9 @@ type Persisted = {
   attempts: number;
   next_retry_at: number;
   receipt_id: string | null;
+  category_id: number | null;
+  server_revision: number;
+  server_updated_at: string | null;
   acked_at: number | null;
   remote_image_path: string | null;
   created_at: number;
@@ -190,6 +294,9 @@ const hydrate = (r: Persisted): ReceiptRow => ({
   attempts: r.attempts,
   nextRetryAt: r.next_retry_at,
   receiptId: r.receipt_id,
+  categoryId: r.category_id,
+  serverRevision: r.server_revision,
+  serverUpdatedAt: r.server_updated_at,
   ackedAt: r.acked_at,
   remoteImagePath: r.remote_image_path ?? null,
   createdAt: r.created_at,
@@ -320,6 +427,9 @@ export async function insertCaptured(
     attempts: 0,
     nextRetryAt: now,
     receiptId: null,
+    categoryId: null,
+    serverRevision: 0,
+    serverUpdatedAt: null,
     ackedAt: null,
     remoteImagePath: null,
     createdAt: now,
@@ -567,16 +677,61 @@ export async function clearReceiptData(): Promise<void> {
   await db.execAsync('DELETE FROM receipts; DELETE FROM sync_state; DELETE FROM receipt_metric_queue;');
 }
 
-export type SyncState = { hydratedAt: number | null; pullCursor: string | null };
+export type SyncState = {
+  hydratedAt: number | null;
+  pullCursor: string | null;
+  lastAttemptAt: number | null;
+  lastSuccessAt: number | null;
+  lastError: string | null;
+};
+
+export async function isLocalSearchReady(userId: string): Promise<boolean> {
+  const [owner, state] = await Promise.all([getLocalOwner(), getSyncState(userId)]);
+  return owner === userId && state?.hydratedAt != null;
+}
 
 export async function getSyncState(userId: string): Promise<SyncState | null> {
   const db = await getDb();
-  const row = await db.getFirstAsync<{ hydrated_at: number | null; pull_cursor: string | null }>(
-    'SELECT hydrated_at, pull_cursor FROM sync_state WHERE user_id = ?',
+  const row = await db.getFirstAsync<{
+    hydrated_at: number | null;
+    pull_cursor: string | null;
+    last_attempt_at: number | null;
+    last_success_at: number | null;
+    last_error: string | null;
+  }>(
+    'SELECT hydrated_at, pull_cursor, last_attempt_at, last_success_at, last_error FROM sync_state WHERE user_id = ?',
     [userId],
   );
   if (!row) return null;
-  return { hydratedAt: row.hydrated_at, pullCursor: row.pull_cursor };
+  return {
+    hydratedAt: row.hydrated_at,
+    pullCursor: row.pull_cursor,
+    lastAttemptAt: row.last_attempt_at,
+    lastSuccessAt: row.last_success_at,
+    lastError: row.last_error,
+  };
+}
+
+export async function markSyncAttempt(userId: string): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO sync_state(user_id, last_attempt_at, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET last_attempt_at = excluded.last_attempt_at,
+       last_error = NULL, updated_at = excluded.updated_at`,
+    [userId, now, now],
+  );
+}
+
+export async function markSyncFailed(userId: string, message: string): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO sync_state(user_id, last_attempt_at, last_error, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET last_attempt_at = excluded.last_attempt_at,
+       last_error = excluded.last_error, updated_at = excluded.updated_at`,
+    [userId, now, message.slice(0, 1000), now],
+  );
 }
 
 /**
@@ -606,9 +761,26 @@ export async function setPullCursor(userId: string, cursor: string): Promise<voi
 export async function updateFromServer(row: RestoredReceipt): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    `UPDATE receipts SET status = ?, fields = ?, receipt_id = ?, remote_image_path = ?, updated_at = ?
+    `UPDATE receipts SET status = ?, fields = ?, receipt_id = ?, category_id = ?, server_revision = ?,
+      server_updated_at = ?, remote_image_path = ?, updated_at = ?
       WHERE id = ?`,
-    [row.status, JSON.stringify(row.fields), row.receiptId, row.remoteImagePath, Date.now(), row.captureId],
+    [row.status, JSON.stringify(row.fields), row.receiptId, row.categoryId, row.serverRevision,
+      row.serverUpdatedAt, row.remoteImagePath, Date.now(), row.captureId],
+  );
+}
+
+/** Refresh concurrency/filter metadata without touching protected local fields. */
+export async function updateServerMetadata(
+  captureId: string,
+  categoryId: number | null,
+  serverRevision: number,
+  serverUpdatedAt: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE receipts SET category_id = ?, server_revision = ?, server_updated_at = ?, updated_at = ?
+     WHERE id = ?`,
+    [categoryId, serverRevision, serverUpdatedAt, Date.now(), captureId],
   );
 }
 
@@ -616,10 +788,12 @@ export async function setHydrated(userId: string, cursor: string | null): Promis
   const db = await getDb();
   const now = Date.now();
   await db.runAsync(
-    `INSERT INTO sync_state (user_id, hydrated_at, pull_cursor, updated_at) VALUES (?, ?, ?, ?)
+    `INSERT INTO sync_state (user_id, hydrated_at, pull_cursor, last_attempt_at, last_success_at, last_error, updated_at)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)
      ON CONFLICT(user_id) DO UPDATE SET hydrated_at = excluded.hydrated_at,
-       pull_cursor = excluded.pull_cursor, updated_at = excluded.updated_at`,
-    [userId, now, cursor, now],
+       pull_cursor = excluded.pull_cursor, last_attempt_at = excluded.last_attempt_at,
+       last_success_at = excluded.last_success_at, last_error = NULL, updated_at = excluded.updated_at`,
+    [userId, now, cursor, now, now, now],
   );
 }
 
@@ -635,6 +809,9 @@ export type RestoredReceipt = {
   status: ReceiptStatus;
   fields: ReceiptFields;
   remoteImagePath: string | null;
+  categoryId: number | null;
+  serverRevision: number;
+  serverUpdatedAt: string;
   createdAt: number;
 };
 
@@ -650,8 +827,8 @@ export async function upsertRestored(row: RestoredReceipt): Promise<void> {
   await db.runAsync(
     `INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, status, fields,
        image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at,
-       remote_image_path, created_at, updated_at)
-     VALUES (?, '', 'default', 'balanced', ?, ?, ?, 'synced', 0, 0, ?, ?, ?, ?, ?)
+       remote_image_path, category_id, server_revision, server_updated_at, created_at, updated_at)
+     VALUES (?, '', 'default', 'balanced', ?, ?, ?, 'synced', 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO NOTHING`,
     [
       row.captureId,
@@ -661,6 +838,9 @@ export async function upsertRestored(row: RestoredReceipt): Promise<void> {
       row.receiptId,
       now,
       row.remoteImagePath,
+      row.categoryId,
+      row.serverRevision,
+      row.serverUpdatedAt,
       row.createdAt,
       now,
     ],
@@ -671,10 +851,107 @@ export async function upsertRestored(row: RestoredReceipt): Promise<void> {
 export async function listRecent(limit = 20): Promise<ReceiptRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing') ORDER BY created_at DESC LIMIT ?",
+    "SELECT * FROM receipts WHERE status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted') ORDER BY created_at DESC LIMIT ?",
     [limit],
   );
   return rows.map(hydrate);
+}
+
+export type LocalSearchResult = { row: ReceiptRow; rank: number };
+
+const toFtsQuery = (text: string): string | null => {
+  const tokens = text.normalize('NFKC').match(/[\p{L}\p{N}]+/gu) ?? [];
+  return tokens.length ? tokens.map((token) => `"${token.replaceAll('"', '""')}"*`).join(' AND ') : null;
+};
+
+/** Indexed, parameterized search over the hydrated local mirror. */
+export async function searchReceipts(query: {
+  text?: string;
+  date_from?: string;
+  date_to?: string;
+  category_ids?: number[];
+  amount_min?: number;
+  amount_max?: number;
+  amount_currency?: string;
+  limit?: number;
+}): Promise<LocalSearchResult[]> {
+  const db = await getDb();
+  const clauses = [
+    "r.fields IS NOT NULL",
+    "r.receipt_id IS NOT NULL",
+    "r.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted')",
+  ];
+  const params: SQLite.SQLiteBindParams = {};
+  const fts = query.text ? toFtsQuery(query.text) : null;
+  if (fts) {
+    clauses.push('receipt_search_fts MATCH $fts');
+    params.$fts = fts;
+  }
+  if (query.date_from) { clauses.push("json_extract(r.fields, '$.date') >= $dateFrom"); params.$dateFrom = query.date_from; }
+  if (query.date_to) { clauses.push("json_extract(r.fields, '$.date') <= $dateTo"); params.$dateTo = query.date_to; }
+  if (query.amount_currency) { clauses.push("json_extract(r.fields, '$.currency') = $currency"); params.$currency = query.amount_currency; }
+  if (query.amount_min !== undefined) { clauses.push("CAST(json_extract(r.fields, '$.total') AS REAL) >= $amountMin"); params.$amountMin = query.amount_min; }
+  if (query.amount_max !== undefined) { clauses.push("CAST(json_extract(r.fields, '$.total') AS REAL) <= $amountMax"); params.$amountMax = query.amount_max; }
+  if (query.category_ids?.length) {
+    const names = query.category_ids.map((_, index) => `$category${index}`);
+    clauses.push(`r.category_id IN (${names.join(', ')})`);
+    query.category_ids.forEach((id, index) => { params[`$category${index}`] = id; });
+  }
+  params.$limit = Math.min(Math.max(query.limit ?? 200, 1), 200);
+  const rank = fts ? 'bm25(receipt_search_fts, 0, 10, 4, 6)' : '0';
+  const join = fts ? 'JOIN receipt_search_fts ON receipt_search_fts.local_id = r.id' : '';
+  const order = fts
+    ? "rank ASC, json_extract(r.fields, '$.date') DESC, r.created_at DESC"
+    : "json_extract(r.fields, '$.date') DESC, r.created_at DESC";
+  const rows = await db.getAllAsync<Persisted & { search_rank: number }>(
+    `SELECT r.*, ${rank} AS search_rank FROM receipts r ${join}
+     WHERE ${clauses.join(' AND ')} ORDER BY ${order} LIMIT $limit`, params,
+  );
+  return rows.map((row) => ({ row: hydrate(row), rank: Number(row.search_rank) || 0 }));
+}
+
+export async function updateManagedFields(
+  id: string,
+  fields: ReceiptFields,
+  categoryId?: number,
+  serverRevision?: number,
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE receipts SET fields = ?, category_id = COALESCE(?, category_id), server_revision = COALESCE(?, server_revision), result_sync_status = ?, updated_at = ? WHERE id = ?', [
+    JSON.stringify(fields),
+    categoryId ?? null,
+    serverRevision ?? null,
+    'synced',
+    Date.now(),
+    id,
+  ]);
+}
+
+export async function markManagedDeleted(id: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE receipts SET status = 'deleted', updated_at = ? WHERE id = ?", [Date.now(), id]);
+}
+
+export async function restoreManagedReceipt(id: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync("UPDATE receipts SET status = 'synced', updated_at = ? WHERE id = ?", [Date.now(), id]);
+}
+
+const RECEIPT_VIEW_KEY = 'search.view';
+
+export async function getReceiptViewPreference(): Promise<'card' | 'list'> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM receipt_preferences WHERE key = ?', [RECEIPT_VIEW_KEY]);
+  return row?.value === 'list' ? 'list' : 'card';
+}
+
+export async function setReceiptViewPreference(view: 'card' | 'list'): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO receipt_preferences (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    [RECEIPT_VIEW_KEY, view, Date.now()],
+  );
 }
 
 export async function findLocalDuplicateCandidate(
