@@ -67,6 +67,8 @@ begin
 end;
 $fn$;
 
-select public.configure_b5_schedules();
+-- Scheduler credentials live in Vault only on deployed environments. Keep
+-- local resets credential-free; scripts/configure-b5-schedules.js invokes this
+-- function after it has populated the staging Vault secrets.
 
 notify pgrst, 'reload schema';
