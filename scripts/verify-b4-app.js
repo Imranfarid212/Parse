@@ -57,6 +57,7 @@ if (/EXPO_PUBLIC_.*XAI|EXPO_PUBLIC_.*GROK|sk-[A-Za-z0-9]/.test(client + capture 
 const quota = read('src/lib/receipts/quota.ts');
 const camera = read('src/app/camera.tsx');
 const search = read('src/components/search/SearchView.tsx');
+const authContext = read('src/lib/auth/auth-context.tsx');
 
 includes(quota, "from '@/../packages/contracts/src/quota'", 'client uses the shared quota rule');
 includes(quota, 'decideQuota(', 'client decides with the shared rule');
@@ -114,6 +115,9 @@ includes(capture, 'export async function retryBlockedCapture', 'a blocked captur
 includes(capture, 'export async function purgeAbandonedCaptures', 'kept photos expire instead of accumulating forever');
 includes(search, "blocked_quota: 'Out of scans'", 'a blocked capture is labelled, not silently absent');
 includes(search, 'retryBlockedCapture(id)', 'the list offers a way back');
+includes(authContext, 'DEVICE_OWNERSHIP_HEARTBEAT_MS = 5_000', 'a foreground device takeover is detected promptly');
+includes(authContext, 'const checkDeviceOwnership = useCallback', 'foreground ownership check is present');
+includes(authContext, 'await applySignedOut();', 'a displaced foreground installation clears its local session');
 // listRecent hides pending_extract, so requeueing to it makes the row vanish
 // from Search the moment the user asks to retry it.
 includes(read('src/lib/receipts/store.ts'), "SET status = 'llm_failed_retryable', attempts = 0", 'a retried capture stays visible while it runs');
