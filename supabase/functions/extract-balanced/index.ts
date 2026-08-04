@@ -1,6 +1,8 @@
 // @ts-nocheck - Supabase Edge Functions run under Deno, outside the Expo app tsconfig.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
+import { isActiveDevice, isDeviceId } from '../_shared/device.ts';
+
 import {
   getUserCategories,
   MISCELLANEOUS,
@@ -11,7 +13,7 @@ import { evaluateQuota, refundScan, type ScanVerdict } from '../_shared/quota.ts
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-rf-device-id',
 };
 
 const OPENROUTER_CHAT_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -50,8 +52,6 @@ type DuplicateCandidate = {
   currency: string | null;
   total: number;
 };
-
-
 type Jwk = JsonWebKey & { kid?: string; alg?: string };
 type AuthOutcome =
   | { ok: true; claims: Record<string, unknown>; source: 'env' | 'fetched'; fetchMs: number }
@@ -876,6 +876,7 @@ async function logDuplicateShadowEvent({
   });
 }
 
+/** The authoritative duplicate candidate returned to the app for a user decision. */
 async function findDuplicateCandidate({
   admin,
   userId,
@@ -891,7 +892,6 @@ async function findDuplicateCandidate({
   const total = Math.round(extraction.total * 100) / 100;
   const merchantKey = normalizeMerchantKey(extraction.merchant);
   if (!merchantKey || !extraction.txn_date || !extraction.currency || total <= 0) return null;
-
   const { data: candidates, error } = await admin
     .from('receipts')
     .select('id, merchant, txn_date, currency, total')
@@ -905,7 +905,6 @@ async function findDuplicateCandidate({
     .lte('total', total + 0.01)
     .limit(10);
   if (error) throw error;
-
   const duplicate = (candidates ?? []).find((candidate) => normalizeMerchantKey(candidate.merchant) === merchantKey);
   if (!duplicate) return null;
   return {
@@ -1076,6 +1075,12 @@ Deno.serve(async (req) => {
     timing.auth_ms = Math.round(performance.now() - authStartedAt);
     timing.auth_method = authMethod;
 
+    const deviceId = req.headers.get('x-rf-device-id') ?? '';
+    if (!isDeviceId(deviceId)) return json(400, { code: 'VALIDATION_FAILED', message: 'Device identifier required', timing });
+    if (!(await isActiveDevice(admin, userId, deviceId))) {
+      return json(409, { code: 'DEVICE_INACTIVE', message: 'This device is no longer active', timing });
+    }
+
     // Started before the body is read so the round trip overlaps parsing, and so
     // the camera's warm-up call leaves the picks cached before the real scan.
     const categoriesPromise = getUserCategories(admin, userId, timing);
@@ -1227,7 +1232,13 @@ Deno.serve(async (req) => {
     return json(200, {
       status: 200,
       receipt_id: receiptId,
-      image_path: `${userId}/${captureId}.jpg`,
+      // Null, not a path: this function is text-first and never received the
+      // image, so at this moment nothing is stored under that name. It used to
+      // return `${userId}/${captureId}.jpg` — the name the background upload
+      // will eventually use — which reads as a promise the server cannot keep.
+      // The `upload_only` path in extract/index.ts sets image_path on the row
+      // once the object actually exists. DL-002.
+      image_path: null,
       acked_at: ackedAt,
       duplicate_candidate: duplicateCandidate,
       // Lets the client refresh its cached balance off a call it already made.

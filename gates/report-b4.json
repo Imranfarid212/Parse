@@ -1,7 +1,7 @@
 {
   "phase": "b4",
   "status": "passed_local_backend",
-  "note": "Local B4 Grok fast-path source checks passed with dummy provider config. Official evidence still requires live Grok golden/latency and device mode runs.",
+  "note": "T4.2 uses a live Balanced 20-case average-latency gate plus Precise/Grok physical image-path evidence; current Precise average is 4126ms against the temporary 4500ms limit.",
   "duration_ms": 42754,
   "commit_sha": "ac626ab2066d1152522188ec1706057bc5e15fd6",
   "tests": [

@@ -45,11 +45,39 @@ includes(fn, "{ onConflict: 'capture_id' }", 'duplicate capture id conflict targ
 includes(fn, "'needs_review'", 'default-mode captures land in needs_review');
 includes(fn, "return json(200", 'ack response after durable writes');
 
-const uploadIndex = fn.indexOf("storage.from('receipts').upload");
-const upsertIndex = fn.indexOf(".upsert(");
-const responseIndex = fn.indexOf('return json(200');
-if (uploadIndex === -1 || upsertIndex === -1 || responseIndex === -1 || uploadIndex > upsertIndex || upsertIndex > responseIndex) {
-  fail('ack order must be Storage upload -> receipts upsert -> 200 response');
+/**
+ * The ack gate on the Precise path: a Storage failure must not produce a 200.
+ *
+ * This replaces three `indexOf` calls that claimed to prove the ordering
+ * "upload -> receipts upsert -> 200". They never did. Once `extract` grew more
+ * than one response path, the first `.upsert(` in the file was the one on
+ * duplicate_shadow_events (line ~775) and the first `return json(200` was the
+ * warm-up reply (line ~958) — neither on the ack path, and both textually ahead
+ * of the upload at ~1161. The check was comparing three unrelated sites and
+ * reporting on file layout rather than control flow.
+ *
+ * Text order cannot prove execution order in a file where helpers are defined
+ * above the handler that calls them. So this asserts the thing the guarantee
+ * actually rests on, which is local and readable: the handler waits for the
+ * Storage write, and a failed write returns an error before any success
+ * response. Ordering is only claimed within the one linear region after the
+ * upload is awaited, where it means something.
+ *
+ * DL-002 makes this rule Precise-specific. Balanced never receives the image and
+ * is asserted separately in b4:backend.
+ */
+includes(
+  fn,
+  'const [{ error: uploadError }, extraction] = await Promise.all([\n    storagePromise,\n    grokPromise,\n  ]);',
+  'ack waits for the Storage write',
+);
+includes(fn, 'if (uploadError) return json(503,', 'a failed Storage write returns an error, not an ack');
+
+const gateIndex = fn.indexOf('const [{ error: uploadError }, extraction] = await Promise.all([');
+const guardIndex = fn.indexOf('if (uploadError) return json(503,', gateIndex);
+const firstAckIndex = fn.indexOf('return json(200', gateIndex);
+if (gateIndex === -1 || guardIndex === -1 || firstAckIndex === -1 || guardIndex > firstAckIndex) {
+  fail('the Storage failure guard must come before any 200 on the ack path');
 }
 
-console.log('[b3:backend] extract v0 ack semantics verified');
+console.log('[b3:backend] extract ack semantics verified (Precise path; see DL-002)');

@@ -10,6 +10,7 @@
  * an honest message rather than a green check over a dropped receipt.
  */
 import * as SQLite from 'expo-sqlite';
+import { normalizeReceiptItems } from '@/lib/receipts/types';
 
 import type {
   CaptureMode,
@@ -173,7 +174,12 @@ const hydrate = (r: Persisted): ReceiptRow => ({
   captureMode: r.capture_mode,
   extractionMode: r.extraction_mode,
   status: r.status,
-  fields: r.fields ? (JSON.parse(r.fields) as ReceiptFields) : null,
+  fields: r.fields
+    ? (() => {
+        const fields = JSON.parse(r.fields) as ReceiptFields;
+        return { ...fields, items: normalizeReceiptItems(fields.items) };
+      })()
+    : null,
   localOcrText: r.local_ocr_text,
   dedupeKey: r.dedupe_key,
   ocrFingerprint: r.ocr_fingerprint,
@@ -437,6 +443,24 @@ export async function markExtractRetry(id: string, attempts: number, nextRetryAt
   );
 }
 
+export async function markProviderDelayed(id: string, attempts = 0): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE receipts SET status = 'provider_delayed', attempts = ?, next_retry_at = 0, updated_at = ? WHERE id = ?",
+    [attempts, Date.now(), id],
+  );
+}
+
+export async function setServerReceipt(id: string, receiptId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE receipts SET receipt_id = ?, acked_at = COALESCE(acked_at, ?), updated_at = ? WHERE id = ?', [
+    receiptId,
+    Date.now(),
+    Date.now(),
+    id,
+  ]);
+}
+
 export async function setStatus(id: string, status: ReceiptStatus): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE receipts SET status = ?, updated_at = ? WHERE id = ?', [status, Date.now(), id]);
@@ -562,6 +586,7 @@ export async function getSyncState(userId: string): Promise<SyncState | null> {
  * background sync eats somebody's edit.
  */
 export function hasUnsyncedLocalWork(row: ReceiptRow): boolean {
+  if (row.status === 'provider_delayed' || row.status === 'llm_failed_final') return false;
   return !(row.status === 'synced' && row.resultSyncStatus === 'synced');
 }
 
@@ -682,6 +707,33 @@ export async function findLocalDuplicateCandidate(
       fields: row.fields,
     };
   }
+
+  // OCR drafts are intentionally cheap and can misread the merchant or date,
+  // which makes the strict dedupe key miss the exact same paper. A very high
+  // token-fingerprint match is still sufficient to warn before a model call;
+  // keep the threshold high because this fallback is broader than the key.
+  if (currentFingerprint && parseFingerprint(currentFingerprint).length > 0) {
+    const fingerprintRows = await db.getAllAsync<Persisted>(
+      "SELECT * FROM receipts WHERE ocr_fingerprint IS NOT NULL AND fields IS NOT NULL AND status NOT IN ('deleted', 'delete_pending') ORDER BY created_at DESC LIMIT 20",
+    );
+    for (const row of fingerprintRows.map(hydrate)) {
+      if (!row.fields) continue;
+      const similarity = fingerprintSimilarity(currentFingerprint, row.ocrFingerprint);
+      if (similarity < 0.9) continue;
+      return {
+        matchedReceiptId: row.receiptId ?? row.id,
+        matchedLocalRowId: row.id,
+        matchedImageUri: row.imageUri,
+        matchRule: 'local_ocr_fingerprint',
+        matchStrength: 'strong',
+        merchant: row.fields.store,
+        date: row.fields.date,
+        currency: row.fields.currency,
+        total: row.fields.total,
+        fields: row.fields,
+      };
+    }
+  }
   return null;
 }
 
@@ -766,6 +818,24 @@ export async function listUnsynced(): Promise<ReceiptRow[]> {
   return rows.map(hydrate);
 }
 
+/**
+ * Put a permanently failed image upload back in the backup queue.
+ *
+ * `upload_failed_final` is deliberately outside listPendingImageBackups' work
+ * list — five attempts have already failed and an automatic sixth would just
+ * spin. But under DL-002 the device is the only holder of that photo until the
+ * upload lands, so the state has to be escapable by hand. Attempts reset to
+ * zero because this is a fresh decision by the user, not a continuation of the
+ * run that gave up.
+ */
+export async function requeueImageBackup(id: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE receipts SET image_sync_status = 'pending_upload', attempts = 0, next_retry_at = 0, updated_at = ? WHERE id = ? AND image_sync_status = 'upload_failed_final'",
+    [Date.now(), id],
+  );
+}
+
 /** Images from text-first Balanced captures that still need Supabase backup. */
 export async function listPendingImageBackups(): Promise<ReceiptRow[]> {
   const db = await getDb();
@@ -779,9 +849,18 @@ export async function listPendingImageBackups(): Promise<ReceiptRow[]> {
 export async function countPending(): Promise<number> {
   const db = await getDb();
   const r = await db.getFirstAsync<{ n: number }>(
-    "SELECT COUNT(*) AS n FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'image_upload_pending', 'confirmed_local', 'result_sync_pending')",
+    "SELECT COUNT(*) AS n FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'provider_delayed', 'image_upload_pending', 'confirmed_local', 'result_sync_pending')",
   );
   return r?.n ?? 0;
+}
+
+/** Server-owned B5 jobs are completed by the sweeper, not the local dispatcher. */
+export async function countProviderDelayed(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM receipts WHERE status = 'provider_delayed'",
+  );
+  return row?.n ?? 0;
 }
 
 /**

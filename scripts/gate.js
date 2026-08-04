@@ -76,8 +76,16 @@ const testsByPhase = {
       command: ['npm', ['run', 'b4:backend']],
     },
     {
-      id: 'T4.2-golden-latency-source-readiness',
-      command: ['npm', ['run', 'b4:app']],
+      // Checks the committed golden report rather than grepping source for
+      // readiness. The run itself is `npm run b4:golden` — 20 live model calls,
+      // done deliberately, the way the playbook treats a scripted test. The gate
+      // reads its result and refuses a report whose code has since changed, so
+      // the evidence is real without every gate check costing 20 calls.
+      // The harness covers the Balanced 20-case accuracy and average-latency
+      // gate. The report also carries the operator-supplied Precise/Grok
+      // physical image-path result.
+      id: 'T4.2-golden-latency',
+      command: ['npm', ['run', 'b4:golden:verify']],
     },
     {
       // Runs can_scan against a real database rather than grepping the
@@ -129,7 +137,7 @@ const report = {
         ? 'Local B2 static/backend/db checks passed. Official playbook 5/5 still requires OTP device flow plus Apple/Google manual evidence.'
         : phase === 'b3'
           ? 'Local B3 static capture/offline queue checks passed. Official evidence still requires device capture/gallery/offline retry verification.'
-          : 'Local B4 Grok fast-path source checks passed with dummy provider config. Official evidence still requires live Grok golden/latency and device mode runs.',
+          : 'Local B4 checks passed. T4.2 uses the live Balanced average-latency gate plus the Precise/Grok physical image-path result.',
   duration_ms: Date.now() - startedAt,
   commit_sha: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
   tests: results,

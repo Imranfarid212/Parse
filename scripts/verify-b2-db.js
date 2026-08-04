@@ -1,9 +1,39 @@
 const { spawnSync } = require('child_process');
 
+let databaseContainer;
+
+function localDatabaseContainer() {
+  if (databaseContainer) return databaseContainer;
+
+  const result = spawnSync('docker', ['ps', '--format', '{{.Names}}'], {
+    encoding: 'utf8',
+  });
+
+  if (result.status !== 0) {
+    process.stderr.write(result.stderr || '');
+    process.stdout.write(result.stdout || '');
+    throw new Error('[b2:db] could not list Docker containers');
+  }
+
+  const containers = result.stdout
+    .split('\n')
+    .map((name) => name.trim())
+    .filter((name) => name.startsWith('supabase_db_'));
+
+  if (containers.length !== 1) {
+    throw new Error(
+      `[b2:db] expected one running local Supabase database container, found ${containers.length}: ${containers.join(', ') || 'none'}`,
+    );
+  }
+
+  databaseContainer = containers[0];
+  return databaseContainer;
+}
+
 function sql(query) {
   const result = spawnSync('docker', [
     'exec',
-    'supabase_db_receiptflow-local',
+    localDatabaseContainer(),
     'psql',
     '-U',
     'postgres',

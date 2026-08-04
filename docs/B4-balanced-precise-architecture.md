@@ -308,6 +308,22 @@ Precise is not optimized for sub-2s UX. It is the quality path.
 
 When user selects Precise mode, the app shows an alert before capture/extraction to set expectation that it may take longer.
 
+### T4.2 Latency Acceptance
+
+The product latency gate is mode-specific:
+
+- Balanced uses the live 20-receipt golden run. Its automated latency metric is
+  the host-to-server round-trip average, with a threshold of `2500ms`. p50,
+  p95, and max are retained for diagnosis but are not pass/fail criteria.
+- Precise uses the direct Grok/image path. Its end-to-end metric is the app's
+  `total_to_ui_ms`, with an average threshold of `4500ms` for the current B4
+  gate. This requires a physical-device run; a text-only golden harness must
+  not claim to have tested it.
+
+The Precise threshold intentionally reflects the user warning shown before the
+capture. It is a quality path, not a sub-two-second path. The threshold can be
+tightened after the remaining product phases are complete.
+
 ### Precise Persistence
 
 Precise saves both:
@@ -648,4 +664,3 @@ useful receipt screen under 2s
 final receipt data as soon as backend completes
 background persistence and retry for everything non-critical
 ```
-

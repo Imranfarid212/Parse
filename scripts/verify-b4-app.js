@@ -67,6 +67,11 @@ includes(quota, 'export async function checkQuotaGate', 'shutter gate helper');
 includes(quota, 'export async function applyServerQuota', 'server balance refreshes the cache');
 includes(camera, 'await passesQuotaGate()', 'capture paths run the gate');
 includes(capture, 'applyServerQuota(options?.userId', 'extract responses refresh the cached balance');
+includes(
+  camera,
+  "if (out.row.extractionMode === 'precise') {\n          uploadCaptureMetrics({",
+  'default Precise captures upload latency metrics',
+);
 
 // A rate limit is "not now", not "not ever". The server answers 429 rather than
 // 402 precisely so the capture retries — but the client ignored retry_after_s
@@ -85,11 +90,16 @@ order(capture, 'if (throttleMs != null) {', 'if (attempts >= MAX_EXTRACT_ATTEMPT
 // model answered and every capture aborted the one before it, so the burst limit
 // guarded a rate the UI could not reach.
 includes(camera, 'releaseShutter();', 'the shutter is freed as soon as the photo exists');
-includes(camera, 'oneClickAborts.current.add(oneClickAc)', 'each One-click capture carries its own controller');
-order(camera, 'releaseShutter();', 'void runOneClickCapture(', 'One-click frees the shutter before the scan runs');
-if (/void runOneClickCapture\([\s\S]{0,200}abortRef/.test(camera)) {
-  fail('One-click must not share abortRef; a new shot would cancel the previous capture');
+includes(camera, 'detachedAborts.current.add(detachedAc)', 'each detached capture carries its own controller');
+order(camera, 'releaseShutter();', 'void runDetachedCapture(', 'the shutter is freed before the scan runs');
+// Precise joins One-click: it shows no card, and it has just said it finishes in
+// the background, so holding the shutter contradicts what the user was told.
+includes(camera, "if (mode !== 'default' || extractionMode === 'precise') {", 'Precise is detached too, not just One-click');
+if (/void runDetachedCapture\([\s\S]{0,200}abortRef/.test(camera)) {
+  fail('detached captures must not share abortRef; a new shot would cancel the previous one');
 }
+// The race existed only to release a blocked UI. Nothing blocks now.
+if (/waitForVisibleDeadline/.test(camera)) fail('the visible-deadline race has no job left once nothing is held');
 
 // A quota rejection used to delete the row and the photo. That was defensible
 // only while it could not happen without the user watching — offline capture
@@ -110,5 +120,16 @@ includes(read('src/lib/receipts/store.ts'), "SET status = 'llm_failed_retryable'
 if (/'blocked_quota'/.test(read('src/lib/receipts/store.ts').match(/listPendingExtract[\s\S]{0,400}/)?.[0] ?? '')) {
   fail('blocked captures must stay out of the retry queue; retrying cannot conjure scans');
 }
+
+// 4.3: Precise promises the background workflow once, up front, and shows no
+// spinner — there is nothing on screen for the user to wait on. Announcing it at
+// preflight was unsafe while quota could still be refused afterwards; it is not
+// now, because the shutter gate catches that before a photo is taken.
+includes(camera, 'onPrecisePreflightAccepted: showPreciseUpFrontNotice', 'Precise says what will happen before it happens');
+if (/k: 'working'/.test(camera)) fail('the Precise spinner phase is scaffolding and should be gone');
+// Anything landing after that dialog is news, not a decision — a modal there is
+// the second dialog the up-front notice exists to prevent.
+includes(camera, 'if (late) flashNotice(LATE_NOT_A_RECEIPT_TOAST)', 'a late rejection is a toast, not a dialog');
+includes(camera, 'if (late) flashNotice(LATE_QUOTA_TOAST)', 'a late quota refusal is a toast, not a dialog');
 
 console.log('[b4:app] rejected/non-receipt UX and secret-boundary checks passed');

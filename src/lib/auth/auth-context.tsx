@@ -9,6 +9,7 @@ import type { Session, User } from '@supabase/supabase-js';
 import { TOAST_REFERRAL_PROMPT } from '@/../packages/contracts/src/copy';
 import type { Category } from '@/../packages/contracts/src/types';
 import { getBootstrapLocale, type BootstrapLocale } from '@/lib/auth/bootstrap';
+import { getDeviceId } from '@/lib/auth/device';
 import { clearCachedAuth, getCachedAuth, setCachedAuth } from '@/lib/auth/session-cache';
 import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
 import type { Profile } from '@/lib/auth/types';
@@ -27,14 +28,25 @@ export type { Profile };
  * offline cold starts back to the login screen.
  */
 export type AuthStatus = 'restoring' | 'authenticated' | 'signed_out';
+export type DeviceStatus = 'checking' | 'active' | 'takeover_required' | 'unavailable';
 
 /** Foreground revalidation is skipped if the snapshot is fresher than this. */
 const REVALIDATE_AFTER_MS = 5 * 60 * 1000;
+const SESSION_RESTORE_TIMEOUT_MS = 8_000;
+const BOOTSTRAP_DEADLINE_MS = 12_000;
+
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), SESSION_RESTORE_TIMEOUT_MS)),
+  ]);
+}
 
 type AuthContextValue = {
   configured: boolean;
   loading: boolean;
   status: AuthStatus;
+  deviceStatus: DeviceStatus;
   /**
    * True whenever a user is signed in — including offline, where `session` is
    * null because the access token could not be refreshed. Route on this, not on
@@ -48,6 +60,7 @@ type AuthContextValue = {
   selectedCategoryIds: number[];
   bootstrapLocale: BootstrapLocale;
   refreshProfile: () => Promise<Profile | null>;
+  takeOverDevice: () => Promise<void>;
   signInWithOtp: (email: string) => Promise<void>;
   verifyOtp: (email: string, token: string) => Promise<Profile | null>;
   signInWithGoogle: () => Promise<void>;
@@ -87,7 +100,8 @@ function getCallbackParam(url: string, param: string) {
  */
 async function readStoredSession(): Promise<{ session: Session | null; unreachable: boolean }> {
   try {
-    const { data, error } = await supabase.auth.getSession();
+    const result = await withTimeout(supabase.auth.getSession(), 'Session restore');
+    const { data, error } = result;
     if (data.session) return { session: data.session, unreachable: false };
     return { session: null, unreachable: Boolean(error) };
   } catch {
@@ -121,6 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<number[]>([]);
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('checking');
   const bootstrapLocale = useMemo(() => getBootstrapLocale(), []);
 
   const profileRef = useRef<Profile | null>(null);
@@ -152,6 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setProfile(null);
     setSelectedCategoryIds([]);
+    setDeviceStatus('checking');
     applyStatus('signed_out');
     try {
       await clearCachedAuth();
@@ -208,7 +224,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const nextSelectedCategoryIds = nextState.pickedRows.map((row) => row.category_id);
 
+    const deviceId = await getDeviceId();
+    const { data: claimRows, error: claimError } = await supabase.rpc('claim_user_device', {
+      p_device_id: deviceId,
+      p_takeover: false,
+    });
+    if (claimError) throw claimError;
+    const claim = Array.isArray(claimRows) ? claimRows[0] : claimRows;
+    if (claim?.out_status === 'takeover_required') {
+      setDeviceStatus('takeover_required');
+      return nextState.profileRow;
+    }
+    if (claim?.out_status !== 'active') throw new Error('Could not verify this device.');
+
     applySignedIn(currentSession);
+    setDeviceStatus('active');
     setCategories(nextState.categoryRows);
     setProfile(nextState.profileRow);
     profileRef.current = nextState.profileRow;
@@ -246,6 +276,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return nextState.profileRow;
   }, [applySignedIn, applySignedOut]);
 
+  const takeOverDevice = useCallback(async () => {
+    const deviceId = await getDeviceId();
+    const { data, error } = await supabase.rpc('claim_user_device', { p_device_id: deviceId, p_takeover: true });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (row?.out_status !== 'active') throw new Error('Could not activate this device.');
+    setDeviceStatus('active');
+    await refreshProfile();
+  }, [refreshProfile]);
+
   /**
    * Background revalidation: stale-while-revalidate over the cached snapshot.
    * Deduped, and a failure is never surfaced — the cached copy is already on
@@ -257,6 +297,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const run = refreshProfile()
       .catch((error: unknown) => {
         if (__DEV__) console.warn('Background profile refresh failed', error);
+        // A connectivity or device-claim failure must not leave the app behind
+        // an indefinite spinner. No write reaches the server without a later
+        // active-device assertion, so this is an honest retry state.
+        setDeviceStatus('unavailable');
         return profileRef.current;
       })
       .finally(() => {
@@ -266,22 +310,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return run;
   }, [refreshProfile]);
 
+  // Native storage and an interrupted device RPC have both been observed to
+  // remain pending indefinitely. Startup must always leave the loading gate.
+  useEffect(() => {
+    const deadline = setTimeout(() => {
+      if (statusRef.current === 'restoring') void applySignedOut();
+      else if (statusRef.current === 'authenticated' && deviceStatus === 'checking') setDeviceStatus('unavailable');
+    }, BOOTSTRAP_DEADLINE_MS);
+    return () => clearTimeout(deadline);
+  }, [applySignedOut, deviceStatus]);
+
   // Startup: restore locally, then revalidate over the network. Routing waits
   // only on the local half, so it cannot be blocked by a dead connection.
   useEffect(() => {
     let alive = true;
 
     async function restore() {
+      if (__DEV__) console.log('[auth] restore:start');
       if (!isSupabaseConfigured) {
         applyStatus('signed_out');
         return;
       }
 
-      const cached = await getCachedAuth().catch((error: unknown) => {
+      const cached = await withTimeout(getCachedAuth(), 'Cached auth restore').catch((error: unknown) => {
         if (__DEV__) console.warn('Reading the auth snapshot failed', error);
         return null;
       });
+      if (__DEV__) console.log('[auth] restore:cache', Boolean(cached));
       const stored = await readStoredSession();
+      if (__DEV__) console.log('[auth] restore:session', Boolean(stored.session), stored.unreachable);
       if (!alive) return;
 
       // A snapshot belonging to a different account is worse than none.
@@ -298,16 +355,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (stored.session) {
         applySignedIn(stored.session);
+        setDeviceStatus('checking');
       } else if (stored.unreachable && snapshot) {
         // Signed in, offline, holding a token that could not be refreshed.
         // Server calls will fail until the network returns — which is precisely
         // what the capture queue exists for — but the user is not signed out.
         applyStatus('authenticated');
       } else {
+        if (__DEV__) console.log('[auth] restore:signed-out');
         await applySignedOut();
         return;
       }
 
+      if (__DEV__) console.log('[auth] restore:revalidate');
       void revalidate();
     }
 
@@ -326,6 +386,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!nextSession) return;
 
       applySignedIn(nextSession);
+      setDeviceStatus('checking');
       void revalidate();
     });
 
@@ -526,6 +587,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       configured: isSupabaseConfigured,
       loading: status === 'restoring' || busy,
       status,
+      deviceStatus,
       authenticated: status === 'authenticated',
       session,
       user,
@@ -534,6 +596,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       selectedCategoryIds,
       bootstrapLocale,
       refreshProfile,
+      takeOverDevice,
       signInWithOtp,
       verifyOtp,
       signInWithGoogle,
@@ -546,6 +609,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       busy,
       categories,
       completeOnboarding,
+      deviceStatus,
       profile,
       refreshProfile,
       selectedCategoryIds,
@@ -555,6 +619,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signInWithOtp,
       signOut,
       status,
+      takeOverDevice,
       user,
       verifyOtp,
     ],

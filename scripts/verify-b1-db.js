@@ -20,10 +20,30 @@ function run(command, args, options = {}) {
   return result.stdout;
 }
 
+let databaseContainer;
+
+function localDatabaseContainer() {
+  if (databaseContainer) return databaseContainer;
+
+  const containers = run('docker', ['ps', '--format', '{{.Names}}'])
+    .split('\n')
+    .map((name) => name.trim())
+    .filter((name) => name.startsWith('supabase_db_'));
+
+  if (containers.length !== 1) {
+    throw new Error(
+      `[b1:db] expected one running local Supabase database container, found ${containers.length}: ${containers.join(', ') || 'none'}`,
+    );
+  }
+
+  databaseContainer = containers[0];
+  return databaseContainer;
+}
+
 function sql(query) {
   return run('docker', [
     'exec',
-    'supabase_db_receiptflow-local',
+    localDatabaseContainer(),
     'psql',
     '-U',
     'postgres',

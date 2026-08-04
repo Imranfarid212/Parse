@@ -28,7 +28,7 @@ export const isCategory = (v: unknown): v is Category =>
 export type ExtractSuccess = {
   date: string;
   store: string;
-  items: string[];
+  items: ReceiptLineItem[];
   currency?: string;
   total: number;
   category: string;
@@ -68,10 +68,26 @@ export const isDuplicateReceipt = (r: ExtractResponse): r is ExtractDuplicateRec
  * printed date was unparseable — the edit sheet is how the user fixes that).
  * These 6 fields are what the review card shows and the edit sheet writes.
  */
+export type ReceiptLineItem = { name: string; qty: number; amount: number };
+
+/** Converts pre-8.4 string rows on disk into editable structured rows. */
+export function normalizeReceiptItems(value: unknown): ReceiptLineItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    if (item && typeof item === 'object') {
+      const row = item as Partial<ReceiptLineItem>;
+      return { name: String(row.name ?? 'Item').trim().slice(0, 160) || 'Item', qty: Number(row.qty) > 0 ? Number(row.qty) : 1, amount: Math.max(0, Number(row.amount) || 0) };
+    }
+    const text = String(item ?? '').trim();
+    const match = /^(.*?)[\s]+(?:[A-Z]{3}\s*)?[$₹€£¥]?(\d[\d,]*\.\d{2})$/.exec(text);
+    return { name: (match?.[1] ?? text).trim().slice(0, 160) || 'Item', qty: 1, amount: Number(match?.[2]?.replace(/,/g, '')) || 0 };
+  });
+}
+
 export type ReceiptFields = {
   date: string | null;
   store: string;
-  items: string[];
+  items: ReceiptLineItem[];
   currency: string;
   total: number;
   category: Category;
@@ -99,6 +115,7 @@ export type ReceiptStatus =
   | 'pending_extract'
   | 'llm_processing'
   | 'llm_failed_retryable'
+  | 'provider_delayed'
   | 'llm_failed_final'
   /**
    * Refused for quota. Terminal for the retry queue — retrying cannot conjure

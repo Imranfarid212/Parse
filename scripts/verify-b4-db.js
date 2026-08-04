@@ -164,6 +164,37 @@ function makeDb(admin, pg) {
     async deleteProfile(userId) {
       await pg.query('delete from public.profiles where id = $1', [userId]);
     },
+
+    async claimDevice(userId, deviceId, takeover = false) {
+      await pg.query("select set_config('request.jwt.claim.sub', $1, false)", [userId]);
+      const row = await one('select * from public.claim_user_device($1::uuid, $2)', [deviceId, takeover]);
+      return row.out_status;
+    },
+
+    async activeDeviceCount(userId) {
+      const row = await one('select count(*)::int as n from public.user_devices where user_id = $1 and is_active', [userId]);
+      return row.n;
+    },
+
+    async assertDevice(userId, deviceId) {
+      const row = await one('select public.assert_active_device($1::uuid, $2::uuid) as active', [userId, deviceId]);
+      return row.active;
+    },
+
+    async confirmStructuredItems(userId) {
+      const receiptId = randomUUID();
+      await pg.query(
+        "insert into public.receipts (id, user_id, capture_id, capture_mode, status) values ($1, $2, $3, 'default', 'needs_review')",
+        [receiptId, userId, randomUUID()],
+      );
+      const items = [{ name: 'Notebook', qty: 2, amount: 7.5 }, { name: 'Pen', qty: 3, amount: 1.25 }];
+      const row = await one(
+        'select public.confirm_receipt_with_items($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb) as confirmed',
+        [userId, receiptId, 'Stationery Store', '2026-08-03', 'USD', 18.75, null, 'Edited', JSON.stringify(items)],
+      );
+      const stored = await pg.query('select name, qty::float8 as qty, amount::float8 as amount from public.receipt_items where receipt_id = $1 order by name', [receiptId]);
+      return { confirmed: row.confirmed, items: stored.rows };
+    },
   };
 }
 
@@ -354,6 +385,34 @@ async function lockGuardSuite(admin, db, pg) {
   });
 }
 
+async function deviceSuite(db, userId) {
+  await test('a second device must ask before takeover and only the chosen device can write', async () => {
+    const first = randomUUID();
+    const second = randomUUID();
+
+    assertEqual(await db.claimDevice(userId, first), 'active', 'first device is active');
+    assertEqual(await db.claimDevice(userId, second), 'takeover_required', 'second device is not silently activated');
+    assertEqual(await db.assertDevice(userId, first), true, 'first device remains write-active before takeover');
+    assertEqual(await db.assertDevice(userId, second), false, 'second device cannot write before takeover');
+
+    assertEqual(await db.claimDevice(userId, second, true), 'active', 'explicit takeover activates second device');
+    assertEqual(await db.assertDevice(userId, first), false, 'first device loses write access after takeover');
+    assertEqual(await db.assertDevice(userId, second), true, 'second device gains write access after takeover');
+    assertEqual(await db.activeDeviceCount(userId), 1, 'the account has exactly one active device');
+  });
+}
+
+async function itemSuite(db, userId) {
+  await test('structured item confirmation replaces rows with their quantities and amounts intact', async () => {
+    const result = await db.confirmStructuredItems(userId);
+    assertEqual(result.confirmed, true, 'receipt confirmation succeeded');
+    assertEqual(result.items.length, 2, 'two item rows stored');
+    assertEqual(result.items[0].name, 'Notebook', 'first item name');
+    assertEqual(result.items[0].qty, 2, 'first item quantity');
+    assertEqual(result.items[0].amount, 7.5, 'first item amount');
+  });
+}
+
 // ----------------------------------------------------------------------- main
 
 async function main() {
@@ -366,9 +425,20 @@ async function main() {
   try {
     await withUser(admin, async ({ userId }) => {
       const db = makeDb(admin, pg);
+      if (process.env.B4_DB_ONLY === 'device') {
+        await deviceSuite(db, userId);
+        return;
+      }
+      if (process.env.B4_DB_ONLY === 'items') {
+        await itemSuite(db, userId);
+        return;
+      }
       await entitlementSuite(db, userId);
       await burstSuite(db, userId);
       await raceSuite(db, userId);
+      await deviceSuite(db, userId);
+      await itemSuite(db, userId);
+      // This intentionally deletes the profile row, so it must be last.
       await lockGuardSuite(admin, db, pg);
     }, pg);
   } finally {
@@ -383,7 +453,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`${TAG} can_scan verified live — ${results.length} tests, ${checks} checks`);
+  console.log(`${TAG} quota and device policy verified live — ${results.length} tests, ${checks} checks`);
 }
 
 main().catch((error) => {

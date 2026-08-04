@@ -187,6 +187,12 @@ function getErrorStatus(error: unknown): number | null {
   return typeof value === 'number' ? value : null;
 }
 
+function getProviderDelayReceiptId(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const value = (error as { receiptId?: unknown }).receiptId;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 /**
  * Whether a failed confirm is worth trying again. The shared classifier only
  * counts 0 and 5xx as transient, so 408 and 429 would read as verdicts — and
@@ -331,6 +337,7 @@ export type CaptureOutcome =
  */
 let dispatchInFlight: Promise<number> | null = null;
 let imageBackupInFlight: Promise<number> | null = null;
+let imageBackupRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let metricsFlushInFlight: Promise<number> | null = null;
 
 export async function processCapture(
@@ -736,6 +743,22 @@ export async function processCapture(
       metrics: { ...metrics, total_to_ui_ms: metrics.total_to_response_ms },
       attempts,
     });
+    if (getExtractErrorCode(error) === 'PROVIDER_DELAY') {
+      const receiptId = getProviderDelayReceiptId(error);
+      await store.markProviderDelayed(row.id, row.attempts);
+      if (receiptId) {
+        await store.setServerReceipt(row.id, receiptId);
+      }
+      if (durableImagePromise) durableImageUri = await durableImagePromise;
+      if (row.extractionMode === 'balanced' && localOcrText) {
+        await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
+        void syncImageBackups();
+      } else {
+        await store.setSyncStatus(row.id, { imageSyncStatus: 'uploaded' });
+        await deleteLocalFile(durableImageUri);
+      }
+      return { kind: 'queued', row, reason: 'PROVIDER_DELAY', offline: false, attempts };
+    }
     if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
       // Retrying can't fix "out of scans" — treat it as a verdict, not a transient
       // failure, so it never enters the backoff/retry queue. But it is the user's
@@ -857,6 +880,15 @@ export async function syncImageBackups(): Promise<number> {
   return imageBackupInFlight;
 }
 
+/** Keep a reachable app draining image backups without waiting for a network event. */
+function scheduleImageBackupRetry(nextRetryAt: number): void {
+  if (imageBackupRetryTimer) clearTimeout(imageBackupRetryTimer);
+  imageBackupRetryTimer = setTimeout(() => {
+    imageBackupRetryTimer = null;
+    void syncImageBackups();
+  }, Math.max(0, nextRetryAt - Date.now()));
+}
+
 async function dispatchImageBackups(): Promise<number> {
   await store.reclaimStalledSyncs(STALLED_SYNC_MS);
   const rows = await store.listPendingImageBackups();
@@ -908,7 +940,9 @@ async function dispatchImageBackups(): Promise<number> {
         await store.setSyncStatus(row.id, { imageSyncStatus: 'upload_failed_final' });
       } else {
         await store.setSyncStatus(row.id, { imageSyncStatus: 'upload_failed' });
-        await store.markRetry(row.id, attempts, Date.now() + nextBackoffWithJitterMs(attempts));
+        const nextRetryAt = Date.now() + nextBackoffWithJitterMs(attempts);
+        await store.markRetry(row.id, attempts, nextRetryAt);
+        scheduleImageBackupRetry(nextRetryAt);
       }
       break;
     }
@@ -983,6 +1017,31 @@ export async function retryBlockedCapture(id: string): Promise<void> {
   }
   await store.requeueForExtract(id);
   void retryPending();
+}
+
+/**
+ * Hand a permanently failed image upload back to the backup queue.
+ *
+ * Distinct from retryBlockedCapture: that one re-runs *extraction*, which for
+ * these rows already succeeded — the receipt and its fields are fine, it is only
+ * the photo that never reached Storage. Requeueing for extract would spend a
+ * scan re-reading a receipt the user already has.
+ *
+ * Under DL-002 the device holds the only copy of that photo until the upload
+ * confirms, which is why this exists at all: five failed attempts used to leave
+ * the row in a state nothing read and nothing retried.
+ */
+export async function retryFailedImageUpload(id: string): Promise<void> {
+  const row = await store.getById(id);
+  if (!row) return;
+  if (!(await localFileExists(row.imageUri))) {
+    // Nothing left to upload. Say so rather than queueing work that will fail
+    // on its first attempt and land the row straight back here.
+    await store.setSyncStatus(id, { imageSyncStatus: 'missing_local_file' });
+    return;
+  }
+  await store.requeueImageBackup(id);
+  void syncImageBackups();
 }
 
 /**
@@ -1083,6 +1142,19 @@ async function dispatchPending(): Promise<number> {
       }
       recovered += 1;
     } catch (error) {
+      if (getExtractErrorCode(error) === 'PROVIDER_DELAY') {
+        const receiptId = getProviderDelayReceiptId(error);
+        await store.markProviderDelayed(row.id, row.attempts);
+        if (receiptId) await store.setServerReceipt(row.id, receiptId);
+        if (row.extractionMode === 'balanced' && row.localOcrText) {
+          await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
+          void syncImageBackups();
+        } else {
+          await store.setSyncStatus(row.id, { imageSyncStatus: 'uploaded' });
+          await deleteLocalFile(row.imageUri);
+        }
+        continue;
+      }
       if (getExtractErrorCode(error) === 'QUOTA_EXHAUSTED') {
         // Nobody is watching this one: it is the reconnect drain. Which is
         // exactly why it must not delete anything — a receipt photographed

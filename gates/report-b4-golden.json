@@ -1,0 +1,723 @@
+{
+  "test": "T4.2-golden-latency",
+  "project": "wfboznibkhsfxteejxco",
+  "ran_at": "2026-08-03T11:53:02.319Z",
+  "commit_sha": "17577c8dbb0eac2e9af69e33eb668e370560b155",
+  "source_fingerprint": {
+    "combined": "436d61265b544f2fb4b12538e8b2666e82e5d4b692926806b0e9f021a93ba3e9",
+    "files": [
+      {
+        "path": "supabase/functions/extract-balanced/index.ts",
+        "sha256": "86047a8852867e3770805050d63f108555fb1dc927f7fab78c7c8baa90b80e2c"
+      },
+      {
+        "path": "supabase/functions/_shared/categories.ts",
+        "sha256": "224b1ba84586ca826a5aecb780247908c17c04e00b96d89cef53ec9b210ecb37"
+      },
+      {
+        "path": "supabase/functions/_shared/quota.ts",
+        "sha256": "ab2c58c42ac05edb10e5b5032efe740e5e46509c994e77ea6a890a1095600775"
+      },
+      {
+        "path": "packages/contracts/src/schemas.ts",
+        "sha256": "1a79ca0828aed667814c924e9c801f229cf429a663d486c214a46e837c8f816c"
+      },
+      {
+        "path": "scripts/lib/golden-set.js",
+        "sha256": "760fe69daec3546050c6df16560ab6a1624fbb0cdd43bf737ff323152cba5fec"
+      }
+    ]
+  },
+  "status": "passed",
+  "device_run_required": false,
+  "thresholds": {
+    "fieldAccuracy": 0.9,
+    "categoryInList": 1,
+    "balancedAverageRoundTripMs": 2500,
+    "preciseAverageToUiMs": 4500
+  },
+  "product_acceptance": {
+    "balanced": {
+      "metric": "server_round_trip_average_ms",
+      "threshold_ms": 2500,
+      "automated_by": "this 20-case live golden run"
+    },
+    "precise": {
+      "metric": "total_to_ui_ms",
+      "threshold_ms": 4500,
+      "average_ms": 4126,
+      "samples": 5,
+      "evidence": "operator-supplied physical-device image-path run"
+    }
+  },
+  "offered_categories": [
+    "Travel & Transit",
+    "Meals & Entertainment",
+    "Office Supplies",
+    "Vehicle Expenses",
+    "Miscellaneous"
+  ],
+  "accuracy": {
+    "scored": 20,
+    "attempted": 20,
+    "merchant": 1,
+    "merchant_strict": 0.9,
+    "txn_date": 1,
+    "total": 1,
+    "currency": 1,
+    "category_in_list": 1
+  },
+  "latency": {
+    "scope": "server_round_trip_from_host",
+    "note": "Dispatch to response. Excludes camera, compression, OCR and card render. Necessary condition for tap-to-card, not equal to it.",
+    "average_ms": 2385,
+    "p50_ms": 2255,
+    "p95_ms": 2685,
+    "max_ms": 3895,
+    "tap_to_card_p50_ms": null
+  },
+  "checks": [
+    {
+      "label": "merchant exact >= 90%",
+      "ok": true,
+      "value": 1
+    },
+    {
+      "label": "txn_date exact >= 90%",
+      "ok": true,
+      "value": 1
+    },
+    {
+      "label": "total exact >= 90%",
+      "ok": true,
+      "value": 1
+    },
+    {
+      "label": "category always in list",
+      "ok": true,
+      "value": 1
+    },
+    {
+      "label": "Balanced average round-trip <= 2500 ms",
+      "ok": true,
+      "value": 2385
+    },
+    {
+      "label": "Precise physical average total_to_ui <= 4500 ms",
+      "ok": true,
+      "value": 4126
+    },
+    {
+      "label": "every sample answered",
+      "ok": true,
+      "value": 20
+    },
+    {
+      "label": "full 20-receipt set",
+      "ok": true,
+      "value": 20
+    }
+  ],
+  "samples": [
+    {
+      "id": "g01-coffee-us",
+      "status": 200,
+      "round_trip_ms": 2208,
+      "server_total_ms": 2091,
+      "server_model_ms": 1422,
+      "duplicate_ms": 217,
+      "expected": {
+        "merchant": "Blue Bottle Coffee",
+        "txn_date": "2026-07-14",
+        "total": 8.99,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "BLUE BOTTLE COFFEE",
+        "txn_date": "2026-07-14",
+        "total": 8.99,
+        "currency": "USD",
+        "suggested_category": "Meals & Entertainment",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g02-grocery-tip-below-total",
+      "status": 200,
+      "round_trip_ms": 2462,
+      "server_total_ms": 2243,
+      "server_model_ms": 1528,
+      "duplicate_ms": 235,
+      "expected": {
+        "merchant": "Whole Foods Market #1042",
+        "txn_date": "2026-03-11",
+        "total": 16.07,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "WHOLE FOODS MARKET",
+        "txn_date": "2026-03-11",
+        "total": 16.07,
+        "currency": "USD",
+        "suggested_category": "Miscellaneous",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": false,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g03-restaurant-tip",
+      "status": 200,
+      "round_trip_ms": 2244,
+      "server_total_ms": 1996,
+      "server_model_ms": 1257,
+      "duplicate_ms": 218,
+      "expected": {
+        "merchant": "The Anchor Tavern",
+        "txn_date": "2026-05-02",
+        "total": 34.33,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "THE ANCHOR TAVERN",
+        "txn_date": "2026-05-02",
+        "total": 34.33,
+        "currency": "USD",
+        "suggested_category": "Meals & Entertainment",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g04-fuel-litre-price-trap",
+      "status": 200,
+      "round_trip_ms": 2334,
+      "server_total_ms": 2223,
+      "server_model_ms": 1113,
+      "duplicate_ms": 225,
+      "expected": {
+        "merchant": "Shell Station 4471",
+        "txn_date": "2026-06-18",
+        "total": 65.86,
+        "currency": "GBP"
+      },
+      "got": {
+        "merchant": "SHELL STATION 4471",
+        "txn_date": "2026-06-18",
+        "total": 65.86,
+        "currency": "GBP",
+        "suggested_category": "Vehicle Expenses",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g05-office-supplies",
+      "status": 200,
+      "round_trip_ms": 2103,
+      "server_total_ms": 1909,
+      "server_model_ms": 1154,
+      "duplicate_ms": 237,
+      "expected": {
+        "merchant": "Staples Store 0912",
+        "txn_date": "2026-01-27",
+        "total": 47.98,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "STAPLES STORE 0912",
+        "txn_date": "2026-01-27",
+        "total": 47.98,
+        "currency": "USD",
+        "suggested_category": "Office Supplies",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g06-taxi",
+      "status": 200,
+      "round_trip_ms": 2685,
+      "server_total_ms": 2569,
+      "server_model_ms": 1089,
+      "duplicate_ms": 218,
+      "expected": {
+        "merchant": "City Cab Co.",
+        "txn_date": "2026-02-09",
+        "total": 33.95,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "CITY CAB CO.",
+        "txn_date": "2026-02-09",
+        "total": 33.95,
+        "currency": "USD",
+        "suggested_category": "Travel & Transit",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g07-hotel-eur",
+      "status": 200,
+      "round_trip_ms": 2237,
+      "server_total_ms": 2086,
+      "server_model_ms": 1391,
+      "duplicate_ms": 224,
+      "expected": {
+        "merchant": "Hotel Adler",
+        "txn_date": "2026-04-22",
+        "total": 286.76,
+        "currency": "EUR"
+      },
+      "got": {
+        "merchant": "HOTEL ADLER",
+        "txn_date": "2026-04-22",
+        "total": 286.76,
+        "currency": "EUR",
+        "suggested_category": "Travel & Transit",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g08-pharmacy-off-list",
+      "status": 200,
+      "round_trip_ms": 2455,
+      "server_total_ms": 2295,
+      "server_model_ms": 1609,
+      "duplicate_ms": 215,
+      "expected": {
+        "merchant": "Boots Pharmacy",
+        "txn_date": "2026-09-05",
+        "total": 13.77,
+        "currency": "GBP"
+      },
+      "got": {
+        "merchant": "BOOTS PHARMACY",
+        "txn_date": "2026-09-05",
+        "total": 13.77,
+        "currency": "GBP",
+        "suggested_category": "Miscellaneous",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g09-hardware-discount",
+      "status": 200,
+      "round_trip_ms": 2356,
+      "server_total_ms": 2018,
+      "server_model_ms": 1321,
+      "duplicate_ms": 221,
+      "expected": {
+        "merchant": "Home Depot #6612",
+        "txn_date": "2026-08-15",
+        "total": 43.18,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "HOME DEPOT #6612",
+        "txn_date": "2026-08-15",
+        "total": 43.18,
+        "currency": "USD",
+        "suggested_category": "Office Supplies",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g10-software-invoice",
+      "status": 200,
+      "round_trip_ms": 3895,
+      "server_total_ms": 3687,
+      "server_model_ms": 1341,
+      "duplicate_ms": 623,
+      "expected": {
+        "merchant": "Figma, Inc.",
+        "txn_date": "2026-03-01",
+        "total": 45,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "FIGMA, INC.",
+        "txn_date": "2026-03-01",
+        "total": 45,
+        "currency": "USD",
+        "suggested_category": "Office Supplies",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g11-parking",
+      "status": 200,
+      "round_trip_ms": 2358,
+      "server_total_ms": 2179,
+      "server_model_ms": 1298,
+      "duplicate_ms": 220,
+      "expected": {
+        "merchant": "NCP Car Park",
+        "txn_date": "2026-11-11",
+        "total": 14.5,
+        "currency": "GBP"
+      },
+      "got": {
+        "merchant": "NCP CAR PARK",
+        "txn_date": "2026-11-11",
+        "total": 14.5,
+        "currency": "GBP",
+        "suggested_category": "Travel & Transit",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g12-electronics-multi-total",
+      "status": 200,
+      "round_trip_ms": 2124,
+      "server_total_ms": 2006,
+      "server_model_ms": 1306,
+      "duplicate_ms": 226,
+      "expected": {
+        "merchant": "Best Buy",
+        "txn_date": "2026-10-03",
+        "total": 93.39,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "BEST BUY 1123",
+        "txn_date": "2026-10-03",
+        "total": 93.39,
+        "currency": "USD",
+        "suggested_category": "Office Supplies",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": false,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g13-courier",
+      "status": 200,
+      "round_trip_ms": 2163,
+      "server_total_ms": 1967,
+      "server_model_ms": 1243,
+      "duplicate_ms": 233,
+      "expected": {
+        "merchant": "FedEx Office",
+        "txn_date": "2026-07-29",
+        "total": 20.01,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "FEDEX OFFICE",
+        "txn_date": "2026-07-29",
+        "total": 20.01,
+        "currency": "USD",
+        "suggested_category": "Office Supplies",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g14-lunch-small",
+      "status": 200,
+      "round_trip_ms": 2358,
+      "server_total_ms": 2189,
+      "server_model_ms": 1289,
+      "duplicate_ms": 223,
+      "expected": {
+        "merchant": "Pret A Manger",
+        "txn_date": "2026-02-18",
+        "total": 7.24,
+        "currency": "GBP"
+      },
+      "got": {
+        "merchant": "PRET A MANGER",
+        "txn_date": "2026-02-18",
+        "total": 7.24,
+        "currency": "GBP",
+        "suggested_category": "Meals & Entertainment",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g15-vehicle-service",
+      "status": 200,
+      "round_trip_ms": 2255,
+      "server_total_ms": 2097,
+      "server_model_ms": 1381,
+      "duplicate_ms": 222,
+      "expected": {
+        "merchant": "Kwik Fit Autocentre",
+        "txn_date": "2026-05-30",
+        "total": 187.8,
+        "currency": "GBP"
+      },
+      "got": {
+        "merchant": "KWIK FIT AUTOCENTRE",
+        "txn_date": "2026-05-30",
+        "total": 187.8,
+        "currency": "GBP",
+        "suggested_category": "Vehicle Expenses",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g16-airline",
+      "status": 200,
+      "round_trip_ms": 2561,
+      "server_total_ms": 2348,
+      "server_model_ms": 1492,
+      "duplicate_ms": 215,
+      "expected": {
+        "merchant": "United Airlines",
+        "txn_date": "2026-06-04",
+        "total": 273.6,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "United Airlines",
+        "txn_date": "2026-06-04",
+        "total": 273.6,
+        "currency": "USD",
+        "suggested_category": "Travel & Transit",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g17-convenience-off-list",
+      "status": 200,
+      "round_trip_ms": 2560,
+      "server_total_ms": 2319,
+      "server_model_ms": 1588,
+      "duplicate_ms": 217,
+      "expected": {
+        "merchant": "PetSmart 2214",
+        "txn_date": "2026-09-19",
+        "total": 56.68,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "PETSMART 2214",
+        "txn_date": "2026-09-19",
+        "total": 56.68,
+        "currency": "USD",
+        "suggested_category": "Miscellaneous",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g18-faded-thermal",
+      "status": 200,
+      "round_trip_ms": 2150,
+      "server_total_ms": 1924,
+      "server_model_ms": 1236,
+      "duplicate_ms": 221,
+      "expected": {
+        "merchant": "Trader Joes",
+        "txn_date": "2026-12-22",
+        "total": 14.26,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "TRADER JOES",
+        "txn_date": "2026-12-22",
+        "total": 14.26,
+        "currency": "USD",
+        "suggested_category": "Miscellaneous",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g19-coworking",
+      "status": 200,
+      "round_trip_ms": 2156,
+      "server_total_ms": 1960,
+      "server_model_ms": 1260,
+      "duplicate_ms": 216,
+      "expected": {
+        "merchant": "WeWork",
+        "txn_date": "2026-04-01",
+        "total": 89.64,
+        "currency": "USD"
+      },
+      "got": {
+        "merchant": "WEWORK",
+        "txn_date": "2026-04-01",
+        "total": 89.64,
+        "currency": "USD",
+        "suggested_category": "Office Supplies",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    },
+    {
+      "id": "g20-train-gbp",
+      "status": 200,
+      "round_trip_ms": 2026,
+      "server_total_ms": 1906,
+      "server_model_ms": 1215,
+      "duplicate_ms": 224,
+      "expected": {
+        "merchant": "Trainline",
+        "txn_date": "2026-07-07",
+        "total": 41.3,
+        "currency": "GBP"
+      },
+      "got": {
+        "merchant": "TRAINLINE",
+        "txn_date": "2026-07-07",
+        "total": 41.3,
+        "currency": "GBP",
+        "suggested_category": "Travel & Transit",
+        "is_receipt": true
+      },
+      "match": {
+        "merchant": true,
+        "merchant_strict": true,
+        "txn_date": true,
+        "total": true,
+        "currency": true,
+        "category_in_list": true
+      }
+    }
+  ]
+}

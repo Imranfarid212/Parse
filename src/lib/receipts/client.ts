@@ -9,6 +9,7 @@
 import { normalizeReceiptDate } from '@/lib/dates';
 import { getFoundationEnv } from '@/lib/foundations/env';
 import { supabase } from '@/lib/auth/supabase';
+import { getDeviceId } from '@/lib/auth/device';
 import * as FileSystem from 'expo-file-system/legacy';
 import { AppState } from 'react-native';
 import {
@@ -23,6 +24,8 @@ import {
   type ExtractResponse,
   type ExtractSuccess,
   type ReceiptFields,
+  type ReceiptLineItem,
+  normalizeReceiptItems,
 } from '@/lib/receipts/types';
 
 export type ExtractInput = {
@@ -112,6 +115,7 @@ type ConfirmReceiptErrorPayload = {
 type ExtractFunctionPayload = {
   status: 200 | 202;
   receipt_id: string;
+  acked_at?: string;
   rejected?: boolean;
   duplicate?: boolean;
   scans_remaining?: number | null;
@@ -163,7 +167,7 @@ type ExtractFunctionPayload = {
     currency?: string;
     total?: number;
     suggested_category?: string;
-    line_items: { name: string; qty?: number; amount: number }[];
+    line_items: ReceiptLineItem[];
     handwritten_notes?: string | null;
     is_receipt?: boolean;
   };
@@ -208,6 +212,8 @@ const PRECISE_WARMUP_TIMEOUT_MS = 5000;
 /** Confirm is a small write; anything this slow is a stalled connection. */
 const CONFIRM_TIMEOUT_MS = 20_000;
 const AUTH_REFRESH_WINDOW_MS = 30_000;
+const forceB5ProviderFailure = __DEV__ && process.env.EXPO_PUBLIC_B5_TEST_FORCE_PROVIDER_FAILURE === '1';
+const forceB5OfflineTransport = __DEV__ && process.env.EXPO_PUBLIC_B5_TEST_FORCE_OFFLINE_TRANSPORT === '1';
 let balancedWarmupInFlight: Promise<void> | null = null;
 let preciseWarmupInFlight: Promise<void> | null = null;
 let lastBalancedWarmupCompletedAt: number | null = null;
@@ -290,9 +296,21 @@ export function getExtractRetryAfterMs(error: unknown): number | null {
   return typeof seconds === 'number' && seconds > 0 ? seconds * 1000 : null;
 }
 
-function errorWithAttempts(message: string, attempts: CaptureAttemptTrace[]) {
-  const error = new Error(message) as Error & { captureAttempts: CaptureAttemptTrace[] };
+function errorWithAttempts(message: string, attempts: CaptureAttemptTrace[], receiptId?: string, ackedAt?: string) {
+  const error = new Error(message) as Error & {
+    captureAttempts: CaptureAttemptTrace[];
+    code?: string;
+    statusCode?: number;
+    receiptId?: string;
+    ackedAt?: string;
+  };
   error.captureAttempts = attempts;
+  if (message === 'PROVIDER_DELAY') {
+    error.code = 'PROVIDER_DELAY';
+    error.statusCode = 202;
+    error.receiptId = receiptId;
+    error.ackedAt = ackedAt;
+  }
   return error;
 }
 
@@ -308,7 +326,7 @@ function extractPayloadToAck(data: ExtractFunctionPayload, attempts?: CaptureAtt
         total: typeof data.duplicate_candidate.total === 'number' ? data.duplicate_candidate.total : null,
       }
     : null;
-  if (data.status === 202) throw errorWithAttempts(data.code ?? 'PROVIDER_DELAY', attempts ?? []);
+  if (data.status === 202) throw errorWithAttempts(data.code ?? 'PROVIDER_DELAY', attempts ?? [], data.receipt_id, data.acked_at);
   if (data.rejected || data.result?.is_receipt === false) {
     return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, attempts, scansRemaining: data.scans_remaining };
   }
@@ -330,7 +348,7 @@ function extractPayloadToAck(data: ExtractFunctionPayload, attempts?: CaptureAtt
     response: {
       date: data.result?.txn_date ?? '',
       store: data.result?.merchant ?? '',
-      items: data.result?.line_items.map((item) => `${item.name}  ${(Number(item.amount) || 0).toFixed(2)}`) ?? [],
+      items: data.result?.line_items ?? [],
       currency: data.result?.currency ?? 'USD',
       total: data.result?.total ?? 0,
       category: data.result?.suggested_category ?? 'Miscellaneous',
@@ -440,7 +458,7 @@ export const mockExtractClient: ExtractClient = {
       response: {
         date: printed,
         store: s.store,
-        items: s.items,
+        items: normalizeReceiptItems(s.items),
         currency: s.currency,
         total: s.total,
         category: s.category,
@@ -460,12 +478,14 @@ export const supabaseExtractClient: ExtractClient = {
     const requestStartedAt = Date.now();
     balancedWarmupInFlight = getAccessTokenForRequest()
       .then(async (accessToken) => {
+        const deviceId = await getDeviceId();
         const warmupSignal = childTimeoutSignal(undefined, BALANCED_WARMUP_TIMEOUT_MS);
         const response = await fetch(`${supabaseUrl}/functions/v1/extract-balanced`, {
           method: 'POST',
           signal: warmupSignal.signal,
           headers: {
             Authorization: `Bearer ${accessToken}`,
+            'x-rf-device-id': deviceId,
             apikey: supabaseAnonKey,
             'Content-Type': 'application/json',
           },
@@ -501,12 +521,14 @@ export const supabaseExtractClient: ExtractClient = {
     const requestStartedAt = Date.now();
     preciseWarmupInFlight = getAccessTokenForRequest()
       .then(async (accessToken) => {
+        const deviceId = await getDeviceId();
         const warmupSignal = childTimeoutSignal(undefined, PRECISE_WARMUP_TIMEOUT_MS);
         const response = await fetch(`${supabaseUrl}/functions/v1/extract`, {
           method: 'POST',
           signal: warmupSignal.signal,
           headers: {
             Authorization: `Bearer ${accessToken}`,
+            'x-rf-device-id': deviceId,
             apikey: supabaseAnonKey,
             'Content-Type': 'application/json',
           },
@@ -551,6 +573,7 @@ export const supabaseExtractClient: ExtractClient = {
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const supabaseAnonKey = env.supabaseAnonKey;
     let accessToken = await getAccessTokenForRequest();
+    const deviceId = await getDeviceId();
 
     if (__DEV__) {
       console.log('[extract] invoking', { environment: env.environment, mockBackend: env.mockBackend, mode, extractionMode });
@@ -604,6 +627,7 @@ export const supabaseExtractClient: ExtractClient = {
             signal: attemptSignal.signal,
             headers: {
               Authorization: `Bearer ${accessToken}`,
+              'x-rf-device-id': deviceId,
               apikey: supabaseAnonKey,
               'Content-Type': 'application/json',
             },
@@ -756,6 +780,7 @@ export const supabaseExtractClient: ExtractClient = {
       });
     }
     const completion = (async (): Promise<ExtractCompletedAck> => {
+      if (forceB5OfflineTransport) throw new Error('The internet connection appears to be offline');
       const response = await FileSystem.uploadAsync(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         httpMethod: 'POST',
@@ -773,7 +798,9 @@ export const supabaseExtractClient: ExtractClient = {
         },
         headers: {
           Authorization: `Bearer ${accessToken}`,
+          'x-rf-device-id': deviceId,
           apikey: supabaseAnonKey,
+          ...(forceB5ProviderFailure ? { 'x-rf-force-provider-failure': '1' } : {}),
         },
       });
 
@@ -817,7 +844,19 @@ export const supabaseExtractClient: ExtractClient = {
           rejected: data.rejected === true,
         });
       }
-      if (data.status === 202) throw new Error(data.code ?? 'PROVIDER_DELAY');
+      if (data.status === 202) {
+        const error = new Error(data.code ?? 'PROVIDER_DELAY') as Error & {
+          code?: string;
+          statusCode?: number;
+          receiptId?: string;
+          ackedAt?: string;
+        };
+        error.code = data.code ?? 'PROVIDER_DELAY';
+        error.statusCode = 202;
+        error.receiptId = data.receipt_id;
+        error.ackedAt = data.acked_at;
+        throw error;
+      }
       if (data.rejected || data.result?.is_receipt === false) {
         return { receiptId: data.receipt_id, response: { error: 'not_a_receipt' }, scansRemaining: data.scans_remaining };
       }
@@ -831,7 +870,7 @@ export const supabaseExtractClient: ExtractClient = {
         response: {
           date: data.result?.txn_date ?? '',
           store: data.result?.merchant ?? '',
-          items: data.result?.line_items.map((item) => `${item.name}  ${(Number(item.amount) || 0).toFixed(2)}`) ?? [],
+          items: data.result?.line_items ?? [],
           currency: data.result?.currency ?? 'USD',
           total: data.result?.total ?? 0,
           category: data.result?.suggested_category ?? 'Miscellaneous',
@@ -863,6 +902,7 @@ export const supabaseImageBackupClient: ImageBackupClient = {
     const env = getFoundationEnv();
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const accessToken = await getAccessTokenForRequest();
+    const deviceId = await getDeviceId();
 
     const response = await FileSystem.uploadAsync(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
       uploadType: FileSystem.FileSystemUploadType.MULTIPART,
@@ -878,7 +918,14 @@ export const supabaseImageBackupClient: ImageBackupClient = {
       },
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        'x-rf-device-id': deviceId,
         apikey: env.supabaseAnonKey,
+        // Only development bundles can opt into the failure drill. The switch
+        // is intentionally absent from release behavior and exercises the
+        // upload_only path without changing Storage permissions or credentials.
+        ...(__DEV__ && process.env.EXPO_PUBLIC_FORCE_IMAGE_BACKUP_FAILURE === '1'
+          ? { 'x-rf-force-storage-failure': '1' }
+          : {}),
       },
     });
 
@@ -894,12 +941,14 @@ export const supabaseCaptureMetricsClient: CaptureMetricsClient = {
     const env = getFoundationEnv();
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const accessToken = await getAccessTokenForRequest();
+    const deviceId = await getDeviceId();
 
     const startedAt = Date.now();
     const response = await fetch(`${env.supabaseUrl}/functions/v1/capture-metrics`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        'x-rf-device-id': deviceId,
         apikey: env.supabaseAnonKey,
         'Content-Type': 'application/json',
       },
@@ -928,6 +977,7 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
     const env = getFoundationEnv();
     if (!env.supabaseUrl || !env.supabaseAnonKey) throw new Error('Supabase env missing');
     const accessToken = await getAccessTokenForRequest();
+    const deviceId = await getDeviceId();
 
     // Bounded on purpose. This request used to have no timeout at all, so a
     // connection that never settled left the local row marked `syncing` with
@@ -941,6 +991,7 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
+          'x-rf-device-id': deviceId,
           apikey: env.supabaseAnonKey,
           'Content-Type': 'application/json',
         },

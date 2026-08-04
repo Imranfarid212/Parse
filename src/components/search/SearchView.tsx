@@ -15,7 +15,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { GRAY, Toggle } from '@/components/menu/primitives';
 import { FanCarousel, type FanItem } from '@/components/search/FanCarousel';
 import { SleuthDog } from '@/components/search/SleuthDog';
-import { retryBlockedCapture } from '@/lib/receipts/capture';
+import { retryBlockedCapture, retryFailedImageUpload } from '@/lib/receipts/capture';
 import { listRecent } from '@/lib/receipts/store';
 import type { ReceiptRow, ReceiptStatus } from '@/lib/receipts/types';
 import { colors, radius, spacing, typography } from '@/theme/tokens';
@@ -27,6 +27,7 @@ const IN_FLIGHT_STATUSES = new Set<ReceiptStatus>([
   'pending_extract',
   'llm_processing',
   'llm_failed_retryable',
+  'provider_delayed',
   'image_upload_pending',
 ]);
 
@@ -39,6 +40,24 @@ const REFRESH_WHILE_IN_FLIGHT_MS = 2_500;
  * outright, with nothing shown.
  */
 const ACTIONABLE_STATUSES = new Set<ReceiptStatus>(['blocked_quota', 'llm_failed_final']);
+const IMAGE_BACKUP_IN_FLIGHT = new Set<ReceiptRow['imageSyncStatus']>([
+  'pending_upload',
+  'uploading',
+  'upload_failed',
+]);
+
+/**
+ * A receipt whose extraction succeeded but whose photo never reached Storage.
+ *
+ * A second axis from `status`, not a third member of the set above: these rows
+ * are otherwise fine — fields extracted, receipt saved — so their status says
+ * `synced` and nothing about them looks wrong. Under DL-002 the device holds the
+ * only copy of that photo, so this is exactly the case the user has to be told
+ * about. It was written in one place and read in none; the row sat there looking
+ * complete with its photo going nowhere.
+ */
+const imageUploadFailed = (row: ReceiptRow) => row.imageSyncStatus === 'upload_failed_final';
+const imageBackupInFlight = (row: ReceiptRow) => IMAGE_BACKUP_IN_FLIGHT.has(row.imageSyncStatus);
 
 const formatTotal = (row: ReceiptRow) => {
   const fields = row.fields;
@@ -50,7 +69,7 @@ const formatTotal = (row: ReceiptRow) => {
 const receiptTitle = (row: ReceiptRow) => {
   const store = row.fields?.store?.trim();
   if (store) return store;
-  if (row.status === 'llm_failed_retryable' || row.status === 'pending_extract') return 'Processing receipt';
+  if (row.status === 'llm_failed_retryable' || row.status === 'pending_extract' || row.status === 'provider_delayed') return 'Processing receipt';
   return 'Receipt';
 };
 
@@ -72,6 +91,7 @@ const STATUS_LABELS: Record<ReceiptStatus, string> = {
   pending_extract: 'Waiting to retry',
   llm_processing: 'Processing…',
   llm_failed_retryable: 'Waiting to retry',
+  provider_delayed: 'Processing…',
   llm_failed_final: 'Could not be processed',
   blocked_quota: 'Out of scans',
   user_confirmation_pending: 'Needs review',
@@ -84,6 +104,12 @@ const STATUS_LABELS: Record<ReceiptStatus, string> = {
 };
 
 const receiptMeta = (row: ReceiptRow) => {
+  // Said plainly, and said even when the row has fields to show — the whole
+  // point is that a row with a failed photo upload otherwise looks finished.
+  if (imageUploadFailed(row)) return 'Photo not backed up';
+  if (row.imageSyncStatus === 'missing_local_file') return 'Photo unavailable';
+  if (row.imageSyncStatus === 'upload_failed') return 'Photo backup will retry';
+  if (imageBackupInFlight(row)) return 'Backing up photo';
   const parts = [row.fields?.date, row.fields?.category].filter(Boolean);
   return parts.length > 0 ? parts.join(' • ') : STATUS_LABELS[row.status];
 };
@@ -126,7 +152,7 @@ const searchableText = (row: ReceiptRow) =>
     row.fields?.total,
     row.fields?.category,
     row.fields?.handwritten_notes,
-    ...(row.fields?.items ?? []),
+    ...(row.fields?.items ?? []).map((item) => item.name),
     row.status,
   ]
     .filter((value) => value !== null && value !== undefined)
@@ -169,10 +195,16 @@ export function SearchView({ onOpenPlan }: { onOpenPlan?: () => void } = {}) {
    */
   const onRetryRow = useCallback(
     async (id: string) => {
-      await retryBlockedCapture(id);
+      // Two different failures wear the same button. A failed photo upload has
+      // a perfectly good extraction behind it, so re-running extraction would
+      // spend a scan to re-read a receipt the user already has — it needs the
+      // backup queue, not the extract queue.
+      const row = rows.find((candidate) => candidate.id === id);
+      if (row && imageUploadFailed(row)) await retryFailedImageUpload(id);
+      else await retryBlockedCapture(id);
       await reload();
     },
-    [reload],
+    [reload, rows],
   );
 
   useEffect(() => {
@@ -196,7 +228,10 @@ export function SearchView({ onOpenPlan }: { onOpenPlan?: () => void } = {}) {
     };
   }, [reload]);
 
-  const hasInFlightRows = useMemo(() => rows.some((row) => IN_FLIGHT_STATUSES.has(row.status)), [rows]);
+  const hasInFlightRows = useMemo(
+    () => rows.some((row) => IN_FLIGHT_STATUSES.has(row.status) || imageBackupInFlight(row)),
+    [rows],
+  );
 
   // Reconnecting starts the retries; it does not finish them. Poll while any
   // row is still in flight so the result lands on its own, and stop the moment
@@ -320,7 +355,8 @@ function ReceiptListRow({
   onUpgrade?: () => void;
 }) {
   const badge = duplicateBadgeLabel(row, similarDedupeKeys) ?? (softSimilarKeys.has(softSimilarGroupKey(row) ?? '') ? 'Similar receipt' : null);
-  const actionable = ACTIONABLE_STATUSES.has(row.status);
+  const uploadFailed = imageUploadFailed(row);
+  const actionable = ACTIONABLE_STATUSES.has(row.status) || uploadFailed;
   return (
     <View style={styles.listRow}>
       <View style={styles.listIcon}>
@@ -338,7 +374,7 @@ function ReceiptListRow({
         <Text style={styles.listMeta} numberOfLines={1}>{receiptMeta(row)}</Text>
         {actionable && (
           <View style={styles.actionRow}>
-            {row.status === 'blocked_quota' && onUpgrade && (
+            {row.status === 'blocked_quota' && !uploadFailed && onUpgrade && (
               <Pressable style={styles.actionPrimary} onPress={onUpgrade} hitSlop={6}>
                 <Text style={styles.actionPrimaryText}>Upgrade</Text>
               </Pressable>

@@ -60,12 +60,6 @@ function prettyDate(iso: string | null): string {
   return `${d} ${months[m - 1]} ${y}`;
 }
 
-function parseItem(line: string): { name: string; price: string } {
-  const m = line.match(/^(.*?)[\s]+(?:[A-Z]{3}\s*)?[$₹€£¥]?(\d[\d,]*\.\d{2})$/);
-  if (!m) return { name: line.trim(), price: '' };
-  return { name: m[1].trim(), price: m[2] };
-}
-
 function Placeholder({ width, height, s }: { width: number | `${number}%`; height: number; s: number }) {
   return <View style={{ width, height: height * s, borderRadius: 5 * s, backgroundColor: FAINT }} />;
 }
@@ -130,18 +124,13 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
                 </>
               ) : (
                 <>
-                  {shown.map((line, i) => {
-                    const { name, price } = parseItem(line);
+                  {shown.map((item, i) => {
                     return (
-                      <View key={`${line}-${i}`} style={styles.itemRow}>
+                      <View key={`${item.name}-${i}`} style={styles.itemRow}>
                         <Text numberOfLines={1} style={[styles.itemName, { fontSize: 14 * s }]}>
-                          {name}
+                          {item.qty !== 1 ? `${item.qty} × ` : ''}{item.name}
                         </Text>
-                        {price ? (
-                          <Text style={[styles.itemPrice, { fontSize: 14 * s }]}>
-                            {money(Number(price.replace(/,/g, '')) || 0, currency)}
-                          </Text>
-                        ) : null}
+                        <Text style={[styles.itemPrice, { fontSize: 14 * s }]}>{money(item.amount, currency)}</Text>
                       </View>
                     );
                   })}

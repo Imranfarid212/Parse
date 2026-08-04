@@ -13,8 +13,10 @@ import {
   InstrumentSans_700Bold,
   InstrumentSans_600SemiBold_Italic,
 } from '@expo-google-fonts/instrument-sans';
-import { AuthProvider } from '@/lib/auth/auth-context';
+import { AuthProvider, useAuth } from '@/lib/auth/auth-context';
 import { purgeAbandonedCaptures, retryPending } from '@/lib/receipts/capture';
+import { syncFromServer } from '@/lib/receipts/server-sync';
+import { countProviderDelayed } from '@/lib/receipts/store';
 import { colors } from '@/theme/tokens';
 
 SplashScreen.preventAutoHideAsync();
@@ -27,6 +29,50 @@ SplashScreen.preventAutoHideAsync();
  * do is one indexed read against the local store.
  */
 const RETRY_TICK_MS = 20_000;
+const PROVIDER_DELAY_POLL_MS = 2_500;
+
+/** Pulls server-owned B5 jobs while they are visible to the signed-in user. */
+function ProviderDelayPoller() {
+  const auth = useAuth();
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    const stop = () => {
+      if (!timer.current) return;
+      clearInterval(timer.current);
+      timer.current = null;
+    };
+    const pullIfNeeded = async () => {
+      if (inFlight.current || !auth.user?.id) return;
+      if ((await countProviderDelayed()) === 0) {
+        stop();
+        return;
+      }
+      inFlight.current = true;
+      try {
+        await syncFromServer(auth.user.id, auth.categories);
+      } catch (error) {
+        if (__DEV__) console.warn('[b5] pending receipt sync failed', error);
+      } finally {
+        inFlight.current = false;
+      }
+    };
+    const start = () => {
+      if (!auth.user?.id || timer.current) return;
+      void pullIfNeeded();
+      timer.current = setInterval(() => void pullIfNeeded(), PROVIDER_DELAY_POLL_MS);
+    };
+    const appState = AppState.addEventListener('change', (state) => (state === 'active' ? start() : stop()));
+    if (AppState.currentState === 'active') start();
+    return () => {
+      appState.remove();
+      stop();
+    };
+  }, [auth.categories, auth.user?.id]);
+
+  return null;
+}
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
@@ -82,6 +128,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AuthProvider>
+          <ProviderDelayPoller />
           <Stack
             screenOptions={{
               headerShown: false,

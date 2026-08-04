@@ -1005,6 +1005,10 @@ export type Database = {
           out_remaining: number
         }[]
       }
+      claim_user_device: {
+        Args: { p_device_id: string; p_takeover?: boolean }
+        Returns: { out_status: string }[]
+      }
       complete_onboarding: {
         Args: {
           selected_category_ids: number[]
@@ -1012,6 +1016,10 @@ export type Database = {
           selected_default_currency?: string
         }
         Returns: undefined
+      }
+      assert_active_device: {
+        Args: { p_device_id: string; p_user_id: string }
+        Returns: boolean
       }
       health_check: { Args: never; Returns: number }
       refresh_receipt_search_text: {
@@ -1754,4 +1762,3 @@ export const Constants = {
     },
   },
 } as const
-
