@@ -33,9 +33,15 @@
   },
   "b7": {
     "name": "Export",
-    "state": "in_progress",
+    "state": "passed",
     "evidence": "gates/report-b7.json",
-    "note": "5/5 local: builders and job runner under Deno, job lifecycle against a live database, and a full seed-export-download-diff run including the 1,000-receipt and chunked-images cases. Flips to passed once the export function is deployed to staging and a mixed-currency file is opened on-device."
+    "integration_point": {
+      "test": "Mixed-currency export opened in Excel and a PDF reader on a physical device",
+      "result": "passed",
+      "confirmed": "one sheet per currency in Excel; per-currency sections with subtotals in the PDF; no receipt ids in either",
+      "tester": "IncendioLabs",
+      "date": "2026-08-06"
+    }
   },
   "b8": {
     "name": "Monetization + deletion",

@@ -45,24 +45,6 @@ export type ExtractionResult = {
 
 export type ReceiptView = 'card' | 'list';
 
-/**
- * The projection every export file is built from. One shape for all three
- * artifacts so the workbook, the statement and the images PDF can never
- * disagree about which receipts were in the export.
- */
-export type ExportReceiptRow = {
-  id: string;
-  txn_date: string | null;
-  merchant: string | null;
-  category_name: string | null;
-  currency: string;
-  total: number;
-  notes: string | null;
-  image_path: string | null;
-  created_at: string;
-  line_items: ExtractionLineItem[];
-};
-
 export type ExportArtifact = {
   kind: 'workbook' | 'statement' | 'images';
   file_name: string;

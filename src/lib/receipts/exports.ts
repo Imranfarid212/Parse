@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Localization from 'expo-localization';
 
 import type { ExportArtifact, ExportJob, SearchQuery } from '@/../packages/contracts/src';
-import { EXPORT_SIGNED_URL_TTL_SECONDS } from '@/../packages/contracts/src';
+import { EXPORT_SIGNED_URL_TTL_SECONDS, exportRequestSchema } from '@/../packages/contracts/src';
 import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
 
 export type ExportFormat = 'xlsx' | 'pdf';
@@ -69,14 +69,21 @@ function toExportJob(row: Record<string, unknown>): ExportJob {
 export async function startExport(input: StartExportInput): Promise<ExportJob> {
   if (!isSupabaseConfigured) throw new Error('Exports need a signed-in account.');
 
-  const { data, error } = await supabase.functions.invoke('export', {
-    body: {
-      filters: input.filters ?? {},
-      format: input.format,
-      include_images: input.include_images,
-      timezone: deviceTimeZone(),
-    },
+  // Validated against the shared contract before it leaves the device, so a
+  // malformed request is a message here rather than a 400 after a round trip.
+  // This is the same schema the function's hand-written validator is reviewed
+  // against — the server cannot run zod, so this is where it actually runs.
+  const parsed = exportRequestSchema.safeParse({
+    filters: input.filters ?? {},
+    format: input.format,
+    include_images: input.include_images,
+    timezone: deviceTimeZone(),
   });
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? 'These export settings are not valid.');
+  }
+
+  const { data, error } = await supabase.functions.invoke('export', { body: parsed.data });
 
   if (error) {
     // functions.invoke folds any non-2xx into an error; read the body so the

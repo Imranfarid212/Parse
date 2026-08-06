@@ -180,19 +180,18 @@ export const exportJobSchema = z.object({
  * export is async by design (Blueprint §12): the call returns the job, and the
  * files arrive over Realtime on export_jobs. There is no 200-with-file variant
  * to fall back to, so the client only ever has one shape to handle.
+ *
+ * Not parsed at runtime: the server cannot run zod (no bare-specifier
+ * resolution under Deno) and the client would have to reconcile PostgREST's
+ * offset timestamps to gain nothing the screen does not already handle. It is
+ * kept as the written description of what the endpoint returns, which the
+ * function's own shape is reviewed against.
  */
 export const exportResponseSchema = z.union([
   z.object({ status: z.literal(202), job: exportJobSchema }),
   z.object({ status: z.literal(400), code: z.literal('VALIDATION_FAILED'), message: z.string() }),
   z.object({ status: z.literal(429), code: z.literal('RATE_LIMITED') }),
 ]);
-
-/** A download link is minted on demand; it is never stored in the jobs table. */
-export const exportDownloadSchema = z.object({
-  file_path: z.string().min(1),
-  signed_url: z.string().min(1),
-  expires_at: z.string().datetime(),
-});
 
 export const referralRedeemSchema = z.object({
   code: z.string().length(6),

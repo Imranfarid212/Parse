@@ -131,12 +131,24 @@ Staging found two things worth knowing, both fixed (DL-005):
   earlier keeps serving after the object is deleted. The expiry assertions now
   test the token's own expiry and Storage's authoritative view instead.
 
-## What is left before B7 flips to passed
+## Integration point — passed
 
-1. **The manual integration step the playbook asks for**: open a mixed-currency
-   xlsx in Excel and the statement PDF in a reader on-device, and confirm the
-   share sheet saves a file. Record tester and date in the gate report.
-2. **Flip `gates/phases.json`** b7 to `passed` on a green gate workflow.
+Confirmed on a physical device on 2026-08-06 (IncendioLabs): a mixed-currency
+export opened in Excel with one sheet per currency, the statement PDF opened
+with per-currency sections and their subtotals, and no receipt ids in either.
+`gates/phases.json` records it alongside the b7 state.
+
+Remaining to close the phase in the playbook's terms: squash-merge to `main`.
+
+## Contracts
+
+The phase-boundary rule is that contracts hold no unused drafts. Four were
+removed at the end of B7 — `exportRequestFixture`, `exportReceiptRowsFixture`,
+the `ExportReceiptRow` type and `exportDownloadSchema` — all invented during the
+build and never consumed. `exportRequestSchema` gained a real consumer instead:
+the client validates against it before invoking the function, which is where it
+can actually run, since the server has no zod. `exportResponseSchema` is kept as
+the written description of the endpoint and is documented as not parsed.
 
 ## Things a reader should know
 
