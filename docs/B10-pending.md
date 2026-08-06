@@ -44,9 +44,14 @@ row younger than the cutoff survives a purge that removes an older one.
 
 The statement and images PDFs embed a subset of Noto Sans covering Latin, Latin
 Extended, Greek, Cyrillic, punctuation and currency symbols. A merchant name
-outside those scripts renders as the font's missing-glyph box — `▯▯▯` where the
-name should be. The export does not fail, the totals and dates are right, and
-every other field is fine; the name is simply unreadable.
+outside those scripts **renders as nothing** — the cell is blank. Verified, not
+assumed: a statement built with `ローソン 渋谷店` and `रिलायंस फ्रेश` produces rows with
+correct dates, categories and amounts and an empty Merchant column.
+
+Note this is worse than the usual missing-glyph behaviour. A `▯` box at least
+says "there is a character here I cannot draw"; a blank cell reads as "this
+receipt has no merchant", which is a different and wrong statement. Whatever
+else B10 does here, the blank is the part that misleads.
 
 Affected: Japanese, Chinese, Korean, Devanagari and other Indic scripts, Arabic,
 Hebrew, Thai. That is a real slice of a global launch, and receipts are exactly
@@ -62,6 +67,10 @@ combined).
 
 **Options, roughly in order of appeal:**
 
+0. Cheapest, and worth doing even alongside a real fix: detect that a string
+   cannot be represented by the embedded font and draw a visible placeholder
+   instead of nothing — the receipt id, or an explicit marker. Hours, not days,
+   and it converts a silent blank into an honest gap.
 1. Detect the scripts present in a given export and embed only the font(s) those
    rows need, per run. Most exports stay small; a Japanese export carries a
    Japanese font. Needs per-script font assets available to the function.
