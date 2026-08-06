@@ -68,10 +68,12 @@ includes(money, 'toMinorUnits', 'money is summed in integer minor units');
 includes(money, 'inside the ${group.currency} group', 'a mixed-currency sum throws rather than rounding');
 // The workbook shape after the B7 revision (DL-006): one sheet per currency,
 // no subtotal rows, no line-items sheet, no receipt ids.
-includes(workbook, 'book_append_sheet(workbook, currencySheet(group.rows), group.currency)', 'each currency gets its own sheet');
+includes(workbook, 'currencySheet(group.rows, group.currency), group.currency', 'each currency gets its own sheet');
 excludes(workbook, 'Subtotal', 'per-currency sheets make subtotal rows unnecessary');
 excludes(workbook, "'Line items'", 'line items are not exported');
 excludes(workbook, 'Receipt ID', 'receipt ids are not exported');
+includes(workbook, "`Amount (${currency})`", 'the currency qualifies the amounts rather than repeating in a column');
+excludes(workbook, "'Currency',", 'a sheet named for its currency does not repeat it in a column');
 includes(workbook, "HEADER_FILL = 'D8E4BC'", 'the header row carries the olive fill');
 includes(workbook, 'font: { bold: true }', 'the header row is bold');
 includes(workbook, "z = DATE_FORMAT", 'dates are written as dates, formatted dd/mm/yyyy');

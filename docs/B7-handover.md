@@ -43,8 +43,9 @@ reason a combined total is absent.
 **File shapes** (revised 2026-08-06, DL-006):
 
 - **xlsx** — one sheet per currency, named for it. Columns are Date, Merchant,
-  Category, Currency, Amount, Notes; the header row is bold on `D8E4BC` with
-  filter dropdowns. Dates are real date cells shown `dd/mm/yyyy`, amounts are
+  Category, Amount, Notes; the currency qualifies the amount header —
+  `Amount (USD)` — rather than repeating in a column the sheet name already
+  states. The header row is bold on `D8E4BC` with filter dropdowns. Dates are real date cells shown `dd/mm/yyyy`, amounts are
   real numbers shown `0.00`. No receipt ids, no line items, no subtotal rows.
 - **PDF statement** — no cover title. A section per currency, per-category totals
   inside it, table headers on the same olive fill. Dates `dd/mm/yyyy`; the
@@ -172,4 +173,5 @@ the written description of the endpoint and is documented as not parsed.
   that fails to load turns every PDF export into a 500.
 - **Known gap:** merchant names in CJK, Indic or Arabic scripts render as the
   font's missing-glyph box in PDFs. Latin, Latin Extended, Greek and Cyrillic are
-  covered. Recorded in DL-005 as a v1.1 item.
+  covered. Recorded in DL-005, and carried forward in `docs/B10-pending.md`
+  alongside export-job retention.

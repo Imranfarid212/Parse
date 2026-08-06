@@ -63,6 +63,12 @@ poor trade.
   text, so a column still sorts as dates. They are built from local components:
   the writer converts a Date to an Excel serial relative to local midnight, so a
   UTC-parsed date carried a spurious time-of-day that varied by host.
+- **No Currency column.** The sheet is named for its currency, so a column
+  repeating it on every row says nothing. The code moved into the amount header
+  — `Amount (USD)` — which keeps it attached to the numbers it qualifies, so a
+  row copied out of the sheet still sits under a heading that names the currency.
+  "Every row on this sheet is this currency" is then asserted by totalling the
+  sheet against SQL rather than by reading a column.
 - **A finished export is not the same as a downloadable one.** Files live seven
   days and are then deleted, which leaves the row `done` with an empty artifact
   list — and the screen was advertising "Ready to download" over nothing. The UI

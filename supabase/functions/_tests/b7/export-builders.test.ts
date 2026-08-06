@@ -120,19 +120,27 @@ Deno.test('workbook puts each currency on its own sheet', () => {
 
   for (const name of book.SheetNames) {
     const rows = XLSX.utils.sheet_to_json(book.Sheets[name], { header: 1, raw: true });
-    assertEquals(rows[0], ['Date', 'Merchant', 'Category', 'Currency', 'Amount', 'Notes']);
+    // The sheet is named for its currency, so the currency lives in the Amount
+    // header rather than in a column repeating it on every row.
+    assertEquals(rows[0], ['Date', 'Merchant', 'Category', `Amount (${name})`, 'Notes']);
     for (const row of rows) {
       const line = row.map((cell) => String(cell ?? '')).join('|');
       assert(!/Subtotal/i.test(line), `${name} still carries a subtotal row: ${line}`);
-    }
-    for (const row of rows.slice(1)) {
-      assertEquals(String(row[3]), name, `${name} contains a row in another currency`);
     }
   }
 
   const usd = XLSX.utils.sheet_to_json(book.Sheets.USD, { header: 1, raw: true });
   assertEquals(usd.length - 1, 2, 'the USD sheet holds both USD receipts');
-  assertEquals(typeof usd[1][4], 'number', 'amounts stay numeric so the sheet can sum them');
+  assertEquals(typeof usd[1][3], 'number', 'amounts stay numeric so the sheet can sum them');
+
+  // Each sheet's amounts must be exactly its own currency's receipts. Without a
+  // currency column, that is asserted by totalling the sheet against SQL.
+  const totals = new Map([['EUR', '18.40'], ['GBP', '41.05'], ['USD', '101.78']]);
+  for (const [currency, expected] of totals) {
+    const rows = XLSX.utils.sheet_to_json(book.Sheets[currency], { header: 1, raw: true }).slice(1);
+    const sum = rows.reduce((minor, row) => minor + Math.round(Number(row[3]) * 100), 0);
+    assertEquals((sum / 100).toFixed(2), expected, `${currency} sheet total`);
+  }
 });
 
 Deno.test('workbook exports no receipt ids and no line items', () => {
@@ -142,6 +150,7 @@ Deno.test('workbook exports no receipt ids and no line items', () => {
   for (const name of book.SheetNames) {
     const rows = XLSX.utils.sheet_to_json(book.Sheets[name], { header: 1, raw: true });
     assert(!rows[0].includes('Receipt ID'), `${name} still has a Receipt ID column`);
+    assert(!rows[0].includes('Currency'), `${name} still has a redundant Currency column`);
     const flat = rows.map((row) => row.map((cell) => String(cell ?? '')).join('|')).join('\n');
     for (const row of ROWS) {
       assert(!flat.includes(row.id), `${name} leaks the receipt id ${row.id}`);
@@ -157,7 +166,7 @@ Deno.test('workbook header row is bold on the olive fill', () => {
 
   for (const name of book.SheetNames) {
     const sheet = book.Sheets[name];
-    for (const address of ['A1', 'B1', 'C1', 'D1', 'E1', 'F1']) {
+    for (const address of ['A1', 'B1', 'C1', 'D1', 'E1']) {
       assertEquals(sheet[address].s?.fgColor?.rgb, HEADER_FILL, `${name}!${address} is missing the header fill`);
     }
   }
@@ -186,9 +195,9 @@ Deno.test('workbook writes real dates and real numbers', () => {
     `date serial ${usd.A2.v} carries a time component`,
   );
 
-  assertEquals(usd.E2.t, 'n');
-  assertEquals(usd.E2.z, '0.00');
-  assertEquals(usd.E2.v, 73.36);
+  assertEquals(usd.D2.t, 'n');
+  assertEquals(usd.D2.z, '0.00');
+  assertEquals(usd.D2.v, 73.36);
 
   // A receipt with no date leaves the cell empty rather than inventing one.
   const undated = XLSX.read(buildWorkbook([{ ...ROWS[0], txn_date: null }]), { type: 'array' });
@@ -200,7 +209,7 @@ Deno.test('an export with no receipts is still a valid workbook', () => {
   const book = XLSX.read(buildWorkbook([]), { type: 'array' });
   assertEquals(book.SheetNames, ['Receipts']);
   const rows = XLSX.utils.sheet_to_json(book.Sheets.Receipts, { header: 1, raw: true });
-  assertEquals(rows[0], ['Date', 'Merchant', 'Category', 'Currency', 'Amount', 'Notes']);
+  assertEquals(rows[0], ['Date', 'Merchant', 'Category', 'Amount ()', 'Notes']);
 });
 
 Deno.test('statement prints a section per currency with per-category totals inside', async () => {

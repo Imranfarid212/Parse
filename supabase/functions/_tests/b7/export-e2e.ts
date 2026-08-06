@@ -275,7 +275,7 @@ async function main() {
       let counted = 0;
       for (const name of book.SheetNames) {
         const sheet = XLSX.utils.sheet_to_json(book.Sheets[name], { header: 1, raw: true });
-        assertEqual(sheet[0], ['Date', 'Merchant', 'Category', 'Currency', 'Amount', 'Notes'], `${name} headers`);
+        assertEqual(sheet[0], ['Date', 'Merchant', 'Category', `Amount (${name})`, 'Notes'], `${name} headers`);
         assertEqual(book.Sheets[name].A1.s?.fgColor?.rgb, 'D8E4BC', `${name} header fill`);
 
         const dataRows = sheet.slice(1);
@@ -284,11 +284,12 @@ async function main() {
 
         // Every row on the sheet is this currency, and the amounts add up to
         // what SQL says — summed here, deliberately not written into the file.
+        // With no currency column, "every row here is this currency" is proven
+        // by the sheet's total matching what SQL says that currency adds up to.
         let minor = 0;
         for (const row of dataRows) {
-          assertEqual(String(row[3]), name, `${name} contains a foreign-currency row`);
-          assertEqual(typeof row[4], 'number', `${name} amount is not numeric`);
-          minor += Math.round(row[4] * 100);
+          assertEqual(typeof row[3], 'number', `${name} amount is not numeric`);
+          minor += Math.round(row[3] * 100);
         }
         assertEqual(money(minor / 100), money(expected.byCurrency.get(name).minor / 100), `${name} total disagrees with SQL`);
 

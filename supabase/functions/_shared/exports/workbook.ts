@@ -23,7 +23,15 @@ import XLSXS from 'https://esm.sh/xlsx-js-style@1.2.0';
 
 import { groupByCurrency } from './money.ts';
 
-const HEADERS = ['Date', 'Merchant', 'Category', 'Currency', 'Amount', 'Notes'];
+/**
+ * No Currency column: the sheet is named for its currency, so repeating it on
+ * every row says nothing. The code moves into the Amount header instead, which
+ * keeps it attached to the numbers it qualifies — so a row copied out of the
+ * sheet still lands next to a heading that names the currency.
+ */
+const headersFor = (currency: string) => ['Date', 'Merchant', 'Category', `Amount (${currency})`, 'Notes'];
+
+const AMOUNT_COLUMN = 3;
 
 /** Light olive green, the classic Excel header fill. */
 export const HEADER_FILL = 'D8E4BC';
@@ -37,7 +45,7 @@ const HEADER_STYLE = {
 const DATE_FORMAT = 'dd/mm/yyyy';
 const AMOUNT_FORMAT = '0.00';
 
-const COLUMN_WIDTHS = [{ wch: 12 }, { wch: 34 }, { wch: 26 }, { wch: 10 }, { wch: 14 }, { wch: 40 }];
+const COLUMN_WIDTHS = [{ wch: 12 }, { wch: 34 }, { wch: 26 }, { wch: 16 }, { wch: 40 }];
 
 export function buildWorkbook(rows) {
   const workbook = XLSXS.utils.book_new();
@@ -46,24 +54,24 @@ export function buildWorkbook(rows) {
   if (groups.length === 0) {
     // An export of nothing is still a file the user can open, and a workbook
     // with no sheets is not a valid workbook.
-    XLSXS.utils.book_append_sheet(workbook, currencySheet([]), 'Receipts');
+    XLSXS.utils.book_append_sheet(workbook, currencySheet([], ''), 'Receipts');
   } else {
     for (const group of groups) {
-      XLSXS.utils.book_append_sheet(workbook, currencySheet(group.rows), group.currency);
+      XLSXS.utils.book_append_sheet(workbook, currencySheet(group.rows, group.currency), group.currency);
     }
   }
 
   return new Uint8Array(XLSXS.write(workbook, { type: 'array', bookType: 'xlsx', compression: true }));
 }
 
-function currencySheet(rows) {
-  const aoa = [HEADERS];
+function currencySheet(rows, currency: string) {
+  const headers = headersFor(currency || rows[0]?.currency || '');
+  const aoa = [headers];
   for (const row of rows) {
     aoa.push([
       toDate(row.txn_date),
       row.merchant ?? '',
       row.category_name ?? 'Miscellaneous',
-      row.currency,
       row.total,
       row.notes ?? '',
     ]);
@@ -71,7 +79,7 @@ function currencySheet(rows) {
 
   const sheet = XLSXS.utils.aoa_to_sheet(aoa, { cellDates: true });
 
-  for (let column = 0; column < HEADERS.length; column += 1) {
+  for (let column = 0; column < headers.length; column += 1) {
     const address = XLSXS.utils.encode_cell({ r: 0, c: column });
     if (sheet[address]) sheet[address].s = HEADER_STYLE;
   }
@@ -80,7 +88,7 @@ function currencySheet(rows) {
     const rowNumber = index + 1;
     const dateCell = sheet[XLSXS.utils.encode_cell({ r: rowNumber, c: 0 })];
     if (dateCell && dateCell.t === 'd') dateCell.z = DATE_FORMAT;
-    const amountCell = sheet[XLSXS.utils.encode_cell({ r: rowNumber, c: 4 })];
+    const amountCell = sheet[XLSXS.utils.encode_cell({ r: rowNumber, c: AMOUNT_COLUMN })];
     if (amountCell) amountCell.z = AMOUNT_FORMAT;
   }
 
@@ -88,7 +96,7 @@ function currencySheet(rows) {
   // Filter dropdowns on the header row. Frozen panes are deliberately not set:
   // the writer ignores them silently, and configuration that does nothing is
   // worse than none.
-  sheet['!autofilter'] = { ref: `A1:F${Math.max(rows.length + 1, 1)}` };
+  sheet['!autofilter'] = { ref: `A1:E${Math.max(rows.length + 1, 1)}` };
   return sheet;
 }
 
