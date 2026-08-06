@@ -20,13 +20,21 @@ export function EditSheet({
   onChange,
   onDone,
   onRetake,
+  showRetake = true,
+  saving = false,
+  error,
+  categoryOptions = CATEGORIES,
 }: {
   fields: ReceiptFields;
   /** True in One-click: the row is already saved, so retake deletes it. */
   destructiveRetake: boolean;
   onChange: (f: ReceiptFields) => void;
   onDone: () => void;
-  onRetake: () => void;
+  onRetake?: () => void;
+  showRetake?: boolean;
+  saving?: boolean;
+  error?: string | null;
+  categoryOptions?: readonly Category[];
 }) {
   const [totalText, setTotalText] = useState(fields.total.toFixed(2));
   const scrollRef = useRef<ScrollView>(null);
@@ -93,7 +101,7 @@ export function EditSheet({
 
         <Field label="Category">
           <View style={styles.chips}>
-            {CATEGORIES.map((c) => {
+            {categoryOptions.map((c) => {
               const on = c === fields.category;
               return (
                 <Pressable key={c} onPress={() => set('category', c as Category)} style={[styles.chip, on && styles.chipOn]}>
@@ -117,15 +125,18 @@ export function EditSheet({
         </Field>
 
         <View style={styles.actions}>
-          <Pressable onPress={onRetake} style={styles.retake} hitSlop={8}>
-            <Feather name="rotate-ccw" size={15} color="#B42318" />
-            <Text style={styles.retakeText}>{destructiveRetake ? 'Retake (deletes this)' : 'Retake'}</Text>
-          </Pressable>
+          {showRetake && onRetake ? (
+            <Pressable onPress={onRetake} style={styles.retake} hitSlop={8} disabled={saving}>
+              <Feather name="rotate-ccw" size={15} color="#B42318" />
+              <Text style={styles.retakeText}>{destructiveRetake ? 'Retake (deletes this)' : 'Retake'}</Text>
+            </Pressable>
+          ) : <View style={{ flex: 1 }} />}
 
-          <Pressable onPress={onDone} style={styles.done}>
-            <Text style={styles.doneText}>Done</Text>
+          <Pressable onPress={onDone} style={[styles.done, saving && { opacity: 0.55 }]} disabled={saving}>
+            <Text style={styles.doneText}>{saving ? 'Saving…' : 'Done'}</Text>
           </Pressable>
         </View>
+        {error ? <Text selectable style={styles.error}>{error}</Text> : null}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -267,4 +278,5 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   doneText: { fontFamily: fontFamily.semibold, fontSize: 15, color: colors.ctaText },
+  error: { marginTop: spacing.sm, fontFamily: fontFamily.regular, fontSize: 13, color: '#B42318', textAlign: 'right' },
 });

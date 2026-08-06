@@ -689,6 +689,7 @@ export type Database = {
           merchant: string | null
           notes: string | null
           provider: Database["public"]["Enums"]["provider"] | null
+          revision: number
           search_text: unknown
           status: Database["public"]["Enums"]["receipt_status"]
           total: number | null
@@ -714,6 +715,7 @@ export type Database = {
           merchant?: string | null
           notes?: string | null
           provider?: Database["public"]["Enums"]["provider"] | null
+          revision?: number
           search_text?: unknown
           status?: Database["public"]["Enums"]["receipt_status"]
           total?: number | null
@@ -739,6 +741,7 @@ export type Database = {
           merchant?: string | null
           notes?: string | null
           provider?: Database["public"]["Enums"]["provider"] | null
+          revision?: number
           search_text?: unknown
           status?: Database["public"]["Enums"]["receipt_status"]
           total?: number | null
@@ -1025,6 +1028,76 @@ export type Database = {
       refresh_receipt_search_text: {
         Args: { target_receipt_id: string }
         Returns: undefined
+      }
+      search_receipts: {
+        Args: {
+          p_text?: string | null
+          p_date_from?: string | null
+          p_date_to?: string | null
+          p_category_ids?: number[] | null
+          p_amount_min?: number | null
+          p_amount_max?: number | null
+          p_amount_currency?: string | null
+          p_limit?: number
+          p_offset?: number
+        }
+        Returns: {
+          id: string
+          capture_id: string
+          status: Database["public"]["Enums"]["receipt_status"]
+          merchant: string | null
+          txn_date: string | null
+          currency: string
+          total: number | null
+          category_id: number | null
+          category_name: string | null
+          image_path: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+          line_items: Json
+          search_rank: number
+        }[]
+      }
+      update_receipt_with_items: {
+        Args: {
+          p_receipt_id: string
+          p_merchant: string
+          p_txn_date: string | null
+          p_currency: string
+          p_total: number
+          p_category_id: number
+          p_notes: string | null
+          p_items: Json
+        }
+        Returns: string
+      }
+      update_receipt_with_items_v2: {
+        Args: {
+          p_operation_id: string
+          p_expected_revision: number | null
+          p_receipt_id: string
+          p_merchant: string
+          p_txn_date: string | null
+          p_currency: string
+          p_total: number
+          p_category_id: number
+          p_notes: string | null
+          p_items: Json
+        }
+        Returns: number
+      }
+      soft_delete_receipt: {
+        Args: { p_receipt_id: string }
+        Returns: string
+      }
+      restore_receipt: {
+        Args: { p_receipt_id: string }
+        Returns: string
+      }
+      purge_soft_deleted_receipts: {
+        Args: { p_before?: string; p_limit?: number; p_dry_run?: boolean }
+        Returns: { receipt_id: string; image_path: string | null }[]
       }
       refund_scan: {
         Args: { p_capture_id: string; p_user_id: string }

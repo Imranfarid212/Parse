@@ -56,7 +56,12 @@
           "photosPermission": "Parse accesses your photo library so you can pick a receipt image."
         }
       ],
-      "expo-sqlite",
+      [
+        "expo-sqlite",
+        {
+          "enableFTS": true
+        }
+      ],
       "expo-image",
       "expo-status-bar",
       "expo-web-browser",

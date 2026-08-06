@@ -1,476 +1,540 @@
-/**
- * SearchView — the Search tab content. A header row (a "filter" pill on the
- * left, a Card/List view toggle on the right), a search bar, then the results:
- * the fan carousel ("Card view") or a plain list ("List view"). When a query
- * matches nothing, the empty state shows instead. Rule: when results
- * exceed 7, the system forces List view and disables the toggle (the card fan
- * shows the latest 5 when there are more receipts.
- */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import * as Network from 'expo-network';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import { DateTimePicker } from '@expo/ui/community/datetime-picker';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
+import type { ReceiptView, SearchQuery } from '@/../packages/contracts/src';
+import { searchQuerySchema } from '@/../packages/contracts/src';
 import { GRAY, Toggle } from '@/components/menu/primitives';
+import { ReceiptEditorModal } from '@/components/receipt/receipt-editor-modal';
 import { FanCarousel, type FanItem } from '@/components/search/FanCarousel';
 import { SleuthDog } from '@/components/search/SleuthDog';
-import { retryBlockedCapture, retryFailedImageUpload } from '@/lib/receipts/capture';
-import { listRecent } from '@/lib/receipts/store';
-import type { ReceiptRow, ReceiptStatus } from '@/lib/receipts/types';
-import { colors, radius, spacing, typography } from '@/theme/tokens';
+import { useAuth } from '@/lib/auth/auth-context';
+import {
+  restoreManagedReceipt,
+  softDeleteManagedReceipt,
+  updateManagedReceipt,
+  type ManagedReceipt,
+} from '@/lib/receipts/management';
+import * as receiptStore from '@/lib/receipts/store';
+import { useRealtimeReceipts } from '@/lib/receipts/use-realtime-receipts';
+import { isCategory, type ReceiptFields } from '@/lib/receipts/types';
+import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
-const MAX_FAN = 5;
+const SEARCH_DEBOUNCE_MS = 300;
+const UNDO_WINDOW_MS = 5_000;
 
-/** Rows the retry queue is still working on — while any are listed, re-read. */
-const IN_FLIGHT_STATUSES = new Set<ReceiptStatus>([
-  'pending_extract',
-  'llm_processing',
-  'llm_failed_retryable',
-  'provider_delayed',
-  'image_upload_pending',
-]);
+type DateFilterKey = 'date_from' | 'date_to';
 
-const REFRESH_WHILE_IN_FLIGHT_MS = 2_500;
+type Filters = Omit<SearchQuery, 'text' | 'view'>;
 
-/**
- * Rows that are going nowhere on their own but still hold the user's photo, so
- * there has to be a way back. Without an action these read as a dead end — and
- * blocked_quota used to be worse than a dead end: the capture was deleted
- * outright, with nothing shown.
- */
-const ACTIONABLE_STATUSES = new Set<ReceiptStatus>(['blocked_quota', 'llm_failed_final']);
-const IMAGE_BACKUP_IN_FLIGHT = new Set<ReceiptRow['imageSyncStatus']>([
-  'pending_upload',
-  'uploading',
-  'upload_failed',
-]);
+const formatTotal = (receipt: ManagedReceipt) => `${receipt.fields.currency} ${receipt.fields.total.toFixed(2)}`;
+const filtersActive = (filters: Filters) =>
+  Boolean(filters.date_from || filters.date_to || filters.category_ids?.length || filters.amount_min !== undefined || filters.amount_max !== undefined);
 
-/**
- * A receipt whose extraction succeeded but whose photo never reached Storage.
- *
- * A second axis from `status`, not a third member of the set above: these rows
- * are otherwise fine — fields extracted, receipt saved — so their status says
- * `synced` and nothing about them looks wrong. Under DL-002 the device holds the
- * only copy of that photo, so this is exactly the case the user has to be told
- * about. It was written in one place and read in none; the row sat there looking
- * complete with its photo going nowhere.
- */
-const imageUploadFailed = (row: ReceiptRow) => row.imageSyncStatus === 'upload_failed_final';
-const imageBackupInFlight = (row: ReceiptRow) => IMAGE_BACKUP_IN_FLIGHT.has(row.imageSyncStatus);
-
-const formatTotal = (row: ReceiptRow) => {
-  const fields = row.fields;
-  if (!fields) return '...';
-  const amount = Number.isFinite(fields.total) ? fields.total.toFixed(2) : '0.00';
-  return `${fields.currency || 'USD'} ${amount}`;
+const toLocalDate = (isoDate?: string) => {
+  if (!isoDate) return undefined;
+  const [year, month, day] = isoDate.split('-').map(Number);
+  if (!year || !month || !day) return undefined;
+  return new Date(year, month - 1, day, 12);
 };
 
-const receiptTitle = (row: ReceiptRow) => {
-  const store = row.fields?.store?.trim();
-  if (store) return store;
-  if (row.status === 'llm_failed_retryable' || row.status === 'pending_extract' || row.status === 'provider_delayed') return 'Processing receipt';
-  return 'Receipt';
+const toIsoDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
-/**
- * What a row says before it has any extracted fields. Without this the raw
- * status enum reaches the user — a scan queued offline read "llm failed
- * retryable" on the list, in release builds too.
- *
- * "Waiting to retry" rather than "Waiting for network": the retryable states
- * also cover a slow or 5xx server, so promising connectivity is the fix would
- * sometimes be a lie.
- */
-const STATUS_LABELS: Record<ReceiptStatus, string> = {
-  local_captured: 'Processing…',
-  local_ocr_processing: 'Reading receipt…',
-  local_ocr_done: 'Processing…',
-  image_upload_pending: 'Waiting to retry',
-  image_uploaded: 'Processing…',
-  pending_extract: 'Waiting to retry',
-  llm_processing: 'Processing…',
-  llm_failed_retryable: 'Waiting to retry',
-  provider_delayed: 'Processing…',
-  llm_failed_final: 'Could not be processed',
-  blocked_quota: 'Out of scans',
-  user_confirmation_pending: 'Needs review',
-  extracted: 'Needs review',
-  confirmed_local: 'Saved',
-  result_sync_pending: 'Saving…',
-  synced: 'Saved',
-  delete_pending: 'Removing…',
-  deleted: 'Removed',
+const today = () => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
 };
 
-const receiptMeta = (row: ReceiptRow) => {
-  // Said plainly, and said even when the row has fields to show — the whole
-  // point is that a row with a failed photo upload otherwise looks finished.
-  if (imageUploadFailed(row)) return 'Photo not backed up';
-  if (row.imageSyncStatus === 'missing_local_file') return 'Photo unavailable';
-  if (row.imageSyncStatus === 'upload_failed') return 'Photo backup will retry';
-  if (imageBackupInFlight(row)) return 'Backing up photo';
-  const parts = [row.fields?.date, row.fields?.category].filter(Boolean);
-  return parts.length > 0 ? parts.join(' • ') : STATUS_LABELS[row.status];
+const formatFilterDate = (isoDate?: string) => {
+  const date = toLocalDate(isoDate);
+  return date?.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) ?? 'Any date';
 };
 
-const duplicateBadgeLabel = (row: ReceiptRow, similarDedupeKeys: Set<string>) => {
-  const key = similarGroupKey(row);
-  if (!row.duplicateOf && (!key || !similarDedupeKeys.has(key))) return null;
-  return row.duplicateMatchStrength === 'strong' ? 'Duplicate receipt' : 'Similar receipt';
-};
+export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => void } = {}) {
+  const auth = useAuth();
+  const [text, setText] = useState('');
+  const [debouncedText, setDebouncedText] = useState('');
+  const [view, setView] = useState<ReceiptView>('card');
+  const [filters, setFilters] = useState<Filters>({});
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [editing, setEditing] = useState<ManagedReceipt | null>(null);
+  const [deleted, setDeleted] = useState<ManagedReceipt | null>(null);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDeletesRef = useRef(new Map<string, Promise<void>>());
 
-const similarGroupKey = (row: ReceiptRow) => {
-  if (row.dedupeKey) return row.dedupeKey;
-  const fields = row.fields;
-  if (!fields?.date || !fields.currency || !Number.isFinite(fields.total) || fields.total <= 0) return null;
-  return [fields.date, fields.currency.toUpperCase(), String(Math.round(fields.total * 100))].join('|');
-};
-
-const normalizeMerchant = (value: string) =>
-  value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\b(pvt|private|ltd|limited|inc|llc|store|market)\b/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-const softSimilarGroupKey = (row: ReceiptRow) => {
-  const fields = row.fields;
-  if (!fields?.store || !fields.currency || !Number.isFinite(fields.total) || fields.total <= 0) return null;
-  const merchant = normalizeMerchant(fields.store);
-  if (!merchant) return null;
-  return [merchant, fields.currency.toUpperCase(), String(Math.round(fields.total * 100))].join('|');
-};
-
-const searchableText = (row: ReceiptRow) =>
-  [
-    row.fields?.store,
-    row.fields?.date,
-    row.fields?.currency,
-    row.fields?.total,
-    row.fields?.category,
-    row.fields?.handwritten_notes,
-    ...(row.fields?.items ?? []).map((item) => item.name),
-    row.status,
-  ]
-    .filter((value) => value !== null && value !== undefined)
-    .join(' ')
-    .toLowerCase();
-
-export function SearchView({ onOpenPlan }: { onOpenPlan?: () => void } = {}) {
-  const { width } = useWindowDimensions();
-  const [query, setQuery] = useState('');
-  const [mode, setMode] = useState<'card' | 'list'>('card');
-  const [rows, setRows] = useState<ReceiptRow[]>([]);
-  const [loaded, setLoaded] = useState(false);
-
-  const aliveRef = useRef(true);
   useEffect(() => {
-    aliveRef.current = true;
+    const timer = setTimeout(() => setDebouncedText(text.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [text]);
+
+  useEffect(() => {
+    void receiptStore.getReceiptViewPreference().then(setView);
     return () => {
-      aliveRef.current = false;
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     };
   }, []);
 
-  const reload = useCallback(async (initial = false) => {
-    try {
-      const recent = await listRecent(50);
-      if (aliveRef.current) setRows(recent);
-    } catch (error) {
-      console.warn('[recents] failed to load local receipts', error);
-      // Only the first read clears the list; a later failure keeps what we have
-      // rather than blanking a screen the user is looking at.
-      if (initial && aliveRef.current) setRows([]);
-    } finally {
-      if (aliveRef.current) setLoaded(true);
-    }
-  }, []);
-
-  /**
-   * Hand a blocked or failed capture back to the queue and re-read, so the row
-   * visibly moves to "Waiting to retry" rather than looking like nothing
-   * happened. The photo is still on the device; that is what makes this work.
-   */
-  const onRetryRow = useCallback(
-    async (id: string) => {
-      // Two different failures wear the same button. A failed photo upload has
-      // a perfectly good extraction behind it, so re-running extraction would
-      // spend a scan to re-read a receipt the user already has — it needs the
-      // backup queue, not the extract queue.
-      const row = rows.find((candidate) => candidate.id === id);
-      if (row && imageUploadFailed(row)) await retryFailedImageUpload(id);
-      else await retryBlockedCapture(id);
-      await reload();
-    },
-    [reload, rows],
+  const query = useMemo<SearchQuery>(
+    () => ({ ...filters, text: debouncedText || undefined, view }),
+    [debouncedText, filters, view],
   );
-
-  useEffect(() => {
-    void reload(true);
-  }, [reload]);
-
-  // The retry queue drains in the background (camera's reconnect flush), so a
-  // row can finish while this view is open. Nothing pushed those changes here,
-  // so a receipt queued offline sat on "Processing receipt" until the view was
-  // reopened. Re-read on the events that move rows.
-  useEffect(() => {
-    const network = Network.addNetworkStateListener((state) => {
-      if (state.isInternetReachable) void reload();
-    });
-    const app = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void reload();
-    });
-    return () => {
-      network.remove();
-      app.remove();
-    };
-  }, [reload]);
-
-  const hasInFlightRows = useMemo(
-    () => rows.some((row) => IN_FLIGHT_STATUSES.has(row.status) || imageBackupInFlight(row)),
-    [rows],
-  );
-
-  // Reconnecting starts the retries; it does not finish them. Poll while any
-  // row is still in flight so the result lands on its own, and stop the moment
-  // none are — this cannot spin on an idle list.
-  useEffect(() => {
-    if (!hasInFlightRows) return undefined;
-    const timer = setInterval(() => void reload(), REFRESH_WHILE_IN_FLIGHT_MS);
-    return () => clearInterval(timer);
-  }, [hasInFlightRows, reload]);
-
-  const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((row) => searchableText(row).includes(q));
-  }, [query, rows]);
-
+  const { receipts, setReceipts, loading, error, reload } = useRealtimeReceipts(query);
   const fanItems = useMemo<FanItem[]>(
-    () => results.slice(0, MAX_FAN).map((row) => ({ id: row.id, total: formatTotal(row) })),
-    [results],
+    () => receipts.map((receipt) => ({
+      id: receipt.id,
+      total: formatTotal(receipt),
+      details: {
+        merchant: receipt.fields.store,
+        date: receipt.fields.date,
+        category: receipt.fields.category,
+        currency: receipt.fields.currency,
+        items: receipt.fields.items.map((item) => ({ name: item.name, amount: item.amount })),
+      },
+    })),
+    [receipts],
   );
-  const similarDedupeKeys = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const row of rows) {
-      const key = similarGroupKey(row);
-      if (!key) continue;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key));
-  }, [rows]);
-  const softSimilarKeys = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const row of rows) {
-      const key = softSimilarGroupKey(row);
-      if (!key) continue;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key));
-  }, [rows]);
 
-  const empty = results.length === 0;
+  const changeView = (next: ReceiptView) => {
+    setView(next);
+    void receiptStore.setReceiptViewPreference(next);
+  };
+
+  const saveReceipt = async (fields: ReceiptFields) => {
+    if (!editing) return;
+    const previous = editing;
+    const optimistic = { ...editing, fields, updatedAt: new Date().toISOString() };
+    setReceipts((current) => current.map((receipt) => (receipt.id === editing.id ? optimistic : receipt)));
+    setEditing(optimistic);
+    try {
+      await updateManagedReceipt(previous, fields, auth.categories);
+    } catch (cause) {
+      setReceipts((current) => current.map((receipt) => (receipt.id === previous.id ? previous : receipt)));
+      setEditing(previous);
+      throw cause;
+    }
+  };
+
+  const deleteReceipt = (receipt: ManagedReceipt) => {
+    Alert.alert('Delete receipt?', 'This receipt will be removed from Search and Recents.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          setReceipts((current) => current.filter((candidate) => candidate.id !== receipt.id));
+          setDeleted(receipt);
+          if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+          undoTimerRef.current = setTimeout(() => setDeleted(null), UNDO_WINDOW_MS);
+          const request = softDeleteManagedReceipt(receipt);
+          pendingDeletesRef.current.set(receipt.id, request);
+          void request
+            .catch((cause) => {
+              if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+              setDeleted(null);
+              setReceipts((current) => current.some((candidate) => candidate.id === receipt.id)
+                ? current
+                : [receipt, ...current].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+              Alert.alert('Could not delete receipt', cause instanceof Error ? cause.message : 'Please try again.');
+            })
+            .finally(() => setTimeout(() => pendingDeletesRef.current.delete(receipt.id), UNDO_WINDOW_MS + 1_000));
+        },
+      },
+    ]);
+  };
+
+  const undoDelete = async () => {
+    if (!deleted) return;
+    const receipt = deleted;
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setDeleted(null);
+    setReceipts((current) => [receipt, ...current].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    const pendingDelete = pendingDeletesRef.current.get(receipt.id);
+    if (pendingDelete) {
+      try {
+        await pendingDelete;
+      } catch {
+        // The delete rollback already restored the optimistic row.
+        return;
+      }
+    }
+    try {
+      await restoreManagedReceipt(receipt);
+      await reload();
+    } catch (cause) {
+      setReceipts((current) => current.filter((candidate) => candidate.id !== receipt.id));
+      Alert.alert('Could not restore receipt', cause instanceof Error ? cause.message : 'Please try again.');
+    }
+  };
 
   return (
     <View style={styles.root}>
-      {/* Header row: filter pill + view toggle */}
-      <View style={[styles.headerRow, { width: width - spacing.lg * 2 }]}>
-        <Pressable style={styles.filterPill} hitSlop={6}>
-          <Text style={styles.filterText}>All Receipts</Text>
-          <Feather name="chevron-down" size={14} color={GRAY[500]} />
+      <View style={styles.headerRow}>
+        <Pressable style={[styles.filterPill, filtersActive(filters) && styles.filterPillActive]} onPress={() => setFiltersOpen(true)} hitSlop={6}>
+          <Feather name="sliders" size={14} color={filtersActive(filters) ? '#FFFFFF' : GRAY[500]} />
+          <Text style={[styles.filterText, filtersActive(filters) && { color: '#FFFFFF' }]}>
+            {filtersActive(filters) ? 'Filtered' : 'All Receipts'}
+          </Text>
         </Pressable>
 
         <View style={styles.viewToggle}>
-          <Feather
-            name={mode === 'card' ? 'grid' : 'list'}
-            size={14}
-            color={GRAY[500]}
-          />
-          <Text style={styles.viewLabel}>{mode === 'card' ? 'Card view' : 'List view'}</Text>
-          <Toggle
-            value={mode === 'card'}
-            onValueChange={(v) => setMode(v ? 'card' : 'list')}
-          />
+          <Feather name={view === 'card' ? 'grid' : 'list'} size={14} color={GRAY[500]} />
+          <Text style={styles.viewLabel}>{view === 'card' ? 'Card view' : 'List view'}</Text>
+          <Toggle value={view === 'card'} onValueChange={(enabled) => changeView(enabled ? 'card' : 'list')} />
         </View>
       </View>
 
-      {/* Search bar */}
-      <View style={[styles.searchBar, { width: width - spacing.lg * 2 }]}>
+      <View style={styles.searchBar}>
         <Ionicons name="search" size={18} color={colors.textSecondary} />
         <TextInput
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search receipts"
+          value={text}
+          onChangeText={setText}
+          placeholder="Merchant, note, or line item description"
           placeholderTextColor={colors.textSecondary}
           style={styles.searchInput}
+          returnKeyType="search"
         />
-        {query.length > 0 && (
-          <Pressable onPress={() => setQuery('')} hitSlop={8}>
+        {text ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={() => setText('')} hitSlop={8}>
             <Ionicons name="close-circle" size={18} color={colors.textSecondary} />
           </Pressable>
+        ) : null}
+      </View>
+
+      <View style={styles.body}>
+        {loading && receipts.length === 0 ? (
+          <View style={styles.center}><ActivityIndicator color={colors.textPrimary} /></View>
+        ) : error && receipts.length === 0 ? (
+          <View style={styles.center}>
+            <Text selectable style={styles.errorText}>{error}</Text>
+            <Pressable style={styles.retryButton} onPress={() => void reload()}><Text style={styles.retryText}>Try again</Text></Pressable>
+          </View>
+        ) : receipts.length === 0 ? (
+          <Animated.View entering={FadeIn.duration(250)} style={styles.center}>
+            <SleuthDog size={220} fadeColor={colors.background} />
+            <Text style={styles.emptyText}>No receipts found</Text>
+          </Animated.View>
+        ) : view === 'card' ? (
+          <View style={styles.fanWrap}>
+            <FanCarousel
+              items={fanItems}
+              onOpenItem={(id) => {
+                const receipt = receipts.find((candidate) => candidate.id === id);
+                if (receipt) setEditing(receipt);
+              }}
+              onDeleteItem={(id) => {
+                const receipt = receipts.find((candidate) => candidate.id === id);
+                if (receipt) deleteReceipt(receipt);
+              }}
+            />
+          </View>
+        ) : (
+          <FlatList
+            data={receipts}
+            keyExtractor={(receipt) => receipt.id}
+            renderItem={({ item }) => <ManagedReceiptRow receipt={item} onEdit={setEditing} onDelete={deleteReceipt} />}
+            contentInsetAdjustmentBehavior="automatic"
+            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }}
+          />
         )}
       </View>
 
-      {/* Body */}
-      <View style={styles.body}>
-        {empty ? (
-          <Animated.View entering={FadeIn.duration(300)} style={styles.emptyWrap}>
-            <SleuthDog size={240} fadeColor={colors.background} />
-            <Text style={styles.emptyText}>{loaded ? 'No receipts found' : 'Loading receipts'}</Text>
-          </Animated.View>
-        ) : mode === 'card' ? (
-          <FanCarousel items={fanItems} />
-        ) : (
-          <ScrollView style={{ alignSelf: 'stretch' }} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
-            {results.map((row) => (
-              <ReceiptListRow
-                key={row.id}
-                row={row}
-                similarDedupeKeys={similarDedupeKeys}
-                softSimilarKeys={softSimilarKeys}
-                onRetry={onRetryRow}
-                onUpgrade={onOpenPlan}
-              />
-            ))}
-          </ScrollView>
-        )}
-      </View>
+      {deleted ? (
+        <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(180)} style={styles.snackbar}>
+          <Text style={styles.snackbarText}>Receipt deleted</Text>
+          <Pressable onPress={() => void undoDelete()} hitSlop={10}><Text style={styles.undoText}>Undo</Text></Pressable>
+        </Animated.View>
+      ) : null}
+
+      <FilterModal
+        visible={filtersOpen}
+        value={filters}
+        categories={auth.categories.filter((category) => auth.selectedCategoryIds.includes(category.id) || category.is_system)}
+        defaultCurrency={auth.profile?.default_currency ?? 'USD'}
+        onClose={() => setFiltersOpen(false)}
+        onApply={(next) => { setFilters(next); setFiltersOpen(false); }}
+      />
+      <ReceiptEditorModal
+        receipt={editing}
+        onClose={() => setEditing(null)}
+        onSave={saveReceipt}
+        categoryOptions={auth.categories
+          .filter((category) => auth.selectedCategoryIds.includes(category.id) || category.is_system)
+          .map((category) => category.name)
+          .filter(isCategory)}
+      />
     </View>
   );
 }
 
-function ReceiptListRow({
-  row,
-  similarDedupeKeys,
-  softSimilarKeys,
-  onRetry,
-  onUpgrade,
-}: {
-  row: ReceiptRow;
-  similarDedupeKeys: Set<string>;
-  softSimilarKeys: Set<string>;
-  onRetry: (id: string) => void;
-  onUpgrade?: () => void;
-}) {
-  const badge = duplicateBadgeLabel(row, similarDedupeKeys) ?? (softSimilarKeys.has(softSimilarGroupKey(row) ?? '') ? 'Similar receipt' : null);
-  const uploadFailed = imageUploadFailed(row);
-  const actionable = ACTIONABLE_STATUSES.has(row.status) || uploadFailed;
+type ReceiptItemProps = { receipt: ManagedReceipt; onEdit: (receipt: ManagedReceipt) => void; onDelete: (receipt: ManagedReceipt) => void };
+
+function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
   return (
-    <View style={styles.listRow}>
-      <View style={styles.listIcon}>
-        <Ionicons name="receipt-outline" size={20} color={colors.textPrimary} />
-      </View>
+    <Pressable style={styles.listRow} onPress={() => onEdit(receipt)}>
+      <View style={styles.listIcon}><Ionicons name="receipt-outline" size={20} color={colors.textPrimary} /></View>
       <View style={styles.listText}>
-        <View style={styles.titleRow}>
-          <Text style={styles.listLabel} numberOfLines={2}>{receiptTitle(row)}</Text>
-          {badge && (
-            <View style={styles.duplicateBadge}>
-              <Text style={styles.duplicateText}>{badge}</Text>
-            </View>
-          )}
-        </View>
-        <Text style={styles.listMeta} numberOfLines={1}>{receiptMeta(row)}</Text>
-        {actionable && (
-          <View style={styles.actionRow}>
-            {row.status === 'blocked_quota' && !uploadFailed && onUpgrade && (
-              <Pressable style={styles.actionPrimary} onPress={onUpgrade} hitSlop={6}>
-                <Text style={styles.actionPrimaryText}>Upgrade</Text>
-              </Pressable>
-            )}
-            <Pressable style={styles.action} onPress={() => onRetry(row.id)} hitSlop={6}>
-              <Text style={styles.actionText}>Try again</Text>
-            </Pressable>
-          </View>
-        )}
+        <Text selectable numberOfLines={1} style={styles.listLabel}>{receipt.fields.store}</Text>
+        <Text selectable numberOfLines={1} style={styles.listMeta}>{[receipt.fields.date, receipt.fields.category].filter(Boolean).join(' • ')}</Text>
       </View>
-      <Text style={styles.listTotal}>{formatTotal(row)}</Text>
+      <Text selectable style={styles.listTotal}>{formatTotal(receipt)}</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${receipt.fields.store}`} onPress={() => onDelete(receipt)} hitSlop={10}>
+        <Ionicons name="trash-outline" size={18} color="#B42318" />
+      </Pressable>
+    </Pressable>
+  );
+}
+
+function FilterModal({ visible, value, categories, defaultCurrency, onClose, onApply }: {
+  visible: boolean;
+  value: Filters;
+  categories: { id: number; name: string }[];
+  defaultCurrency: string;
+  onClose: () => void;
+  onApply: (filters: Filters) => void;
+}) {
+  const [draft, setDraft] = useState<Filters>(value);
+  const [minimum, setMinimum] = useState(value.amount_min?.toString() ?? '');
+  const [maximum, setMaximum] = useState(value.amount_max?.toString() ?? '');
+  const [activeDatePicker, setActiveDatePicker] = useState<DateFilterKey | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const filterScrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    setDraft(value);
+    setMinimum(value.amount_min?.toString() ?? '');
+    setMaximum(value.amount_max?.toString() ?? '');
+    setActiveDatePicker(null);
+    setError(null);
+  }, [value, visible]);
+
+  const toggleCategory = (id: number) => {
+    const selected = draft.category_ids ?? [];
+    setDraft({ ...draft, category_ids: selected.includes(id) ? selected.filter((candidate) => candidate !== id) : [...selected, id] });
+  };
+
+  const apply = () => {
+    const hasAmountRange = Boolean(minimum.trim() || maximum.trim());
+    const next = {
+      ...draft,
+      amount_min: minimum.trim() ? Number(minimum) : undefined,
+      amount_max: maximum.trim() ? Number(maximum) : undefined,
+      amount_currency: hasAmountRange ? (draft.amount_currency || defaultCurrency) : undefined,
+    };
+    const parsed = searchQuerySchema.safeParse(next);
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? 'Check these filters.');
+      return;
+    }
+    onApply(parsed.data);
+  };
+
+  const selectedPickerDate = activeDatePicker === 'date_from'
+    ? toLocalDate(draft.date_from) ?? toLocalDate(draft.date_to) ?? today()
+    : toLocalDate(draft.date_to) ?? today();
+
+  const selectDate = (date: Date) => {
+    if (!activeDatePicker) return;
+    setDraft((current) => ({ ...current, [activeDatePicker]: toIsoDate(date) }));
+    setError(null);
+    if (process.env.EXPO_OS === 'android') setActiveDatePicker(null);
+  };
+
+  const revealAmountFields = () => {
+    requestAnimationFrame(() => filterScrollRef.current?.scrollToEnd({ animated: true }));
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={process.env.EXPO_OS === 'ios' ? 'padding' : 'height'} style={styles.filterRoot}>
+        <View style={styles.filterHeader}>
+          <Pressable onPress={onClose}><Text style={styles.headerAction}>Cancel</Text></Pressable>
+          <Text style={styles.filterTitle}>Filters</Text>
+          <Pressable onPress={() => { setDraft({}); setMinimum(''); setMaximum(''); setActiveDatePicker(null); setError(null); }}>
+            <Text style={styles.headerAction}>Reset</Text>
+          </Pressable>
+        </View>
+        <ScrollView
+          ref={filterScrollRef}
+          contentInsetAdjustmentBehavior="automatic"
+          keyboardDismissMode={process.env.EXPO_OS === 'ios' ? 'interactive' : 'on-drag'}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.filterContent}
+        >
+          <FilterField label="Date range">
+            <DateFilterButton
+              label="From"
+              value={draft.date_from}
+              active={activeDatePicker === 'date_from'}
+              onPress={() => setActiveDatePicker('date_from')}
+              onClear={() => setDraft((current) => ({ ...current, date_from: undefined }))}
+            />
+            <DateFilterButton
+              label="To"
+              value={draft.date_to}
+              active={activeDatePicker === 'date_to'}
+              onPress={() => setActiveDatePicker('date_to')}
+              onClear={() => setDraft((current) => ({ ...current, date_to: undefined }))}
+            />
+            {activeDatePicker && selectedPickerDate ? (
+              <View style={styles.datePickerPanel}>
+                <View style={styles.datePickerHeader}>
+                  <Text style={styles.datePickerTitle}>Select {activeDatePicker === 'date_from' ? 'start' : 'end'} date</Text>
+                  {process.env.EXPO_OS === 'ios' ? (
+                    <Pressable accessibilityRole="button" onPress={() => setActiveDatePicker(null)} hitSlop={8}>
+                      <Text style={styles.datePickerDone}>Done</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                <DateTimePicker
+                  testID={`${activeDatePicker}-picker`}
+                  value={selectedPickerDate}
+                  mode="date"
+                  display={process.env.EXPO_OS === 'ios' ? 'inline' : 'default'}
+                  presentation={process.env.EXPO_OS === 'android' ? 'dialog' : 'inline'}
+                  minimumDate={activeDatePicker === 'date_to' ? toLocalDate(draft.date_from) : undefined}
+                  maximumDate={activeDatePicker === 'date_from' ? toLocalDate(draft.date_to) ?? today() : today()}
+                  accentColor={colors.accent}
+                  onValueChange={(_event, date) => selectDate(date)}
+                  onDismiss={() => setActiveDatePicker(null)}
+                />
+              </View>
+            ) : null}
+            <Text style={styles.currencyHint}>End date cannot be before the start date or later than today.</Text>
+          </FilterField>
+          <FilterField label="Categories">
+            <View style={styles.chips}>{categories.map((category) => {
+              const selected = draft.category_ids?.includes(category.id);
+              return <Pressable key={category.id} onPress={() => toggleCategory(category.id)} style={[styles.chip, selected && styles.chipSelected]}><Text style={[styles.chipText, selected && styles.chipTextSelected]}>{category.name}</Text></Pressable>;
+            })}</View>
+          </FilterField>
+          <FilterField label="Amount range">
+            <TextInput style={styles.filterInput} value={draft.amount_currency ?? defaultCurrency} onChangeText={(currency) => setDraft({ ...draft, amount_currency: currency.trim().toUpperCase() })} onFocus={revealAmountFields} maxLength={3} autoCapitalize="characters" placeholder="USD" placeholderTextColor={colors.textFaint} />
+            <View style={styles.inlineFields}>
+              <TextInput style={[styles.filterInput, { flex: 1 }]} value={minimum} onChangeText={setMinimum} onFocus={revealAmountFields} keyboardType="decimal-pad" placeholder="Minimum" placeholderTextColor={colors.textFaint} />
+              <TextInput style={[styles.filterInput, { flex: 1 }]} value={maximum} onChangeText={setMaximum} onFocus={revealAmountFields} keyboardType="decimal-pad" placeholder="Maximum" placeholderTextColor={colors.textFaint} />
+            </View>
+            <Text style={styles.currencyHint}>Amounts are compared only within {draft.amount_currency || defaultCurrency}.</Text>
+          </FilterField>
+          {error ? <Text selectable style={styles.errorText}>{error}</Text> : null}
+          <Pressable style={styles.applyButton} onPress={apply}><Text style={styles.applyText}>Apply filters</Text></Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  return <View style={{ gap: spacing.sm }}><Text style={styles.filterLabel}>{label}</Text>{children}</View>;
+}
+
+function DateFilterButton({ label, value, active, onPress, onClear }: {
+  label: string;
+  value?: string;
+  active: boolean;
+  onPress: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <View style={[styles.dateFilterRow, active && styles.dateFilterRowActive]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${label} date, ${formatFilterDate(value)}`}
+        accessibilityHint="Opens a calendar"
+        style={styles.dateFilterMain}
+        onPress={onPress}
+      >
+        <View>
+          <Text style={styles.dateFilterLabel}>{label}</Text>
+          <Text style={[styles.dateFilterValue, !value && styles.dateFilterPlaceholder]}>{formatFilterDate(value)}</Text>
+        </View>
+        <Ionicons name="calendar-outline" size={20} color={colors.accent} />
+      </Pressable>
+      {value ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Clear ${label.toLowerCase()} date`}
+          onPress={onClear}
+          style={styles.dateFilterClear}
+          hitSlop={6}
+        >
+          <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, alignItems: 'center' },
-
-  actionRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
-  action: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 5,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  actionText: { fontFamily: typography.button.fontFamily, fontSize: 12, color: colors.textPrimary },
-  actionPrimary: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 5,
-    borderRadius: radius.pill,
-    backgroundColor: colors.textPrimary,
-  },
-  actionPrimaryText: { fontFamily: typography.button.fontFamily, fontSize: 12, color: colors.background },
-
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  filterPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: radius.pill,
-    backgroundColor: 'rgba(120,120,128,0.10)',
-  },
+  root: { flex: 1 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
+  filterPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.pill, backgroundColor: 'rgba(120,120,128,0.10)' },
+  filterPillActive: { backgroundColor: colors.accent },
   filterText: { fontFamily: typography.button.fontFamily, fontSize: 13, color: colors.textPrimary },
   viewToggle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   viewLabel: { fontFamily: typography.subtitle.fontFamily, fontSize: 12, color: GRAY[500] },
-
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    height: 44,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.md,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: GRAY[200],
-    boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 2, color: 'rgba(0,0,0,0.04)' }],
-  },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, height: 44, marginHorizontal: spacing.lg, paddingHorizontal: spacing.md, borderRadius: radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: GRAY[200], boxShadow: '0 1px 2px rgba(0,0,0,0.04)' },
   searchInput: { flex: 1, fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: colors.textPrimary, padding: 0 },
-
-  body: { flex: 1, alignSelf: 'stretch', justifyContent: 'center' },
-
-  emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: -40 },
-  emptyText: { fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: GRAY[500], marginTop: -24 },
-
-  listRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E7EB',
-  },
+  body: { flex: 1, marginTop: spacing.sm },
+  fanWrap: { flex: 1, paddingTop: 30 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
+  emptyText: { fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: GRAY[500], marginTop: -28 },
+  errorText: { fontFamily: fontFamily.regular, fontSize: 13, color: '#B42318', textAlign: 'center' },
+  retryButton: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radius.pill, backgroundColor: colors.ctaBackground },
+  retryText: { fontFamily: fontFamily.semibold, color: colors.ctaText },
+  listRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E7EB' },
   listIcon: { width: 32, alignItems: 'center' },
   listText: { flex: 1, minWidth: 0 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
-  listLabel: { flex: 1, minWidth: 0, fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: colors.textPrimary },
+  listLabel: { fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: colors.textPrimary },
   listMeta: { marginTop: 2, fontFamily: typography.subtitle.fontFamily, fontSize: 12, color: colors.textSecondary },
-  duplicateBadge: {
-    flexShrink: 0,
-    borderRadius: radius.pill,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1,
-    borderColor: '#F59E0B',
-  },
-  duplicateText: { fontFamily: typography.button.fontFamily, fontSize: 10, color: '#92400E' },
-  listTotal: { fontFamily: typography.button.fontFamily, fontSize: 15, color: colors.textPrimary },
+  listTotal: { fontFamily: typography.button.fontFamily, fontSize: 14, color: colors.textPrimary, fontVariant: ['tabular-nums'] },
+  snackbar: { position: 'absolute', left: spacing.lg, right: spacing.lg, bottom: spacing.md, minHeight: 48, paddingHorizontal: spacing.lg, borderRadius: radius.md, backgroundColor: '#1C1C1E', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 6px 18px rgba(0,0,0,0.24)' },
+  snackbarText: { fontFamily: fontFamily.regular, fontSize: 14, color: '#FFFFFF' },
+  undoText: { fontFamily: fontFamily.semibold, fontSize: 14, color: '#9ED5FF' },
+  filterRoot: { flex: 1, backgroundColor: colors.background },
+  filterHeader: { minHeight: 58, paddingHorizontal: spacing.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  filterTitle: { fontFamily: fontFamily.semibold, fontSize: 18, color: colors.textPrimary },
+  headerAction: { fontFamily: fontFamily.semibold, fontSize: 15, color: colors.accent },
+  filterContent: { padding: spacing.lg, gap: spacing.xl, paddingBottom: spacing.xl * 2 },
+  filterLabel: { fontFamily: fontFamily.semibold, fontSize: 13, color: colors.textPrimary },
+  filterInput: { minHeight: 44, paddingHorizontal: 12, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, fontFamily: fontFamily.regular, color: colors.textPrimary, backgroundColor: '#FFFFFF' },
+  dateFilterRow: { minHeight: 56, flexDirection: 'row', alignItems: 'stretch', borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, borderCurve: 'continuous', backgroundColor: '#FFFFFF' },
+  dateFilterRowActive: { borderColor: colors.accent },
+  dateFilterMain: { flex: 1, minWidth: 0, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  dateFilterLabel: { fontFamily: fontFamily.regular, fontSize: 11, color: colors.textSecondary },
+  dateFilterValue: { marginTop: 2, fontFamily: fontFamily.semibold, fontSize: 15, color: colors.textPrimary, fontVariant: ['tabular-nums'] },
+  dateFilterPlaceholder: { fontFamily: fontFamily.regular, color: colors.textSecondary },
+  dateFilterClear: { width: 44, alignItems: 'center', justifyContent: 'center', borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: colors.border },
+  datePickerPanel: { overflow: 'hidden', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, borderCurve: 'continuous', backgroundColor: '#FFFFFF' },
+  datePickerHeader: { minHeight: 44, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  datePickerTitle: { fontFamily: fontFamily.semibold, fontSize: 13, color: colors.textPrimary },
+  datePickerDone: { fontFamily: fontFamily.semibold, fontSize: 14, color: colors.accent },
+  inlineFields: { flexDirection: 'row', gap: spacing.sm },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  chip: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border },
+  chipSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
+  chipText: { fontFamily: fontFamily.regular, fontSize: 12, color: colors.textSecondary },
+  chipTextSelected: { fontFamily: fontFamily.semibold, color: '#FFFFFF' },
+  currencyHint: { fontFamily: fontFamily.regular, fontSize: 12, color: colors.textSecondary },
+  applyButton: { minHeight: 48, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ctaBackground },
+  applyText: { fontFamily: fontFamily.semibold, fontSize: 15, color: colors.ctaText },
 });

@@ -113,7 +113,14 @@
     "b5:sweeper-cron:verify": "node scripts/verify-b5-sweeper-cron.js",
     "b5:gemini:fixtures": "node scripts/generate-b5-synthetic-golden.js",
     "b5:gemini:golden": "node scripts/golden-b5-gemini.js",
-    "b5:gemini:aggregate": "node scripts/verify-b5-gemini-chunks.js"
+    "b5:gemini:aggregate": "node scripts/verify-b5-gemini-chunks.js",
+    "b6:app": "npm run typecheck && expo lint --no-cache && node scripts/verify-b6-app.js",
+    "b6:backend": "npm run contracts:sync && node scripts/verify-b6-backend.js",
+    "b6:all": "npm run b6:app && npm run b6:backend",
+    "b6:staging": "node scripts/verify-b6-staging.js",
+    "b6:device:seed": "node scripts/seed-b6-device-test.js",
+    "b6:device:attach": "node scripts/attach-b6-device-test.js",
+    "b6:device:audit": "node scripts/audit-b6-device-sync.js"
   },
   "private": true
 }

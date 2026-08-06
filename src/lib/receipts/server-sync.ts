@@ -54,6 +54,7 @@ type ServerReceipt = {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  revision: number | null;
   receipt_items: ServerItem[] | null;
 };
 
@@ -92,22 +93,26 @@ async function applyRow(
   row: ServerReceipt,
   categoryNameById: Map<number, string>,
   result: SyncResult,
-): Promise<void> {
+): Promise<boolean> {
   const existing = await store.getById(row.capture_id);
+  const localCategoryId = existing?.fields
+    ? [...categoryNameById.entries()].find(([, name]) => name === existing.fields?.category)?.[0] ?? row.category_id
+    : row.category_id;
 
   if (row.deleted_at) {
     // Gone on the server. If the device still has unsent work on it, keep the
     // row — pushing it will fail against a deleted receipt and surface then,
     // which is better than destroying something the user cannot get back.
     if (existing && store.hasUnsyncedLocalWork(existing)) {
+      await store.updateServerMetadata(row.capture_id, localCategoryId, Number(row.revision) || 0, row.updated_at);
       result.skipped += 1;
-      return;
+      return false;
     }
     if (existing) {
       await deleteLocalReceipt(row.capture_id);
       result.deleted += 1;
     }
-    return;
+    return true;
   }
 
   const restored = {
@@ -116,30 +121,36 @@ async function applyRow(
     status: toLocalStatus(row.status),
     fields: toFields(row, categoryNameById),
     remoteImagePath: row.image_path,
+    categoryId: row.category_id,
+    serverRevision: Number(row.revision) || 0,
+    serverUpdatedAt: row.updated_at,
     createdAt: Date.parse(row.created_at) || Date.now(),
   };
 
   if (!existing) {
     await store.upsertRestored(restored);
     result.added += 1;
-    return;
+    return true;
   }
 
   if (store.hasUnsyncedLocalWork(existing)) {
+    await store.updateServerMetadata(row.capture_id, localCategoryId, Number(row.revision) || 0, row.updated_at);
     result.skipped += 1;
-    return;
+    return false;
   }
 
   await store.updateFromServer(restored);
   result.updated += 1;
+  return true;
 }
 
 /**
  * Pull everything that changed since the last pass. Safe to call on launch, on
  * reconnect and on foreground; a pass with nothing to do costs one query.
  */
-export async function syncFromServer(userId: string, categories: Category[]): Promise<SyncResult> {
+async function runSyncFromServer(userId: string, categories: Category[]): Promise<SyncResult> {
   const result: SyncResult = { added: 0, updated: 0, deleted: 0, skipped: 0 };
+  await store.markSyncAttempt(userId);
 
   // A different account on this device owns nothing here. Local rows carry no
   // user id, so the only safe reading of "someone else's receipts are already
@@ -158,7 +169,7 @@ export async function syncFromServer(userId: string, categories: Category[]): Pr
     let query = supabase
       .from('receipts')
       .select(
-        'id,capture_id,merchant,txn_date,currency,total,category_id,notes,image_path,status,created_at,updated_at,deleted_at,receipt_items(name,qty,amount)',
+        'id,capture_id,merchant,txn_date,currency,total,category_id,notes,image_path,status,created_at,updated_at,deleted_at,revision,receipt_items(name,qty,amount)',
       )
       .eq('user_id', userId)
       .order('updated_at', { ascending: true })
@@ -171,17 +182,46 @@ export async function syncFromServer(userId: string, categories: Category[]): Pr
     const rows = (data ?? []) as unknown as ServerReceipt[];
     if (rows.length === 0) break;
 
-    for (const row of rows) {
-      if (!row.capture_id || !row.id) continue;
-      await applyRow(row, categoryNameById, result);
-      if (!newestSeen || row.updated_at > newestSeen) newestSeen = row.updated_at;
-    }
+    await store.runInTransaction(async () => {
+      for (const row of rows) {
+        if (!row.capture_id || !row.id) continue;
+        await applyRow(row, categoryNameById, result);
+        // A skipped row is still represented locally; its unsent version is the
+        // intentional winner. When that version is pushed, the server receives
+        // a newer updated_at/revision and re-enters a later delta window.
+        if (!newestSeen || row.updated_at > newestSeen) newestSeen = row.updated_at;
+      }
+    });
 
     if (rows.length < PAGE_SIZE) break;
   }
 
   // Advanced only over rows actually applied, so an interrupted pass resumes
   // from where it stopped rather than skipping the remainder.
-  if (newestSeen) await store.setPullCursor(userId, newestSeen);
+  // Hydration means every active server row is represented, not that the
+  // server overwrote unsent local work. Advancing is safe for skipped drafts:
+  // their eventual push creates a newer server revision and delta timestamp.
+  await store.setHydrated(userId, newestSeen);
   return result;
+}
+
+const inFlight = new Map<string, Promise<SyncResult>>();
+
+/** Coalesce launch, foreground and realtime pulls for the same account. */
+export function syncFromServer(userId: string, categories: Category[]): Promise<SyncResult> {
+  const existing = inFlight.get(userId);
+  if (existing) return existing;
+  const task = runSyncFromServer(userId, categories)
+    .catch(async (cause: unknown) => {
+      const message = cause instanceof Error
+        ? cause.message
+        : typeof cause === 'object' && cause !== null
+          ? JSON.stringify(cause)
+          : String(cause);
+      await store.markSyncFailed(userId, message);
+      throw cause;
+    })
+    .finally(() => inFlight.delete(userId));
+  inFlight.set(userId, task);
+  return task;
 }

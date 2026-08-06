@@ -111,16 +111,28 @@ export const extractResponseSchema = z.union([
   z.object({ status: z.literal(429), code: z.literal('RATE_LIMITED') }),
 ]);
 
-export const searchQuerySchema = z.object({
-  text: z.string().max(120).optional(),
-  date_from: isoDateSchema.optional(),
-  date_to: isoDateSchema.optional(),
-  category_ids: z.array(z.number().int().positive()).optional(),
-  amount_min: z.number().nonnegative().optional(),
-  amount_max: z.number().nonnegative().optional(),
-  amount_currency: currencySchema.optional(),
-  view: z.enum(['card', 'list']).optional(),
-});
+export const searchQuerySchema = z
+  .object({
+    text: z.string().trim().max(120).optional(),
+    date_from: isoDateSchema.optional(),
+    date_to: isoDateSchema.optional(),
+    category_ids: z.array(z.number().int().positive()).max(100).optional(),
+    amount_min: z.number().nonnegative().optional(),
+    amount_max: z.number().nonnegative().optional(),
+    amount_currency: currencySchema.optional(),
+    view: z.enum(['card', 'list']).optional(),
+  })
+  .superRefine((query, ctx) => {
+    if ((query.amount_min !== undefined || query.amount_max !== undefined) && !query.amount_currency) {
+      ctx.addIssue({ code: 'custom', path: ['amount_currency'], message: 'Currency is required with amount filters' });
+    }
+    if (query.amount_min !== undefined && query.amount_max !== undefined && query.amount_min > query.amount_max) {
+      ctx.addIssue({ code: 'custom', path: ['amount_max'], message: 'Maximum amount must be at least the minimum' });
+    }
+    if (query.date_from && query.date_to && query.date_from > query.date_to) {
+      ctx.addIssue({ code: 'custom', path: ['date_to'], message: 'End date must be on or after start date' });
+    }
+  });
 
 export const exportRequestSchema = z.object({
   filters: searchQuerySchema,

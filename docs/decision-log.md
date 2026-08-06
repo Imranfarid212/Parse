@@ -193,3 +193,40 @@ So there is no live dead-link bug. What exists is a contract that *promises* a
 non-null path, which any future consumer would be entitled to trust. It is fixed
 here as a latent trap, not as a live defect — recorded so nobody re-derives the
 scarier version from the older document.
+
+---
+
+## DL-003 — B6 search is local-first; the server remains authoritative
+
+**Date:** 2026-08-04 · **Status:** accepted
+
+### Context
+
+The ranked server search executes quickly inside Postgres, but staging API round
+trips are consistently hundreds of milliseconds. The one-device policy and the
+existing restore/delta pull make the device mirror the best interactive index,
+provided completeness is measured rather than assumed. A later multi-device
+plan must not require replacing today's search or accepting last-write-wins data
+loss.
+
+### Decision
+
+- Once `sync_state.hydrated_at` exists for the current `local_owner`, Search uses
+  SQLite FTS5 plus SQL date/category/currency/amount filters. An unhydrated or
+  account-mismatched cache falls back to the RLS-protected server RPC.
+- Realtime is an invalidation signal, not the search result source: pull server
+  changes into SQLite first, then rerun the same local query.
+- Pull cursors never advance past skipped unsent local work. Metadata schema
+  changes explicitly invalidate hydration and perform a full backfill.
+- Server receipts carry a monotonic `revision`. Edits send an expected revision
+  and a unique operation id; duplicate delivery returns the recorded result and
+  a stale write returns HTTP 409.
+- Single-device takeover remains the product policy. Enabling multiple devices
+  later changes session policy and conflict UX, not the storage/search contract.
+
+### Consequences
+
+Search latency no longer contains network RTT during normal use, while first
+install and recovery stay correct. Future multi-device work still needs a user
+experience for 409 conflicts (refresh, field merge, or explicit choice), but the
+backend already detects them and never silently overwrites a newer revision.

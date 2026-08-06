@@ -10,16 +10,27 @@ import { Barcode } from '@/components/ui/Barcode';
 
 const ZIG = 16;
 
+export type ReceiptCardDetails = {
+  merchant: string;
+  date?: string | null;
+  category?: string | null;
+  currency?: string;
+  items?: { name: string; amount?: number }[];
+};
+
 export function ReceiptCard({
   width,
   height,
   total = '45.60',
+  details,
   bare = false,
   children,
 }: {
   width: number;
   height: number;
   total?: string;
+  /** Real receipt content used by Search without changing the paper design. */
+  details?: ReceiptCardDetails;
   /** Blank paper: no printed content (grey panel), unless `children` is given. */
   bare?: boolean;
   /** Printed face for the `bare` receipt. Receives the card's scale `s`. When
@@ -94,20 +105,53 @@ export function ReceiptCard({
         <Text style={{ textAlign: 'center', color: '#111', letterSpacing: 4 * s, marginTop: 2 * s, fontSize: 12 * s }}>* * * *</Text>
 
         <View style={[styles.rule, { marginVertical: 14 * s }]} />
-        <View style={[styles.line, { width: '58%', height: 9 * s, borderRadius: 5 * s, alignSelf: 'center' }]} />
-        <View style={[styles.line, { width: '42%', height: 9 * s, borderRadius: 5 * s, alignSelf: 'center', marginTop: 6 * s }]} />
+        {details ? (
+          <>
+            <Text numberOfLines={1} style={{ fontFamily: 'InstrumentSans_700Bold', fontSize: 17 * s, color: '#111', textAlign: 'center' }}>
+              {details.merchant}
+            </Text>
+            <Text numberOfLines={1} style={{ fontFamily: 'InstrumentSans_400Regular', fontSize: 11 * s, color: '#6B7280', textAlign: 'center', marginTop: 4 * s }}>
+              {[details.date, details.category].filter(Boolean).join(' • ') || 'Receipt details'}
+            </Text>
+          </>
+        ) : (
+          <>
+            <View style={[styles.line, { width: '58%', height: 9 * s, borderRadius: 5 * s, alignSelf: 'center' }]} />
+            <View style={[styles.line, { width: '42%', height: 9 * s, borderRadius: 5 * s, alignSelf: 'center', marginTop: 6 * s }]} />
+          </>
+        )}
 
         <View style={[styles.rule, { marginVertical: 14 * s }]} />
-        <View style={styles.row}>
-          <View style={{ gap: 6 * s }}>
-            <View style={[styles.line, { width: 88 * s, height: 9 * s, borderRadius: 5 * s }]} />
-            <View style={[styles.line, { width: 60 * s, height: 9 * s, borderRadius: 5 * s }]} />
+        {details ? (
+          <View style={{ gap: 6 * s, minHeight: 39 * s }}>
+            {(details.items ?? []).slice(0, 3).map((item, index) => (
+              <View key={`${item.name}-${index}`} style={styles.row}>
+                <Text numberOfLines={1} style={{ flex: 1, paddingRight: 6 * s, fontFamily: 'InstrumentSans_400Regular', fontSize: 11 * s, color: '#374151' }}>
+                  {item.name}
+                </Text>
+                {item.amount !== undefined ? (
+                  <Text style={{ fontFamily: 'InstrumentSans_500Medium', fontSize: 11 * s, color: '#111', fontVariant: ['tabular-nums'] }}>
+                    {item.amount.toFixed(2)}
+                  </Text>
+                ) : null}
+              </View>
+            ))}
+            {(details.items?.length ?? 0) === 0 ? (
+              <Text style={{ fontFamily: 'InstrumentSans_400Regular', fontSize: 11 * s, color: '#9CA3AF', textAlign: 'center' }}>No line items</Text>
+            ) : null}
           </View>
-          <View style={{ gap: 6 * s, alignItems: 'flex-end' }}>
-            <View style={[styles.line, { width: 48 * s, height: 9 * s, borderRadius: 5 * s }]} />
-            <View style={[styles.line, { width: 48 * s, height: 9 * s, borderRadius: 5 * s }]} />
+        ) : (
+          <View style={styles.row}>
+            <View style={{ gap: 6 * s }}>
+              <View style={[styles.line, { width: 88 * s, height: 9 * s, borderRadius: 5 * s }]} />
+              <View style={[styles.line, { width: 60 * s, height: 9 * s, borderRadius: 5 * s }]} />
+            </View>
+            <View style={{ gap: 6 * s, alignItems: 'flex-end' }}>
+              <View style={[styles.line, { width: 48 * s, height: 9 * s, borderRadius: 5 * s }]} />
+              <View style={[styles.line, { width: 48 * s, height: 9 * s, borderRadius: 5 * s }]} />
+            </View>
           </View>
-        </View>
+        )}
 
         <View style={[styles.rule, { marginVertical: 14 * s }]} />
         <Text style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 13 * s, fontFamily: 'InstrumentSans_400Regular' }}>Total</Text>
