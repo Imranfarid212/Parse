@@ -54,8 +54,15 @@ receipt has no merchant", which is a different and wrong statement. Whatever
 else B10 does here, the blank is the part that misleads.
 
 Affected: Japanese, Chinese, Korean, Devanagari and other Indic scripts, Arabic,
-Hebrew, Thai. That is a real slice of a global launch, and receipts are exactly
-where local-script text shows up.
+Hebrew, Thai — somewhere north of three billion people. What is rare here is the
+coverage in our font, not the languages.
+
+**Why this is B10 and not a launch blocker:** the first market is the US
+(confirmed 2026-08-06), where receipts are Latin-script and the gap does not
+bite. It becomes urgent the moment a market using any of the scripts above is
+added — at that point a user's PDF statement lists every receipt with correct
+dates, categories and amounts and a blank where the shop name should be. Revisit
+this before any non-Latin market launch, not on a date.
 
 **Not affected:** the xlsx export (Excel renders with system fonts), the app UI,
 search, and the stored data. This is a PDF-rendering limit only.
