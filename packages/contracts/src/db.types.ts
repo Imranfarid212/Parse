@@ -156,7 +156,21 @@ export type Database = {
             foreignKeyName: "duplicate_shadow_events_matched_receipt_id_fkey"
             columns: ["matched_receipt_id"]
             isOneToOne: false
+            referencedRelation: "active_receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "duplicate_shadow_events_matched_receipt_id_fkey"
+            columns: ["matched_receipt_id"]
+            isOneToOne: false
             referencedRelation: "receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "duplicate_shadow_events_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "active_receipts"
             referencedColumns: ["id"]
           },
           {
@@ -175,40 +189,85 @@ export type Database = {
           },
         ]
       }
+      export_file_purge_queue: {
+        Row: {
+          attempts: number
+          created_at: string
+          file_path: string
+          job_id: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          created_at?: string
+          file_path: string
+          job_id: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          created_at?: string
+          file_path?: string
+          job_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       export_jobs: {
         Row: {
+          artifacts: Json
+          attempt_count: number
           created_at: string
+          error: string | null
           expires_at: string | null
           file_path: string | null
           filters: Json
           format: Database["public"]["Enums"]["export_format"]
           id: string
           include_images: boolean
+          locked_at: string | null
+          next_retry_at: string
+          receipt_count: number | null
           status: Database["public"]["Enums"]["export_job_status"]
+          timezone: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
+          artifacts?: Json
+          attempt_count?: number
           created_at?: string
+          error?: string | null
           expires_at?: string | null
           file_path?: string | null
           filters?: Json
           format: Database["public"]["Enums"]["export_format"]
           id?: string
           include_images?: boolean
+          locked_at?: string | null
+          next_retry_at?: string
+          receipt_count?: number | null
           status?: Database["public"]["Enums"]["export_job_status"]
+          timezone?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
+          artifacts?: Json
+          attempt_count?: number
           created_at?: string
+          error?: string | null
           expires_at?: string | null
           file_path?: string | null
           filters?: Json
           format?: Database["public"]["Enums"]["export_format"]
           id?: string
           include_images?: boolean
+          locked_at?: string | null
+          next_retry_at?: string
+          receipt_count?: number | null
           status?: Database["public"]["Enums"]["export_job_status"]
+          timezone?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -260,6 +319,13 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "extraction_jobs_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: true
+            referencedRelation: "active_receipts"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "extraction_jobs_receipt_id_fkey"
             columns: ["receipt_id"]
@@ -533,6 +599,13 @@ export type Database = {
             foreignKeyName: "receipt_capture_attempts_receipt_id_fkey"
             columns: ["receipt_id"]
             isOneToOne: false
+            referencedRelation: "active_receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipt_capture_attempts_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
             referencedRelation: "receipts"
             referencedColumns: ["id"]
           },
@@ -626,6 +699,13 @@ export type Database = {
             foreignKeyName: "receipt_capture_metrics_receipt_id_fkey"
             columns: ["receipt_id"]
             isOneToOne: false
+            referencedRelation: "active_receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipt_capture_metrics_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
             referencedRelation: "receipts"
             referencedColumns: ["id"]
           },
@@ -637,6 +717,30 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      receipt_image_purge_queue: {
+        Row: {
+          attempts: number
+          created_at: string
+          image_path: string
+          receipt_id: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          created_at?: string
+          image_path: string
+          receipt_id: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          created_at?: string
+          image_path?: string
+          receipt_id?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       receipt_items: {
         Row: {
@@ -663,6 +767,55 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "receipt_items_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "active_receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipt_items_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "receipts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      receipt_mutations: {
+        Row: {
+          created_at: string
+          mutation_type: string
+          operation_id: string
+          receipt_id: string
+          result_revision: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          mutation_type: string
+          operation_id: string
+          receipt_id: string
+          result_revision: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          mutation_type?: string
+          operation_id?: string
+          receipt_id?: string
+          result_revision?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "receipt_mutations_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "active_receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipt_mutations_receipt_id_fkey"
             columns: ["receipt_id"]
             isOneToOne: false
             referencedRelation: "receipts"
@@ -755,6 +908,13 @@ export type Database = {
             columns: ["category_id"]
             isOneToOne: false
             referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipts_duplicate_of_fkey"
+            columns: ["duplicate_of"]
+            isOneToOne: false
+            referencedRelation: "active_receipts"
             referencedColumns: ["id"]
           },
           {
@@ -994,11 +1154,153 @@ export type Database = {
           },
         ]
       }
+      user_devices: {
+        Row: {
+          created_at: string
+          device_id: string
+          is_active: boolean
+          last_seen_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          device_id: string
+          is_active?: boolean
+          last_seen_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          device_id?: string
+          is_active?: boolean
+          last_seen_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_devices_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
-      [_ in never]: never
+      active_receipts: {
+        Row: {
+          acked_at: string | null
+          capture_id: string | null
+          capture_mode: Database["public"]["Enums"]["capture_mode"] | null
+          category_id: number | null
+          confirmed_via: Database["public"]["Enums"]["confirmed_via"] | null
+          created_at: string | null
+          currency: string | null
+          deleted_at: string | null
+          duplicate_match_strength: string | null
+          duplicate_of: string | null
+          extraction_mode: string | null
+          id: string | null
+          image_byte_size: number | null
+          image_path: string | null
+          merchant: string | null
+          notes: string | null
+          provider: Database["public"]["Enums"]["provider"] | null
+          search_text: unknown
+          status: Database["public"]["Enums"]["receipt_status"] | null
+          total: number | null
+          txn_date: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          acked_at?: string | null
+          capture_id?: string | null
+          capture_mode?: Database["public"]["Enums"]["capture_mode"] | null
+          category_id?: number | null
+          confirmed_via?: Database["public"]["Enums"]["confirmed_via"] | null
+          created_at?: string | null
+          currency?: string | null
+          deleted_at?: string | null
+          duplicate_match_strength?: string | null
+          duplicate_of?: string | null
+          extraction_mode?: string | null
+          id?: string | null
+          image_byte_size?: number | null
+          image_path?: string | null
+          merchant?: string | null
+          notes?: string | null
+          provider?: Database["public"]["Enums"]["provider"] | null
+          search_text?: unknown
+          status?: Database["public"]["Enums"]["receipt_status"] | null
+          total?: number | null
+          txn_date?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          acked_at?: string | null
+          capture_id?: string | null
+          capture_mode?: Database["public"]["Enums"]["capture_mode"] | null
+          category_id?: number | null
+          confirmed_via?: Database["public"]["Enums"]["confirmed_via"] | null
+          created_at?: string | null
+          currency?: string | null
+          deleted_at?: string | null
+          duplicate_match_strength?: string | null
+          duplicate_of?: string | null
+          extraction_mode?: string | null
+          id?: string | null
+          image_byte_size?: number | null
+          image_path?: string | null
+          merchant?: string | null
+          notes?: string | null
+          provider?: Database["public"]["Enums"]["provider"] | null
+          search_text?: unknown
+          status?: Database["public"]["Enums"]["receipt_status"] | null
+          total?: number | null
+          txn_date?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "receipts_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipts_duplicate_of_fkey"
+            columns: ["duplicate_of"]
+            isOneToOne: false
+            referencedRelation: "active_receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipts_duplicate_of_fkey"
+            columns: ["duplicate_of"]
+            isOneToOne: false
+            referencedRelation: "receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "receipts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
+      assert_active_device: {
+        Args: { p_device_id: string; p_user_id: string }
+        Returns: boolean
+      }
       can_scan: {
         Args: { p_capture_id: string; p_user_id: string }
         Returns: {
@@ -1008,9 +1310,115 @@ export type Database = {
           out_remaining: number
         }[]
       }
+      claim_export_job: {
+        Args: { p_job_id: string; p_lease_seconds?: number }
+        Returns: {
+          artifacts: Json
+          attempt_count: number
+          created_at: string
+          error: string | null
+          expires_at: string | null
+          file_path: string | null
+          filters: Json
+          format: Database["public"]["Enums"]["export_format"]
+          id: string
+          include_images: boolean
+          locked_at: string | null
+          next_retry_at: string
+          receipt_count: number | null
+          status: Database["public"]["Enums"]["export_job_status"]
+          timezone: string | null
+          updated_at: string
+          user_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "export_jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      claim_export_jobs: {
+        Args: { p_lease_seconds?: number; p_limit?: number }
+        Returns: {
+          artifacts: Json
+          attempt_count: number
+          created_at: string
+          error: string | null
+          expires_at: string | null
+          file_path: string | null
+          filters: Json
+          format: Database["public"]["Enums"]["export_format"]
+          id: string
+          include_images: boolean
+          locked_at: string | null
+          next_retry_at: string
+          receipt_count: number | null
+          status: Database["public"]["Enums"]["export_job_status"]
+          timezone: string | null
+          updated_at: string
+          user_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "export_jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      claim_extraction_jobs: {
+        Args: { p_lease_seconds?: number; p_limit?: number }
+        Returns: {
+          attempt_count: number
+          capture_id: string
+          capture_mode: Database["public"]["Enums"]["capture_mode"]
+          default_currency: string
+          image_byte_size: number
+          image_path: string
+          job_id: string
+          receipt_id: string
+          user_id: string
+        }[]
+      }
       claim_user_device: {
         Args: { p_device_id: string; p_takeover?: boolean }
-        Returns: { out_status: string }[]
+        Returns: {
+          out_status: string
+        }[]
+      }
+      close_provider_breaker_after_probe: { Args: never; Returns: undefined }
+      complete_export_job: {
+        Args: {
+          p_artifacts: Json
+          p_expires_at: string
+          p_job_id: string
+          p_receipt_count: number
+        }
+        Returns: {
+          artifacts: Json
+          attempt_count: number
+          created_at: string
+          error: string | null
+          expires_at: string | null
+          file_path: string | null
+          filters: Json
+          format: Database["public"]["Enums"]["export_format"]
+          id: string
+          include_images: boolean
+          locked_at: string | null
+          next_retry_at: string
+          receipt_count: number | null
+          status: Database["public"]["Enums"]["export_job_status"]
+          timezone: string | null
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "export_jobs"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       complete_onboarding: {
         Args: {
@@ -1020,88 +1428,270 @@ export type Database = {
         }
         Returns: undefined
       }
-      assert_active_device: {
-        Args: { p_device_id: string; p_user_id: string }
+      configure_b5_schedules: {
+        Args: never
+        Returns: {
+          out_job_id: number
+          out_job_name: string
+          out_schedule: string
+        }[]
+      }
+      confirm_receipt_with_items: {
+        Args: {
+          p_category_id: number
+          p_currency: string
+          p_items: Json
+          p_merchant: string
+          p_notes: string
+          p_receipt_id: string
+          p_total: number
+          p_txn_date: string
+          p_user_id: string
+        }
         Returns: boolean
       }
+      enqueue_export_job: {
+        Args: {
+          p_filters: Json
+          p_format: Database["public"]["Enums"]["export_format"]
+          p_include_images: boolean
+          p_max_in_flight?: number
+          p_timezone?: string
+          p_user_id: string
+        }
+        Returns: {
+          artifacts: Json
+          attempt_count: number
+          created_at: string
+          error: string | null
+          expires_at: string | null
+          file_path: string | null
+          filters: Json
+          format: Database["public"]["Enums"]["export_format"]
+          id: string
+          include_images: boolean
+          locked_at: string | null
+          next_retry_at: string
+          receipt_count: number | null
+          status: Database["public"]["Enums"]["export_job_status"]
+          timezone: string | null
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "export_jobs"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      enqueue_provider_delay_job: {
+        Args: {
+          p_acked_at: string
+          p_capture_id: string
+          p_capture_mode: Database["public"]["Enums"]["capture_mode"]
+          p_extraction_mode: string
+          p_failure_threshold?: number
+          p_failure_window_seconds?: number
+          p_image_byte_size: number
+          p_image_path: string
+          p_last_error: string
+          p_provider_attempted: string
+          p_user_id: string
+        }
+        Returns: {
+          out_breaker_state: string
+          out_receipt_id: string
+        }[]
+      }
+      export_receipt_rows: {
+        Args: {
+          p_amount_currency?: string
+          p_amount_max?: number
+          p_amount_min?: number
+          p_category_ids?: number[]
+          p_date_from?: string
+          p_date_to?: string
+          p_limit?: number
+          p_offset?: number
+          p_text?: string
+          p_user_id: string
+        }
+        Returns: {
+          category_name: string
+          created_at: string
+          currency: string
+          id: string
+          image_path: string
+          line_items: Json
+          merchant: string
+          notes: string
+          total: number
+          txn_date: string
+        }[]
+      }
+      fail_export_job: {
+        Args: { p_backoff_seconds?: number; p_error: string; p_job_id: string }
+        Returns: {
+          artifacts: Json
+          attempt_count: number
+          created_at: string
+          error: string | null
+          expires_at: string | null
+          file_path: string | null
+          filters: Json
+          format: Database["public"]["Enums"]["export_format"]
+          id: string
+          include_images: boolean
+          locked_at: string | null
+          next_retry_at: string
+          receipt_count: number | null
+          status: Database["public"]["Enums"]["export_job_status"]
+          timezone: string | null
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "export_jobs"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      fail_or_reschedule_extraction_job: {
+        Args: {
+          p_backoff_seconds?: number
+          p_job_id: string
+          p_last_error: string
+          p_provider_attempted: string
+        }
+        Returns: {
+          out_dead: boolean
+        }[]
+      }
+      finish_extraction_job: {
+        Args: { p_job_id: string; p_provider_attempted?: string }
+        Returns: undefined
+      }
+      get_provider_state: {
+        Args: never
+        Returns: {
+          out_consecutive_failures: number
+          out_last_probe_at: string
+          out_opened_at: string
+          out_state: string
+        }[]
+      }
       health_check: { Args: never; Returns: number }
+      purge_expired_exports: {
+        Args: { p_before?: string; p_dry_run?: boolean; p_limit?: number }
+        Returns: {
+          out_file_path: string
+          out_job_id: string
+        }[]
+      }
+      purge_soft_deleted_receipts: {
+        Args: { p_before?: string; p_dry_run?: boolean; p_limit?: number }
+        Returns: {
+          image_path: string
+          receipt_id: string
+        }[]
+      }
       refresh_receipt_search_text: {
         Args: { target_receipt_id: string }
         Returns: undefined
       }
+      refund_scan: {
+        Args: { p_capture_id: string; p_user_id: string }
+        Returns: undefined
+      }
+      restore_receipt: { Args: { p_receipt_id: string }; Returns: string }
+      retry_export_job: {
+        Args: { p_job_id: string }
+        Returns: {
+          artifacts: Json
+          attempt_count: number
+          created_at: string
+          error: string | null
+          expires_at: string | null
+          file_path: string | null
+          filters: Json
+          format: Database["public"]["Enums"]["export_format"]
+          id: string
+          include_images: boolean
+          locked_at: string | null
+          next_retry_at: string
+          receipt_count: number | null
+          status: Database["public"]["Enums"]["export_job_status"]
+          timezone: string | null
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "export_jobs"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       search_receipts: {
         Args: {
-          p_text?: string | null
-          p_date_from?: string | null
-          p_date_to?: string | null
-          p_category_ids?: number[] | null
-          p_amount_min?: number | null
-          p_amount_max?: number | null
-          p_amount_currency?: string | null
+          p_amount_currency?: string
+          p_amount_max?: number
+          p_amount_min?: number
+          p_category_ids?: number[]
+          p_date_from?: string
+          p_date_to?: string
           p_limit?: number
           p_offset?: number
+          p_text?: string
         }
         Returns: {
-          id: string
           capture_id: string
-          status: Database["public"]["Enums"]["receipt_status"]
-          merchant: string | null
-          txn_date: string | null
-          currency: string
-          total: number | null
-          category_id: number | null
-          category_name: string | null
-          image_path: string | null
-          notes: string | null
+          category_id: number
+          category_name: string
           created_at: string
-          updated_at: string
+          currency: string
+          id: string
+          image_path: string
           line_items: Json
+          merchant: string
+          notes: string
           search_rank: number
+          status: Database["public"]["Enums"]["receipt_status"]
+          total: number
+          txn_date: string
+          updated_at: string
         }[]
       }
+      soft_delete_receipt: { Args: { p_receipt_id: string }; Returns: string }
       update_receipt_with_items: {
         Args: {
-          p_receipt_id: string
-          p_merchant: string
-          p_txn_date: string | null
-          p_currency: string
-          p_total: number
           p_category_id: number
-          p_notes: string | null
+          p_currency: string
           p_items: Json
+          p_merchant: string
+          p_notes: string
+          p_receipt_id: string
+          p_total: number
+          p_txn_date: string
         }
         Returns: string
       }
       update_receipt_with_items_v2: {
         Args: {
-          p_operation_id: string
-          p_expected_revision: number | null
-          p_receipt_id: string
-          p_merchant: string
-          p_txn_date: string | null
-          p_currency: string
-          p_total: number
           p_category_id: number
-          p_notes: string | null
+          p_currency: string
+          p_expected_revision: number
           p_items: Json
+          p_merchant: string
+          p_notes: string
+          p_operation_id: string
+          p_receipt_id: string
+          p_total: number
+          p_txn_date: string
         }
         Returns: number
-      }
-      soft_delete_receipt: {
-        Args: { p_receipt_id: string }
-        Returns: string
-      }
-      restore_receipt: {
-        Args: { p_receipt_id: string }
-        Returns: string
-      }
-      purge_soft_deleted_receipts: {
-        Args: { p_before?: string; p_limit?: number; p_dry_run?: boolean }
-        Returns: { receipt_id: string; image_path: string | null }[]
-      }
-      refund_scan: {
-        Args: { p_capture_id: string; p_user_id: string }
-        Returns: undefined
       }
     }
     Enums: {
@@ -1835,3 +2425,4 @@ export const Constants = {
     },
   },
 } as const
+

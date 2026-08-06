@@ -24,3 +24,21 @@ export type ReferralStatus = (typeof referralStatuses)[number];
 
 export const exportFormats = ['xlsx', 'pdf'] as const;
 export type ExportFormat = (typeof exportFormats)[number];
+
+/**
+ * Mirrors the `export_job_status` database enum. Deliberately not the same list
+ * as `jobStatuses`: an extraction job that exhausts its attempts is `dead` and
+ * nobody waits on it, while an export that fails is `failed` and the user is
+ * shown a retry control.
+ */
+export const exportJobStatuses = ['queued', 'running', 'done', 'failed'] as const;
+export type ExportJobStatus = (typeof exportJobStatuses)[number];
+
+/**
+ * One export request produces up to three kinds of file. `statement` and
+ * `workbook` are the two formats of the same filtered truth; `images` is the
+ * separate page-per-image PDF requested by include_images, and is the only kind
+ * that chunks (Blueprint §12).
+ */
+export const exportArtifactKinds = ['workbook', 'statement', 'images'] as const;
+export type ExportArtifactKind = (typeof exportArtifactKinds)[number];

@@ -7,6 +7,10 @@ const fail = (message) => { throw new Error(`[b6:app] ${message}`); };
 const includes = (source, needle, label) => { if (!source.includes(needle)) fail(`${label}: expected ${JSON.stringify(needle)}`); };
 
 const search = read('src/components/search/SearchView.tsx');
+// B7 lifted the filter sheet out of SearchView so Export could use the same one.
+// These claims are still true and still tested — they just live in the shared
+// component now, and are asserted there rather than being quietly dropped.
+const filterSheet = read('src/components/receipt/ReceiptFilterSheet.tsx');
 const fan = read('src/components/search/FanCarousel.tsx');
 const receiptCard = read('src/components/ui/ReceiptCard.tsx');
 const editor = read('src/components/receipt/receipt-editor-modal.tsx');
@@ -16,13 +20,13 @@ const store = read('src/lib/receipts/store.ts');
 
 includes(search, 'SEARCH_DEBOUNCE_MS = 300', 'text search is debounced');
 includes(search, 'Merchant, note, or line item description', 'search UI documents every searchable text source');
-includes(search, 'searchQuerySchema.safeParse', 'filter UI uses the canonical contract');
-includes(search, 'amount_currency', 'amount filters carry a currency');
-includes(search, "from '@expo/ui/community/datetime-picker'", 'date filters use the native SDK 57 picker');
-includes(search, 'minimumDate=', 'end-date picker enforces the selected start date');
-includes(search, 'maximumDate=', 'date pickers prevent invalid future or reversed ranges');
-includes(search, '<KeyboardAvoidingView', 'filter sheet remains visible above the keyboard');
-includes(search, 'filterScrollRef.current?.scrollToEnd', 'amount inputs are revealed when focused');
+includes(filterSheet, 'searchQuerySchema.safeParse', 'filter UI uses the canonical contract');
+includes(filterSheet, 'amount_currency', 'amount filters carry a currency');
+includes(filterSheet, "from '@expo/ui/community/datetime-picker'", 'date filters use the native SDK 57 picker');
+includes(filterSheet, 'minimumDate=', 'end-date picker enforces the selected start date');
+includes(filterSheet, 'maximumDate=', 'date pickers prevent invalid future or reversed ranges');
+includes(filterSheet, '<KeyboardAvoidingView', 'filter sheet remains visible above the keyboard');
+includes(filterSheet, 'filterScrollRef.current?.scrollToEnd', 'amount inputs are revealed when focused');
 includes(search, "changeView(enabled ? 'card' : 'list')", 'card/list toggle shares one result set');
 includes(search, '<FanCarousel', 'card view preserves the original stacked receipt carousel');
 includes(search, 'fanWrap: { flex: 1, paddingTop: 30 }', 'card fan has calm separation from search');

@@ -10,6 +10,181 @@ so, not editing the old one.
 
 ---
 
+## DL-006 — The export file format follows the product, not the playbook
+
+**Date:** 2026-08-06 · **Status:** accepted · **Amends:** B7's T7.1 ·
+**Touches:** B7, Blueprint §12, Playbook B7
+
+### Context
+
+B7 shipped the export exactly as the playbook specifies it. Reviewing the real
+files, the product owner asked for a different shape. Three of the changes
+contradict the playbook's wording for T7.1, so they are recorded here rather
+than quietly absorbed — the playbook says a phase's gate test is the definition
+of done, and this changes what two of those tests assert.
+
+### Decision
+
+| Playbook / earlier build | Now | Why |
+|---|---|---|
+| One receipts sheet, currencies grouped with per-currency subtotal blocks | One sheet per currency, no subtotals | Separating the currencies makes D13 structural: no sheet holds two currencies, so nothing on it could add them. Subtotal rows then have nothing to disambiguate, and a user who wants a total selects the amount column — which is now a correct thing to do on every sheet. |
+| A line-items sheet | No line items in the export | Not wanted in the export. |
+| A Receipt ID column | No receipt ids | An internal identifier on a document meant for an accountant. |
+| `receiptflow_export_YYYY-MM-DD.*` | `parse_export_YYYY-MM-DD.*` | The product is called Parse. A file landing in someone's Downloads folder is branding, so it follows the app rather than the document. |
+| PDF cover title "ReceiptFlow export" | No title | The metadata lines under it already say what the document is. |
+| Grey PDF table headers, band offset below the text | Olive `D8E4BC` headers, band sized from the font's ascent | The statement and the sheet now look like one export. The old band was drawn three points below the baseline with a fixed height, so the text sat above its own background. |
+| ISO timestamps (`2026-08-05T17:45:49.674Z`) | `05/08/2026 11:15 PM GMT+5:30` in the device's zone, dates `dd/mm/yyyy` | Readable, and in the reader's own time. |
+
+**The timestamp is rendered in the device's timezone, and always labelled.** The
+client sends its IANA zone with the export; the job stores it in a `timezone`
+column, because the file may be built minutes later by the sweeper in a process
+that knows nothing about the user. The label stays on (`05/08/2026 11:15 PM
+GMT+5:30`) since the same instant is the 5th in Chicago and the 6th in Adelaide.
+
+An export that sends no zone, or one the runtime cannot resolve, renders in UTC
+rather than failing: the request is validated for shape only, and the fallback
+happens at render time. Losing an export over the label on one line would be a
+poor trade.
+
+### Consequences
+
+- T7.1's assertions are rewritten: instead of subtotal blocks and a line-items
+  sheet, they check one sheet per currency, that each sheet's rows are all its
+  own currency, that the per-sheet totals match SQL, that no receipt id appears
+  anywhere, and that the header row is bold on the olive fill. The
+  no-cross-currency property is asserted more strongly than before, not less.
+- The workbook is written with `xlsx-js-style` rather than the vendored SheetJS
+  Community Edition, because CE does not write cell styling and the header row
+  has to be bold on a fill. Only the write path is used; nothing on the server
+  parses a spreadsheet. The vendored SheetJS 0.20.3 stays as the *test* reader,
+  which has the side benefit that the reader verifying these files is a
+  different implementation from the writer producing them.
+- Dates are written as real date cells with a `dd/mm/yyyy` format rather than
+  text, so a column still sorts as dates. They are built from local components:
+  the writer converts a Date to an Excel serial relative to local midnight, so a
+  UTC-parsed date carried a spurious time-of-day that varied by host.
+- **A finished export is not the same as a downloadable one.** Files live seven
+  days and are then deleted, which leaves the row `done` with an empty artifact
+  list — and the screen was advertising "Ready to download" over nothing. The UI
+  now derives its state from the artifacts rather than the status: `ready` only
+  when there are files, otherwise `expired`, which keeps the row as a record of
+  what was exported and offers to run it again with the same filters. The row is
+  not hidden by age; a five-day-old export with files is still useful and a
+  one-hour-old export whose files are gone is still not.
+- Storage keys, the `receiptflow://` deep-link scheme, the Supabase project
+  names and the `receiptflow.*` SecureStore prefixes are **not** renamed. They
+  are infrastructure identifiers, not branding; renaming the scheme or the
+  storage prefixes would break existing sessions and links for no user-visible
+  gain.
+
+## DL-005 — B7 exports run inline with the sweeper as the guarantee
+
+**Date:** 2026-08-05 · **Status:** accepted · **Supersedes:** nothing ·
+**Touches:** B7, Blueprint §12, D13, D15
+
+### Context
+
+Blueprint §12 specifies exports as async jobs delivered by signed URL, and the
+playbook's B7 gate requires a 1,000-receipt export to complete "within limits or
+auto-chunk". It does not say what runs the job. B5 already answered that question
+for extraction (DL-004): commit the work as a row, run it best-effort inline, and
+let a sweeper with leases be the thing correctness depends on.
+
+### Decision
+
+Exports use the same shape, deliberately, so the system has one durable-work
+pattern rather than two.
+
+- `POST /export` authenticates, validates, commits an `export_jobs` row, and
+  returns 202 with the job. It never returns a file, and there is no synchronous
+  variant to fall back to.
+- The build then runs inline under `EdgeRuntime.waitUntil`, having first *claimed*
+  the job. A claim is a lease, not a flag.
+- The 30-second sweeper claims anything due — queued work nobody picked up, or a
+  job whose lease expired because its worker died mid-build. `attempt_count <= 3`,
+  then the job is `failed` and the user is offered a retry.
+- A claimed job cannot be claimed again, so the inline attempt and the sweeper
+  cannot both build the same export.
+
+Three rules follow from D13 and are enforced in code rather than documented:
+
+1. `subtotalFor` and `categoryTotalsFor` take a single-currency group and throw
+   if handed a foreign row. There is no function anywhere that returns one number
+   for a mixed set, so a cross-currency total is not a bug that can be written.
+2. The statement says in print that no combined total exists, because a user
+   hunting for a total they cannot find deserves a reason rather than a suspicion.
+3. `export_receipt_rows` refuses an amount filter with no currency, the same way
+   `search_receipts` does.
+
+### Consequences and things found on the way
+
+- **`export_jobs` had no table grants.** It shipped in B1 with a permissive
+  `for all` RLS policy and no privileges for any role, which made the policy
+  unreachable — the client could not have read its own exports. Found by running
+  the lifecycle rather than reading it. The policy is now select-only for the
+  owner, every write goes through a service-role RPC, and the grant exists.
+- **Export retention is new.** The Blueprint gives the sweeper three jobs and
+  export cleanup is not among them, but a 7-day signed link over an object that
+  lives forever is a leak. `purge_expired_exports` plus an `export_file_purge_queue`
+  now mirror the receipt-image purge, acknowledging only after Storage confirms.
+- **Links are minted on demand, not stored.** A URL in a table goes stale and is
+  one more copy of a credential. The client mints a 7-day link when the user taps
+  a file; what actually ends access at seven days is the purge deleting the object.
+- **PDF text is Unicode, within one font.** pdf-lib's built-in fonts are WinAnsi,
+  which cannot render a merchant name in Greek or Cyrillic — unacceptable for a
+  global launch. A subset of Noto Sans (Latin, Latin Extended, Greek, Cyrillic,
+  punctuation, currency symbols) is embedded. **Known gap:** CJK, Indic and Arabic
+  merchant names render as the missing-glyph box. Covering them means shipping a
+  different font family, not a bigger subset, and is a v1.1 item.
+- **Receipts with no stored image are reported, not hidden.** DL-002 leaves the
+  Balanced path's image in the client's custody, so a receipt can legitimately
+  have no object behind it. The images PDF counts those as `skipped` and an
+  unreadable object as `unavailable` instead of quietly producing a shorter file
+  than the export claims to represent.
+- **Concurrent exports per user are capped at three**, checked and inserted under
+  a profile row lock. Not in the Blueprint; a 1,000-receipt image export is the
+  most expensive thing an unpaid user can ask for on demand.
+- **CSV is gone from the Export screen.** The B7 design mock offered PDF/CSV; the
+  contract has only `xlsx | pdf`, and a CSV cannot carry per-currency subtotal
+  blocks. Removed rather than reinterpreted.
+- Deno tests live in `supabase/functions/_tests/` rather than the playbook's
+  `functions/tests/`: the CLI treats every non-underscore directory under
+  `functions/` as a function and fails to boot when one has no `index.ts`.
+- **SheetJS is vendored** (`_shared/exports/vendor/xlsx.mjs`, Apache-2.0). The
+  server-side bundler used by `functions deploy --use-api` refuses imports from
+  `cdn.sheetjs.com`, and the newest SheetJS on public npm is 0.18.5, which carries
+  a prototype-pollution advisory in its reading path. Vendoring the current 0.20.3
+  keeps the security property and removes a deploy-time CDN dependency; the b7
+  backend check now fails any CDN import in function code, because that failure
+  otherwise surfaces at deploy rather than at test.
+
+### What deploying to staging changed
+
+Two of these were only visible against a hosted project, and both are recorded
+because the fix in each case was to the test's model of the world, not only to
+the code.
+
+- **A 1,000-receipt export with 120 images exceeded one edge-function
+  invocation.** The job still completed — the lease expired and the sweeper
+  finished it on attempt 2, exactly as designed — but taking the recovery path
+  routinely is wasteful. Image downloads were sequential and are almost entirely
+  latency, so they now run eight at a time; the same export finishes inline in
+  ~88 s, and the filtered 150-receipt case went from 31 s to 12.6 s. Pages are
+  still embedded strictly in SQL order, because T7.3 is about order.
+- **A purged export still served over HTTP 200.** Storage on a hosted project sits
+  behind a CDN, so a URL fetched moments earlier keeps serving from the edge cache
+  after the object is deleted. Re-fetching a signed URL was therefore testing the
+  CDN, not the purge. The assertion now proves the two real mechanisms separately:
+  a deliberately short-lived link is refused once it expires, and the purged
+  object is gone according to Storage's own API. The seven-day horizon is asserted
+  from the token's `exp` claim and the job's `expires_at`.
+
+### A note on this file's numbering
+
+There are two entries numbered DL-003 (line items on the device, and local-first
+B6 search). Entries are append-only, so neither is renumbered here; this one takes
+DL-005 and the collision is recorded so nobody assumes a missing entry.
+
 ## DL-004 - B5 uses hybrid provider fallback with durable server jobs
 
 **Date:** 2026-08-03 · **Status:** accepted · **Supersedes:** nothing ·

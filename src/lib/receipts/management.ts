@@ -79,14 +79,18 @@ async function searchLocal(query: SearchQuery): Promise<ManagedReceipt[]> {
 
 async function searchServer(query: SearchQuery): Promise<ManagedReceipt[]> {
   const parsed = searchQuerySchema.parse(query);
+  // Unset filters are omitted rather than sent as null. Every one of these
+  // arguments is declared `default null` in SQL, so an absent key and an
+  // explicit null reach the function identically — and omitting them is what
+  // the generated types describe, which keeps this call checked rather than cast.
   const { data, error } = await supabase.rpc('search_receipts', {
-    p_text: parsed.text || null,
-    p_date_from: parsed.date_from ?? null,
-    p_date_to: parsed.date_to ?? null,
-    p_category_ids: parsed.category_ids?.length ? parsed.category_ids : null,
-    p_amount_min: parsed.amount_min ?? null,
-    p_amount_max: parsed.amount_max ?? null,
-    p_amount_currency: parsed.amount_currency ?? null,
+    ...(parsed.text ? { p_text: parsed.text } : {}),
+    ...(parsed.date_from ? { p_date_from: parsed.date_from } : {}),
+    ...(parsed.date_to ? { p_date_to: parsed.date_to } : {}),
+    ...(parsed.category_ids?.length ? { p_category_ids: parsed.category_ids } : {}),
+    ...(parsed.amount_min !== undefined ? { p_amount_min: parsed.amount_min } : {}),
+    ...(parsed.amount_max !== undefined ? { p_amount_max: parsed.amount_max } : {}),
+    ...(parsed.amount_currency ? { p_amount_currency: parsed.amount_currency } : {}),
     p_limit: 200,
     p_offset: 0,
   });
@@ -134,19 +138,25 @@ export async function updateManagedReceipt(
   let serverRevision: number | undefined;
 
   if (isSupabaseConfigured) {
+    // These three arguments have no SQL default and null is a meaningful value
+    // for each: no date, cleared notes, and "I have no revision expectation".
+    // Supabase's type generator reports every argument as non-null because it
+    // reads the declared type and not whether the function accepts NULL, so the
+    // nulls are asserted here. The database is the authority on this, not the
+    // generated file — see the RPC bodies, which branch on `is null`.
     const mutation = {
       p_receipt_id: receipt.id,
       p_merchant: fields.store.trim(),
-      p_txn_date: fields.date,
+      p_txn_date: fields.date as string,
       p_currency: fields.currency,
       p_total: fields.total,
       p_category_id: categoryId,
-      p_notes: fields.handwritten_notes.trim() || null,
+      p_notes: (fields.handwritten_notes.trim() || null) as string,
       p_items: fields.items,
     };
     const { data, error } = await supabase.rpc('update_receipt_with_items_v2', {
       p_operation_id: store.newCaptureId(),
-      p_expected_revision: receipt.revision > 0 ? receipt.revision : null,
+      p_expected_revision: (receipt.revision > 0 ? receipt.revision : null) as number,
       ...mutation,
     });
     // During a rolling deploy, old servers may not have v2 yet. Keep the app
