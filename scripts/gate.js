@@ -5,8 +5,8 @@ const path = require('path');
 const phase = process.argv[2]?.toLowerCase();
 const root = path.resolve(__dirname, '..');
 
-if (!['b1', 'b2', 'b3', 'b4'].includes(phase)) {
-  console.error('Usage: npm run gate -- b1|b2|b3|b4');
+if (!['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7'].includes(phase)) {
+  console.error('Usage: npm run gate -- b1|b2|b3|b4|b5|b6|b7');
   process.exit(1);
 }
 
@@ -105,6 +105,62 @@ const testsByPhase = {
       command: ['npm', ['run', 'b4:app']],
     },
   ],
+  // B5 and B6 shipped on their verify scripts without ever being added here.
+  // They are wired up in B7 so `gate all` means something; the phases whose
+  // evidence needs staging still say so in the note rather than pretending the
+  // local run covers them.
+  b5: [
+    {
+      id: 'T5.1-T5.3-fallback-jobs-breaker-source',
+      command: ['npm', ['run', 'b5:backend']],
+    },
+    {
+      id: 'T5.2-durable-jobs-db',
+      command: ['npm', ['run', 'b5:db:verify']],
+    },
+  ],
+  b6: [
+    {
+      id: 'T6.1-T6.4-management-app',
+      command: ['npm', ['run', 'b6:app']],
+    },
+    {
+      id: 'T6.1-T6.5-management-backend',
+      command: ['npm', ['run', 'b6:backend']],
+    },
+  ],
+  b7: [
+    {
+      // Static readiness for the Export screen, the shared filter sheet and the
+      // client job library.
+      id: 'T7.4-export-ui-progress-and-retry',
+      command: ['npm', ['run', 'b7:app']],
+    },
+    {
+      id: 'T7.1-T7.5-export-backend-source',
+      command: ['npm', ['run', 'b7:backend']],
+    },
+    {
+      // The builders, the job runner and the request validator, run for real:
+      // the workbook is parsed back with SheetJS and the PDFs with a text
+      // extractor, so these assert what the user will open.
+      id: 'T7.1-T7.3-export-builders',
+      command: ['npm', ['run', 'b7:builders']],
+    },
+    {
+      // The job lifecycle against a live database: the lease, the retry budget,
+      // the concurrency cap, and the proof that an export reads exactly what
+      // search reads.
+      id: 'T7.4-export-jobs-db',
+      command: ['npm', ['run', 'b7:db:verify']],
+    },
+    {
+      // The whole path: seed, export, download, diff against SQL — including
+      // the 1,000-receipt run and the chunked images PDF.
+      id: 'T7.1-T7.5-export-end-to-end',
+      command: ['npm', ['run', 'b7:e2e']],
+    },
+  ],
 };
 
 const tests = testsByPhase[phase];
@@ -137,7 +193,13 @@ const report = {
         ? 'Local B2 static/backend/db checks passed. Official playbook 5/5 still requires OTP device flow plus Apple/Google manual evidence.'
         : phase === 'b3'
           ? 'Local B3 static capture/offline queue checks passed. Official evidence still requires device capture/gallery/offline retry verification.'
-          : 'Local B4 checks passed. T4.2 uses the live Balanced average-latency gate plus the Precise/Grok physical image-path result.',
+          : phase === 'b4'
+            ? 'Local B4 checks passed. T4.2 uses the live Balanced average-latency gate plus the Precise/Grok physical image-path result.'
+            : phase === 'b5'
+              ? 'Local B5 source and durable-job database checks passed. The breaker, probe and sweeper-cron evidence is the staging HTTP suite (b5:http:verify, b5:breaker:verify, b5:probe:verify, b5:sweeper-cron:verify).'
+              : phase === 'b6'
+                ? 'Local B6 static app/backend checks passed. Ranked-search latency and two-session convergence evidence is b6:staging plus the device audit.'
+                : 'Local B7 checks passed: builders and job runner under Deno, the job lifecycle against a live database, and a full seed-export-download-diff run including the 1,000-receipt and chunked-images cases. Deploying the export function to staging and opening a mixed-currency file on-device remains the manual integration step.',
   duration_ms: Date.now() - startedAt,
   commit_sha: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
   tests: results,

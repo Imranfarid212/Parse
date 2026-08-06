@@ -45,6 +45,31 @@ export type ExtractionResult = {
 
 export type ReceiptView = 'card' | 'list';
 
+export type ExportArtifact = {
+  kind: 'workbook' | 'statement' | 'images';
+  file_name: string;
+  file_path: string;
+  byte_size: number;
+  receipt_count: number;
+  part: number;
+  part_count: number;
+};
+
+export type ExportJob = {
+  id: string;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  format: 'xlsx' | 'pdf';
+  include_images: boolean;
+  filters: SearchQuery;
+  artifacts: ExportArtifact[];
+  receipt_count: number | null;
+  timezone: string | null;
+  error: string | null;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type SearchQuery = {
   text?: string;
   date_from?: string;

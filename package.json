@@ -120,7 +120,14 @@
     "b6:staging": "node scripts/verify-b6-staging.js",
     "b6:device:seed": "node scripts/seed-b6-device-test.js",
     "b6:device:attach": "node scripts/attach-b6-device-test.js",
-    "b6:device:audit": "node scripts/audit-b6-device-sync.js"
+    "b6:device:audit": "node scripts/audit-b6-device-sync.js",
+    "b7:app": "npm run typecheck && expo lint --no-cache && node scripts/verify-b7-app.js",
+    "b7:backend": "npm run contracts:sync && node scripts/verify-b7-backend.js",
+    "b7:builders": "node scripts/b7-builders.js",
+    "b7:db:verify": "node scripts/verify-b7-db.js",
+    "b7:e2e": "node scripts/b7-e2e.js",
+    "b7:fonts": "node scripts/build-export-fonts.js",
+    "b7:all": "npm run b7:app && npm run b7:backend && npm run b7:builders"
   },
   "private": true
 }

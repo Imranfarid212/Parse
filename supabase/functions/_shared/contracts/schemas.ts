@@ -3,7 +3,9 @@ import { z } from 'zod';
 import {
   captureModes,
   confirmedVia,
+  exportArtifactKinds,
   exportFormats,
+  exportJobStatuses,
   extractionModes,
   jobStatuses,
   ledgerReasons,
@@ -27,6 +29,8 @@ export const ledgerReasonSchema = z.enum(ledgerReasons);
 export const referralStatusSchema = z.enum(referralStatuses);
 export const errorCodeSchema = z.enum(errorCodes);
 export const exportFormatSchema = z.enum(exportFormats);
+export const exportJobStatusSchema = z.enum(exportJobStatuses);
+export const exportArtifactKindSchema = z.enum(exportArtifactKinds);
 
 export const categorySchema = z.object({
   id: z.number().int().positive(),
@@ -138,7 +142,56 @@ export const exportRequestSchema = z.object({
   filters: searchQuerySchema,
   format: exportFormatSchema,
   include_images: z.boolean(),
+  /**
+   * The device's IANA timezone, used to render the generated timestamp on the
+   * statement. Optional: an export without one is rendered in UTC rather than
+   * refused, because a timezone the server cannot resolve is a display detail.
+   */
+  timezone: z.string().min(1).max(64).regex(/^[A-Za-z0-9_+\-/]+$/).optional(),
 });
+
+export const exportArtifactSchema = z.object({
+  kind: exportArtifactKindSchema,
+  file_name: z.string().min(1),
+  file_path: z.string().min(1),
+  byte_size: z.number().int().nonnegative(),
+  receipt_count: z.number().int().nonnegative(),
+  part: z.number().int().positive(),
+  part_count: z.number().int().positive(),
+});
+
+export const exportJobSchema = z.object({
+  id: uuidSchema,
+  status: exportJobStatusSchema,
+  format: exportFormatSchema,
+  include_images: z.boolean(),
+  filters: searchQuerySchema,
+  artifacts: z.array(exportArtifactSchema),
+  /** Rows that matched the filters, counted in SQL — null until the job runs. */
+  receipt_count: z.number().int().nonnegative().nullable(),
+  timezone: z.string().nullable(),
+  error: z.string().nullable(),
+  expires_at: z.string().datetime().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+});
+
+/**
+ * export is async by design (Blueprint §12): the call returns the job, and the
+ * files arrive over Realtime on export_jobs. There is no 200-with-file variant
+ * to fall back to, so the client only ever has one shape to handle.
+ *
+ * Not parsed at runtime: the server cannot run zod (no bare-specifier
+ * resolution under Deno) and the client would have to reconcile PostgREST's
+ * offset timestamps to gain nothing the screen does not already handle. It is
+ * kept as the written description of what the endpoint returns, which the
+ * function's own shape is reviewed against.
+ */
+export const exportResponseSchema = z.union([
+  z.object({ status: z.literal(202), job: exportJobSchema }),
+  z.object({ status: z.literal(400), code: z.literal('VALIDATION_FAILED'), message: z.string() }),
+  z.object({ status: z.literal(429), code: z.literal('RATE_LIMITED') }),
+]);
 
 export const referralRedeemSchema = z.object({
   code: z.string().length(6),

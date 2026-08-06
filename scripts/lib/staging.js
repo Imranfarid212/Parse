@@ -94,7 +94,13 @@ function makeAdmin({ url, serviceRoleKey }) {
 }
 
 async function connectPg({ dbUrl }) {
-  const pg = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  // The local CLI stack serves plain TCP with no certificate at all, so asking
+  // for SSL there fails the connection outright. Hosted projects always want it.
+  const isLocal = /@(127\.0\.0\.1|localhost|\[::1\])[:/]/.test(dbUrl ?? '');
+  const pg = new Client({
+    connectionString: dbUrl,
+    ...(isLocal ? {} : { ssl: { rejectUnauthorized: false } }),
+  });
   await pg.connect();
   return pg;
 }
@@ -160,4 +166,28 @@ async function withUser(admin, fn, pg = null) {
   }
 }
 
-module.exports = { readEnvFile, projectRef, resolveConfig, makeAdmin, connectPg, withUser, deleteUser };
+/**
+ * The local stack's keys, straight from the CLI.
+ *
+ * They are deterministic demo keys, but reading them beats hardcoding them: a
+ * harness that needs four exported variables before it will run is a harness
+ * that stops being run, and `npm run gate -- b7` has nowhere to get them from.
+ * Returns null when no local stack is up, so callers can say so plainly.
+ */
+function localKeys() {
+  try {
+    const { execFileSync } = require('child_process');
+    const status = JSON.parse(execFileSync('supabase', ['status', '-o', 'json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
+    if (!status.ANON_KEY || !status.SERVICE_ROLE_KEY) return null;
+    return {
+      url: status.API_URL ?? 'http://127.0.0.1:54321',
+      dbUrl: status.DB_URL ?? 'postgresql://postgres:postgres@127.0.0.1:54322/postgres',
+      anonKey: status.ANON_KEY,
+      serviceRoleKey: status.SERVICE_ROLE_KEY,
+    };
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { readEnvFile, projectRef, resolveConfig, makeAdmin, connectPg, withUser, deleteUser, localKeys };

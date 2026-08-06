@@ -1,0 +1,19 @@
+{
+  "phase": "b6",
+  "status": "passed_local_backend",
+  "note": "Local B6 static app/backend checks passed. Ranked-search latency and two-session convergence evidence is b6:staging plus the device audit.",
+  "duration_ms": 7099,
+  "commit_sha": "fb96664c3076c518067d256a821a6a7fff07bc97",
+  "tests": [
+    {
+      "id": "T6.1-T6.4-management-app",
+      "status": "passed",
+      "duration_ms": 6851
+    },
+    {
+      "id": "T6.1-T6.5-management-backend",
+      "status": "passed",
+      "duration_ms": 248
+    }
+  ]
+}

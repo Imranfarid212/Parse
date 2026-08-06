@@ -1,31 +1,47 @@
 {
   "b1": {
     "name": "Foundations",
-    "state": "in_progress"
+    "state": "passed",
+    "evidence": "gates/report-b1-official.json"
   },
   "b2": {
     "name": "Auth + onboarding",
-    "state": "locked"
+    "state": "passed",
+    "evidence": "gates/report-b2-official.json"
   },
   "b3": {
     "name": "Capture + offline queue",
-    "state": "locked"
+    "state": "passed",
+    "evidence": "gates/report-b3-official.json"
   },
   "b4": {
     "name": "Extraction fast path",
-    "state": "locked"
+    "state": "passed",
+    "evidence": "gates/report-b4.json + gates/report-b4-golden.json"
   },
   "b5": {
     "name": "Fallback + durable jobs",
-    "state": "locked"
+    "state": "passed",
+    "evidence": "scripts/verify-b5-*.js",
+    "note": "Shipped before the gate runner knew about b5; B7 added the runner entry. `npm run gate -- b5` needs staging credentials for the durable-job database checks, so no local report file was produced at the time."
   },
   "b6": {
     "name": "Receipt management",
-    "state": "locked"
+    "state": "passed",
+    "evidence": "gates/report-b6.json",
+    "note": "Report written when B7 added b6 to the gate runner. Ranked-search latency and two-session convergence evidence is b6:staging plus the device audit."
   },
   "b7": {
     "name": "Export",
-    "state": "locked"
+    "state": "passed",
+    "evidence": "gates/report-b7.json",
+    "integration_point": {
+      "test": "Mixed-currency export opened in Excel and a PDF reader on a physical device",
+      "result": "passed",
+      "confirmed": "one sheet per currency in Excel; per-currency sections with subtotals in the PDF; no receipt ids in either",
+      "tester": "IncendioLabs",
+      "date": "2026-08-06"
+    }
   },
   "b8": {
     "name": "Monetization + deletion",
