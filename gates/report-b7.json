@@ -2,33 +2,33 @@
   "phase": "b7",
   "status": "passed_local_backend",
   "note": "Local B7 checks passed: builders and job runner under Deno, the job lifecycle against a live database, and a full seed-export-download-diff run including the 1,000-receipt and chunked-images cases. Deploying the export function to staging and opening a mixed-currency file on-device remains the manual integration step.",
-  "duration_ms": 25303,
-  "commit_sha": "3afa630bfe99fb9c2857342f8478d26b05f6336a",
+  "duration_ms": 21306,
+  "commit_sha": "84f8b34c6e161cb30f8c6ccc5898fb95d1137fa7",
   "tests": [
     {
       "id": "T7.4-export-ui-progress-and-retry",
       "status": "passed",
-      "duration_ms": 8555
+      "duration_ms": 6903
     },
     {
       "id": "T7.1-T7.5-export-backend-source",
       "status": "passed",
-      "duration_ms": 269
+      "duration_ms": 235
     },
     {
       "id": "T7.1-T7.3-export-builders",
       "status": "passed",
-      "duration_ms": 1559
+      "duration_ms": 1323
     },
     {
       "id": "T7.4-export-jobs-db",
       "status": "passed",
-      "duration_ms": 5394
+      "duration_ms": 4504
     },
     {
       "id": "T7.1-T7.5-export-end-to-end",
       "status": "passed",
-      "duration_ms": 9526
+      "duration_ms": 8341
     }
   ]
 }
