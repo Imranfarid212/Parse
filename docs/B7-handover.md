@@ -102,8 +102,11 @@ security definer so the client would not require a write grant.
 
 ## Staging
 
-Deployed to `receiptflow-staging` (`wfboznibkhsfxteejxco`) on 2026-08-05, and
-`export` redeployed on 2026-08-06 with the revised file formats:
+Deployed to the staging project on 2026-08-05, and `export` redeployed on
+2026-08-06 with the revised file formats. The project ref is not written down
+here on purpose — `supabase/ENVIRONMENTS.md` lists it among the values kept
+outside git, and this repository is public. Take it from `.env.staging`, or from
+`supabase projects list`:
 
 - migration `20260805000100_b7_export_jobs.sql` pushed (it was the only pending one);
 - `export` deployed, and `sweeper` redeployed since it now claims export jobs and
@@ -112,6 +115,8 @@ Deployed to `receiptflow-staging` (`wfboznibkhsfxteejxco`) on 2026-08-05, and
 Both suites pass against it:
 
 ```bash
+supabase functions deploy export sweeper --project-ref "$SUPABASE_PROJECT_REF" --use-api
+
 B7_DB_ENV_FILE=.env.staging  npm run b7:db:verify              # 12/12
 B7_E2E_ENV_FILE=.env.staging B7_E2E_MODE=http npm run b7:e2e   # 5/5
 ```
