@@ -45,7 +45,9 @@
   },
   "b8": {
     "name": "Monetization + deletion",
-    "state": "locked"
+    "state": "locked",
+    "evidence": "gates/report-b8.json",
+    "note": "Local gate is green 4/4 (gates/report-b8.json): catalogue parity between SQL and contracts, the RevenueCat mapping layer under Deno, and 27 database checks covering the quota matrix, 10-parallel no-double-spend, webhook replay, refund reversal, tombstoned events and the clock-mocked five-year purge. The phase stays LOCKED because T8.1 (sandbox purchase on both platforms), T8.3 (paywall from RC remote config) and the manual half of T8.5 (full deletion on staging) cannot run until the App Store Connect, Play Console and RevenueCat accounts exist. See docs/B8-store-runbook.md for exactly what to create; flipping this to passed requires those three manual tests recorded with tester name and date."
   },
   "b9": {
     "name": "Referrals + commissions",

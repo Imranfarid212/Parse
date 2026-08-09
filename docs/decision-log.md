@@ -10,6 +10,83 @@ so, not editing the old one.
 
 ---
 
+## DL-007 — B8 sells four tiers from two price lists, and B2's Apple gap is closed here
+
+**Date:** 2026-08-08 · **Status:** accepted · **Amends:** D8, D12, D17, B2 ·
+**Touches:** B8, Blueprint §7 §10 §13.2, Playbook B8
+
+### Context
+
+Blueprint §10 locks two products — `rf_plus_699_m` at $6.99 for 500 scans/month
+and `rf_unlimited_1199_m` at $11.99 — monthly only, with annual SKUs listed as
+post-v1. The Plan screen that actually shipped sells something else: **Pro** and
+**Max**, monthly *and* yearly, with an "Early promotion discount" switch showing
+a second, lower price for each. The product owner reviewed both and chose to keep
+the screen as built.
+
+That choice is not cosmetic. It changes the number of store products from two to
+eight, changes the enforced monthly allowance, and — because a client-side switch
+cannot change what Apple or Google charges — required deciding what the promo
+switch actually *does*.
+
+### Decision
+
+| Blueprint / playbook | Now | Why |
+|---|---|---|
+| Tiers named Plus / Unlimited | **Pro / Max** | The shipped UI. Entitlements are `pro` / `max`. |
+| Plus = 500 scans/month | **Pro = 200 scans/month** | The Plan screen advertises "200 uploads per month". The server must enforce what the screen sells, so 200 is the cap. The figure is imported into the screen from the catalogue, so the two cannot drift. |
+| Monthly only | **Monthly + yearly** | The design has both billing cards. |
+| 2 products | **8 products** | 2 tiers x 2 terms x 2 price lists. |
+| `rf_plus_699_m` / `rf_unlimited_1199_m` | **`parse_{tier}_{m,y}[_promo]`** | The product is Parse, and store product IDs are permanent — an id embedding `699` becomes a lie the first time the price moves and can never be corrected. IDs now encode tier and term only. |
+| Product IDs in a CHECK constraint | **A `products` table** | Eight SKUs whose prices will be experimented with cannot live in a schema constraint. The catalogue is data; `can_scan()` joins to it and reads the allowance from a column instead of carrying a hardcoded 500. |
+| — | **The promo switch selects a RevenueCat offering** | A client cannot discount a store price. The switch chooses between two real offerings (`default`, `promo`), each holding real store products, so every price displayed is a price the store will charge. The eligibility decision is client-side today and the shape is built so it can move server-side later without touching the products, the entitlements or the contract. |
+
+**The uncapped tier is still not literally unlimited.** D8's fair-use rule is
+implemented as `products.fair_use_threshold` (2,000/period): past it `can_scan()`
+returns `out_deprioritized = true` while still allowing the scan. Nothing in the
+UI may render that as a block — the tier is sold as unlimited and it is.
+
+### B2's Apple gap, closed here
+
+Sign in with Apple shipped in B2 authenticating with the identity token alone and
+discarding `credential.authorizationCode`. Apple requires an app offering SIWA to
+**revoke the user's tokens on account deletion**, and revocation needs a refresh
+token, which only exists if that code was exchanged for one. As built, B8's
+`account-delete` could never do more than report `apple_revoked: false`, and the
+app would fail review on it.
+
+So B8 adds the capture: the code is exchanged by a new `apple-link` function and
+the refresh token is stored in `apple_auth_tokens` — RLS on, no policies, no
+grant to any client role, taken-and-deleted in a single statement at deletion
+time. This is B2 work landing in B8 because B8 is the phase whose gate asserts
+revocation happens.
+
+### Consequences
+
+- `can_scan()` was dropped and recreated (its return type gained
+  `out_deprioritized`). Every B4 assertion naming `rf_plus_699_m`,
+  `PLUS_MONTHLY_CAP`, `plus_within_cap` or the 500 cap is rewritten against the
+  new tier vocabulary; the invariants those tests protect — the profiles-row
+  mutex, the loud failure on a missing profile, idempotent debit, grace counting
+  as active — are unchanged and re-asserted by the B8 gate.
+- Deleted accounts keep a **pseudonym**, not a timestamp. Financial rows are
+  anonymised by detaching `user_id` and stamping `payment_events.subject_ref`
+  with the tombstone's random `financial_ref`. The first cut matched rows for
+  purging by "recorded before the tombstone was written", which stranded any
+  event arriving *after* deletion: it fell outside the range, survived the
+  five-year purge, and by then the tombstone was gone so nothing could ever
+  collect it. `apply_rc_event` stamps late arrivals with the same ref.
+- `payment_events` gained `subject_ref`; `account_tombstones` gained
+  `financial_ref`; `subscriptions` gained `offering` and a UNIQUE on `user_id`
+  (the webhook upsert needs a conflict target, or a redelivered renewal could
+  leave two active rows whose `current_period_start` disagree).
+- A **cancellation does not end access.** `CANCELLATION` is deliberately absent
+  from the webhook's status map: it means auto-renew is off, not that the period
+  ended. Only `EXPIRATION` expires a subscription. The gate asserts this.
+- Local B8 gate is green 4/4. The phase stays **locked**: T8.1, T8.3 and the
+  manual half of T8.5 need App Store Connect, Play Console and RevenueCat
+  accounts that do not exist yet (docs/B8-store-runbook.md).
+
 ## DL-006 — The export file format follows the product, not the playbook
 
 **Date:** 2026-08-06 · **Status:** accepted · **Amends:** B7's T7.1 ·

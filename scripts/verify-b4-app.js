@@ -61,7 +61,10 @@ const authContext = read('src/lib/auth/auth-context.tsx');
 
 includes(quota, "from '@/../packages/contracts/src/quota'", 'client uses the shared quota rule');
 includes(quota, 'decideQuota(', 'client decides with the shared rule');
-if (/PLUS_MONTHLY_CAP\s*=|rf_plus_699_m'\s*;|=\s*500\b/.test(quota)) {
+// Per DL-007 the cap lives in the catalogue, so the client must not declare a
+// cap or a product id of its own — the shape of the mistake is the same, only
+// the names changed.
+if (/MONTHLY_SCAN_CAP\s*=|['"]parse_(pro|max)_[my]['"]|=\s*200\b/.test(quota)) {
   fail('client must not re-implement the quota arithmetic; import it from contracts');
 }
 includes(quota, 'export async function checkQuotaGate', 'shutter gate helper');

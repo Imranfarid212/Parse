@@ -1,0 +1,29 @@
+{
+  "phase": "b8",
+  "status": "passed_local_backend",
+  "note": "Local B8 checks passed: catalogue parity between SQL and contracts, the RevenueCat mapping layer, and the money paths against a live database (quota matrix, no-double-spend, replay, refund reversal, tombstoned events, clock-mocked five-year purge). T8.1 and T8.3 need sandbox purchases on both platforms and T8.5 needs a full deletion on staging — all four blocked on store accounts that do not exist yet (docs/B8-store-runbook.md).",
+  "duration_ms": 7213,
+  "commit_sha": "78092ac3581b69ac00a46ed1dc79fb80d9abcccb",
+  "tests": [
+    {
+      "id": "T8.1-T8.3-T8.5-monetization-app-source",
+      "status": "passed",
+      "duration_ms": 6119
+    },
+    {
+      "id": "T8.1-T8.5-monetization-backend-source",
+      "status": "passed",
+      "duration_ms": 206
+    },
+    {
+      "id": "T8.2-T8.4-revenuecat-mapping",
+      "status": "passed",
+      "duration_ms": 576
+    },
+    {
+      "id": "T8.2-T8.4-T8.5-monetization-db",
+      "status": "passed",
+      "duration_ms": 312
+    }
+  ]
+}

@@ -44,8 +44,8 @@ const RACE_WIDTH = 6;
 const BURST_PER_MIN = 12;
 /** Must match v_plus_cap. */
 const PLUS_CAP = 500;
-const PRODUCT_PLUS = 'rf_plus_699_m';
-const PRODUCT_UNLIMITED = 'rf_unlimited_1199_m';
+const PRODUCT_PLUS = 'parse_pro_m';
+const PRODUCT_UNLIMITED = 'parse_max_m';
 
 // -------------------------------------------------------------- test plumbing
 
@@ -274,9 +274,9 @@ async function entitlementSuite(db, userId) {
 
     const { row } = await db.canScan(userId, randomUUID());
     assertEqual(row.out_allowed, true, 'out_allowed despite a zero free balance');
-    assertEqual(row.out_reason, 'unlimited', 'out_reason');
+    assertEqual(row.out_reason, 'max_unlimited', 'out_reason');
     assertEqual(row.out_remaining, null, 'out_remaining is null for Unlimited');
-    assertEqual(row.out_paywall, 'unlimited', 'out_paywall');
+    assertEqual(row.out_paywall, 'max', 'out_paywall');
   });
 
   await test('a subscription in grace still counts as active', async () => {
@@ -286,7 +286,7 @@ async function entitlementSuite(db, userId) {
 
     const { row } = await db.canScan(userId, randomUUID());
     assertEqual(row.out_allowed, true, 'grace is served');
-    assertEqual(row.out_reason, 'unlimited', 'out_reason');
+    assertEqual(row.out_reason, 'max_unlimited', 'out_reason');
   });
 
   await test('Plus under the cap is allowed and counts down from the cap', async () => {
@@ -296,9 +296,9 @@ async function entitlementSuite(db, userId) {
 
     const { row } = await db.canScan(userId, randomUUID());
     assertEqual(row.out_allowed, true, 'out_allowed');
-    assertEqual(row.out_reason, 'plus_within_cap', 'out_reason');
+    assertEqual(row.out_reason, 'pro_within_cap', 'out_reason');
     assertEqual(row.out_remaining, PLUS_CAP - 1, 'out_remaining counts from the cap, not the ledger balance');
-    assertEqual(row.out_paywall, 'unlimited', 'a capped Plus user is sold Unlimited');
+    assertEqual(row.out_paywall, 'max', 'a capped Pro user is sold Max');
   });
 
   await test('Plus at the cap is refused', async () => {
@@ -309,9 +309,9 @@ async function entitlementSuite(db, userId) {
 
     const { row } = await db.canScan(userId, randomUUID());
     assertEqual(row.out_allowed, false, 'out_allowed');
-    assertEqual(row.out_reason, 'plus_cap_hit', 'out_reason');
+    assertEqual(row.out_reason, 'pro_cap_hit', 'out_reason');
     assertEqual(row.out_remaining, 0, 'out_remaining');
-    assertEqual(row.out_paywall, 'unlimited', 'out_paywall');
+    assertEqual(row.out_paywall, 'max', 'out_paywall');
   });
 }
 
