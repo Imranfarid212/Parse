@@ -16,16 +16,18 @@ import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
-import Animated, {
-  FadeIn,
-  FadeInDown,
-  useAnimatedStyle,
-  useDerivedValue,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import type { ExportArtifact, ExportJob } from '@/../packages/contracts/src';
-import { Card, Eyebrow, GRAY, Toggle } from '@/components/menu/primitives';
+import {
+  Card,
+  Chip,
+  Eyebrow,
+  PrimaryButton,
+  Segmented,
+  Toggle,
+  type SegmentOption,
+} from '@/components/menu/primitives';
 import {
   describeFilters,
   formatFilterDate,
@@ -44,7 +46,7 @@ import {
   useExportJobs,
   type ExportFormat,
 } from '@/lib/receipts/exports';
-import { fontFamily, spacing } from '@/theme/tokens';
+import { colors, elevation, radius, spacing, typography } from '@/theme/tokens';
 
 type Preset = 'this' | 'last' | 'quarter' | 'all';
 
@@ -84,28 +86,11 @@ const ARTIFACT_LABEL: Record<ExportArtifact['kind'], string> = {
   images: 'Receipt scans',
 };
 
-/** Segmented Excel / PDF control with a sliding white indicator. */
-const SEG_PAD = 6;
-function FormatToggle({ value, onChange }: { value: ExportFormat; onChange: (format: ExportFormat) => void }) {
-  const [trackW, setTrackW] = useState(0);
-  const segW = trackW > 0 ? (trackW - SEG_PAD * 2) / 2 : 0;
-  const p = useDerivedValue(() => withTiming(value === 'xlsx' ? 1 : 0, { duration: 200 }));
-  const indicator = useAnimatedStyle(() => ({ width: segW, transform: [{ translateX: p.value * segW }] }));
-
-  return (
-    <View style={styles.segTrack} onLayout={(e) => setTrackW(e.nativeEvent.layout.width)}>
-      {segW > 0 && <Animated.View style={[styles.segIndicator, indicator]} />}
-      <Pressable style={styles.segBtn} onPress={() => onChange('pdf')} accessibilityRole="button">
-        <Feather name="file-text" size={16} color={value === 'pdf' ? '#EF4444' : GRAY[500]} />
-        <Text style={[styles.segLabel, { color: value === 'pdf' ? GRAY[900] : GRAY[500] }]}>PDF Report</Text>
-      </Pressable>
-      <Pressable style={styles.segBtn} onPress={() => onChange('xlsx')} accessibilityRole="button">
-        <Feather name="grid" size={16} color={value === 'xlsx' ? '#16A34A' : GRAY[500]} />
-        <Text style={[styles.segLabel, { color: value === 'xlsx' ? GRAY[900] : GRAY[500] }]}>Excel Sheet</Text>
-      </Pressable>
-    </View>
-  );
-}
+/** The two export formats, as segments. See the header note on why there is no CSV. */
+const FORMAT_OPTIONS: SegmentOption<ExportFormat>[] = [
+  { key: 'pdf', label: 'PDF Report', icon: 'file-text', activeColor: colors.danger },
+  { key: 'xlsx', label: 'Excel Sheet', icon: 'grid', activeColor: colors.accent },
+];
 
 export function ExportScreen() {
   const auth = useAuth();
@@ -193,70 +178,54 @@ export function ExportScreen() {
       <Card style={styles.mainCard}>
         <View style={{ padding: spacing.lg }}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-            {PRESETS.map((option) => {
-              const on = option.key === preset;
-              return (
-                <Pressable
-                  key={option.key}
-                  onPress={() => applyPreset(option.key)}
-                  style={[styles.chip, on ? styles.chipOn : styles.chipOff]}
-                  accessibilityRole="button"
-                >
-                  <Text style={[styles.chipText, { color: on ? '#FFFFFF' : GRAY[600] }]}>{option.label}</Text>
-                </Pressable>
-              );
-            })}
+            {PRESETS.map((option) => (
+              <Chip
+                key={option.key}
+                label={option.label}
+                selected={option.key === preset}
+                onPress={() => applyPreset(option.key)}
+              />
+            ))}
           </ScrollView>
 
-          <View style={{ marginTop: 20, marginBottom: 24, gap: 8 }}>
-            <Eyebrow style={{ marginLeft: 4 }}>Receipts to include</Eyebrow>
+          <View style={{ marginTop: spacing.lg, marginBottom: spacing.lg, gap: spacing.sm }}>
+            <Eyebrow style={{ marginLeft: spacing.xs }}>Receipts to include</Eyebrow>
             <Pressable
-              style={({ pressed }) => [styles.filterBtn, pressed && { backgroundColor: GRAY[100] }]}
+              style={({ pressed }) => [styles.filterBtn, pressed && { backgroundColor: colors.border }]}
               onPress={() => setFiltersOpen(true)}
               accessibilityRole="button"
               accessibilityLabel={`Edit export filters. Currently ${summary}`}
             >
               <View style={styles.filterLeft}>
                 <View style={styles.filterChip}>
-                  <Feather name="sliders" size={14} color={GRAY[500]} />
+                  <Feather name="sliders" size={14} color={colors.textSecondary} />
                 </View>
                 <Text style={styles.filterValue} numberOfLines={2}>{summary}</Text>
               </View>
-              <Feather name="chevron-right" size={16} color={GRAY[400]} />
+              <Feather name="chevron-right" size={16} color={colors.textFaint} />
             </Pressable>
           </View>
 
-          <Eyebrow style={{ marginLeft: 4, marginBottom: 8 }}>Format</Eyebrow>
-          <FormatToggle value={format} onChange={setFormat} />
+          <Eyebrow style={{ marginLeft: spacing.xs, marginBottom: spacing.sm }}>Format</Eyebrow>
+          <Segmented value={format} options={FORMAT_OPTIONS} onChange={setFormat} />
 
           <View style={styles.scansRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.scansTitle}>Include Receipt Scans</Text>
               <Text style={styles.scansSub}>Combine original images into a PDF</Text>
             </View>
-            <Toggle value={includeScans} onValueChange={setIncludeScans} />
+            <Toggle label="Include receipt scans" value={includeScans} onValueChange={setIncludeScans} />
           </View>
         </View>
 
         <View style={styles.footer}>
-          <Pressable
+          <PrimaryButton
+            label="Generate Export"
+            icon="download"
+            busy={starting}
+            busyLabel="Starting…"
             onPress={() => void onGenerate()}
-            disabled={starting}
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.generateBtn, pressed && { transform: [{ scale: 0.98 }] }]}
-          >
-            {starting ? (
-              <Animated.View entering={FadeIn} style={styles.generateInner}>
-                <ActivityIndicator size="small" color="rgba(255,255,255,0.85)" />
-                <Text style={styles.generateText}>Starting…</Text>
-              </Animated.View>
-            ) : (
-              <Animated.View entering={FadeIn} style={styles.generateInner}>
-                <Feather name="download" size={18} color="#FFFFFF" />
-                <Text style={styles.generateText}>Generate Export</Text>
-              </Animated.View>
-            )}
-          </Pressable>
+          />
         </View>
       </Card>
 
@@ -321,13 +290,13 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
     return (
       <View style={[styles.jobCard, styles.jobCardFailed]}>
         <View style={styles.jobHead}>
-          <Feather name="alert-circle" size={16} color="#B42318" />
+          <Feather name="alert-circle" size={16} color={colors.danger} />
           <Text style={styles.jobTitle}>Export failed</Text>
         </View>
         <Text style={styles.jobContents} numberOfLines={2}>{contents}</Text>
         <Text style={styles.jobMeta}>{job.error ?? 'Something went wrong building this export.'}</Text>
         <Pressable style={styles.retryBtn} onPress={onRetry} accessibilityRole="button">
-          <Feather name="refresh-cw" size={14} color={GRAY[900]} />
+          <Feather name="refresh-cw" size={14} color={colors.textPrimary} />
           <Text style={styles.retryText}>Try again</Text>
         </Pressable>
       </View>
@@ -338,7 +307,7 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
     return (
       <View style={styles.jobCard}>
         <View style={styles.jobHead}>
-          <ActivityIndicator size="small" color={GRAY[500]} />
+          <ActivityIndicator size="small" color={colors.textSecondary} />
           <Text style={styles.jobTitle}>{state === 'running' ? 'Building your export…' : 'Queued'}</Text>
         </View>
         <Text style={styles.jobContents} numberOfLines={2}>{contents}</Text>
@@ -351,8 +320,8 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
     return (
       <View style={styles.jobCard}>
         <View style={styles.jobHead}>
-          <Feather name="clock" size={16} color={GRAY[400]} />
-          <Text style={[styles.jobTitle, { color: GRAY[600] }]}>Download expired</Text>
+          <Feather name="clock" size={16} color={colors.textFaint} />
+          <Text style={[styles.jobTitle, { color: colors.textSecondary }]}>Download expired</Text>
         </View>
         <Text style={styles.jobContents} numberOfLines={2}>{contents}</Text>
         <Text style={styles.jobMeta}>
@@ -360,7 +329,7 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
         </Text>
         <Text style={styles.jobMeta}>Downloads stay available for 7 days after an export is made.</Text>
         <Pressable style={styles.retryBtn} onPress={onRepeat} accessibilityRole="button">
-          <Feather name="refresh-cw" size={14} color={GRAY[900]} />
+          <Feather name="refresh-cw" size={14} color={colors.textPrimary} />
           <Text style={styles.retryText}>Export again</Text>
         </Pressable>
       </View>
@@ -370,7 +339,7 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
   return (
     <View style={styles.jobCard}>
       <View style={styles.jobHead}>
-        <Feather name="check-circle" size={16} color="#22C55E" />
+        <Feather name="check-circle" size={16} color={colors.accent} />
         <Text style={styles.jobTitle}>Ready to download</Text>
       </View>
       <Text style={styles.jobContents} numberOfLines={2}>{contents}</Text>
@@ -385,14 +354,14 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
           onLongPress={() => onShare(artifact)}
           accessibilityRole="button"
           accessibilityLabel={`Download ${artifact.file_name}`}
-          style={({ pressed }) => [styles.resultRow, pressed && { backgroundColor: GRAY[50] }]}
+          style={({ pressed }) => [styles.resultRow, pressed && { backgroundColor: colors.surfaceSubtle }]}
         >
           <View style={styles.resultLeft}>
-            <View style={[styles.resultIcon, { backgroundColor: artifact.kind === 'images' ? '#EFF6FF' : artifact.kind === 'workbook' ? '#F0FDF4' : '#FEF2F2' }]}>
+            <View style={[styles.resultIcon, { backgroundColor: artifact.kind === 'images' ? colors.infoSurface : artifact.kind === 'workbook' ? colors.accentSurface : colors.dangerSurface }]}>
               <Feather
                 name={artifact.kind === 'images' ? 'image' : artifact.kind === 'workbook' ? 'grid' : 'file-text'}
                 size={18}
-                color={artifact.kind === 'images' ? '#3B82F6' : artifact.kind === 'workbook' ? '#16A34A' : '#EF4444'}
+                color={artifact.kind === 'images' ? colors.info : artifact.kind === 'workbook' ? colors.accent : colors.danger}
               />
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
@@ -403,7 +372,7 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
               </Text>
             </View>
           </View>
-          <Feather name="download" size={18} color={GRAY[400]} />
+          <Feather name="download" size={18} color={colors.textFaint} />
         </Pressable>
       ))}
     </View>
@@ -411,134 +380,106 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: 40 },
-  subtitle: { fontFamily: fontFamily.regular, fontSize: 15, color: GRAY[500], marginBottom: 20 },
+  content: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: spacing.xl },
+  subtitle: { ...typography.subtitle, color: colors.textSecondary, marginBottom: spacing.lg },
 
-  mainCard: { borderRadius: 24 },
+  mainCard: {},
 
-  chipRow: { gap: 8, paddingRight: spacing.lg },
-  chip: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 999 },
-  chipOn: {
-    backgroundColor: GRAY[900],
-    boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 6, color: 'rgba(0,0,0,0.12)' }],
-  },
-  chipOff: { backgroundColor: GRAY[50], borderWidth: 1, borderColor: GRAY[200] },
-  chipText: { fontFamily: fontFamily.semibold, fontSize: 13 },
+  chipRow: { gap: spacing.sm, paddingRight: spacing.lg },
 
   filterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 14,
-    borderRadius: 16,
-    backgroundColor: GRAY[50],
+    padding: spacing.sm + 6,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    backgroundColor: colors.surfaceSubtle,
     borderWidth: 1,
-    borderColor: GRAY[200],
+    borderColor: colors.border,
   },
-  filterLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, marginRight: 8 },
+  filterLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginRight: spacing.sm },
   filterChip: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: GRAY[100],
-    boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 2, color: 'rgba(0,0,0,0.06)' }],
+    borderColor: colors.border,
   },
-  filterValue: { flex: 1, fontFamily: fontFamily.semibold, fontSize: 14, color: GRAY[900] },
-
-  segTrack: {
-    flexDirection: 'row',
-    backgroundColor: GRAY[50],
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: GRAY[200],
-    padding: 6,
-  },
-  segIndicator: {
-    position: 'absolute',
-    top: SEG_PAD,
-    bottom: SEG_PAD,
-    left: SEG_PAD,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 3, color: 'rgba(0,0,0,0.08)' }],
-  },
-  segBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10 },
-  segLabel: { fontFamily: fontFamily.semibold, fontSize: 14 },
+  filterValue: { flex: 1, ...typography.row, color: colors.textPrimary },
 
   scansRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginTop: 16,
-    padding: 16,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
+    gap: spacing.md,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: GRAY[200],
-    boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 2, color: 'rgba(0,0,0,0.05)' }],
+    borderColor: colors.border,
   },
-  scansTitle: { fontFamily: fontFamily.semibold, fontSize: 15, color: GRAY[900] },
-  scansSub: { fontFamily: fontFamily.regular, fontSize: 13, color: GRAY[500], marginTop: 2 },
+  scansTitle: { ...typography.row, color: colors.textPrimary },
+  scansSub: { ...typography.meta, color: colors.textSecondary, marginTop: 2 },
 
-  footer: { padding: 16, backgroundColor: 'rgba(249,250,251,0.6)', borderTopWidth: 1, borderTopColor: GRAY[100] },
-  generateBtn: {
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: GRAY[900],
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: [{ offsetX: 0, offsetY: 8, blurRadius: 20, color: 'rgba(0,0,0,0.15)' }],
+  footer: {
+    padding: spacing.md,
+    backgroundColor: colors.surfaceSubtle,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  generateInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  generateText: { fontFamily: fontFamily.semibold, fontSize: 15, color: '#FFFFFF' },
 
-  results: { marginTop: 24, gap: 12 },
-  resultsHeading: { fontFamily: fontFamily.display, fontSize: 14, color: GRAY[900], marginLeft: 4 },
-  emptyText: { marginTop: 24, textAlign: 'center', fontFamily: fontFamily.regular, fontSize: 13, color: GRAY[500] },
-  errorText: { marginTop: 16, textAlign: 'center', fontFamily: fontFamily.regular, fontSize: 13, color: '#B42318' },
+  results: { marginTop: spacing.lg, gap: spacing.md },
+  resultsHeading: { ...typography.row, color: colors.textPrimary, marginLeft: spacing.xs },
+  emptyText: { marginTop: spacing.lg, textAlign: 'center', ...typography.meta, color: colors.textSecondary },
+  errorText: { marginTop: spacing.md, textAlign: 'center', ...typography.meta, color: colors.danger },
 
   jobCard: {
-    gap: 10,
-    padding: 16,
-    borderRadius: 20,
-    backgroundColor: '#FFFFFF',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderCurve: 'continuous',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: GRAY.ring,
-    boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 8, color: 'rgba(0,0,0,0.04)' }],
+    borderColor: colors.border,
+    boxShadow: elevation.card,
   },
-  jobCardFailed: { borderColor: '#FECDCA', backgroundColor: '#FFFBFA' },
-  jobHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  jobTitle: { fontFamily: fontFamily.semibold, fontSize: 14, color: GRAY[900] },
-  jobContents: { fontFamily: fontFamily.semibold, fontSize: 13, color: GRAY[700], marginTop: -2 },
-  jobMeta: { fontFamily: fontFamily.regular, fontSize: 12, color: GRAY[500] },
+  jobCardFailed: { borderColor: colors.dangerBorder, backgroundColor: colors.dangerSurface },
+  jobHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  jobTitle: { ...typography.row, color: colors.textPrimary },
+  jobContents: { ...typography.label, color: colors.textSecondary, marginTop: -2 },
+  jobMeta: { ...typography.meta, fontSize: 12, color: colors.textFaint },
   retryBtn: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: GRAY[100],
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  retryText: { fontFamily: fontFamily.semibold, fontSize: 13, color: GRAY[900] },
+  retryText: { ...typography.label, color: colors.textPrimary },
 
   resultRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: GRAY[200],
+    borderColor: colors.border,
   },
-  resultLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, marginRight: 8 },
+  resultLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginRight: spacing.sm },
   resultIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  resultName: { fontFamily: fontFamily.semibold, fontSize: 14, color: GRAY[900] },
-  resultMeta: { fontFamily: fontFamily.regular, fontSize: 12, color: GRAY[500], marginTop: 2 },
+  resultName: { ...typography.row, color: colors.textPrimary },
+  resultMeta: { ...typography.meta, fontSize: 12, color: colors.textSecondary, marginTop: 2 },
 });

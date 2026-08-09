@@ -17,7 +17,7 @@ import { DateTimePicker } from '@expo/ui/community/datetime-picker';
 
 import type { SearchQuery } from '@/../packages/contracts/src';
 import { searchQuerySchema } from '@/../packages/contracts/src';
-import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
+import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 export type ReceiptFilters = Omit<SearchQuery, 'text' | 'view'>;
 
@@ -297,30 +297,30 @@ function DateFilterButton({ label, value, active, onPress, onClear }: {
 const styles = StyleSheet.create({
   filterRoot: { flex: 1, backgroundColor: colors.background },
   filterHeader: { minHeight: 58, paddingHorizontal: spacing.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  filterTitle: { fontFamily: fontFamily.semibold, fontSize: 18, color: colors.textPrimary },
-  headerAction: { fontFamily: fontFamily.semibold, fontSize: 15, color: colors.accent },
+  filterTitle: { ...typography.row, fontSize: 17, color: colors.textPrimary },
+  headerAction: { ...typography.row, color: colors.accent },
   filterContent: { padding: spacing.lg, gap: spacing.xl, paddingBottom: spacing.xl * 2 },
-  filterLabel: { fontFamily: fontFamily.semibold, fontSize: 13, color: colors.textPrimary },
-  filterInput: { minHeight: 44, paddingHorizontal: 12, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, fontFamily: fontFamily.regular, color: colors.textPrimary, backgroundColor: '#FFFFFF' },
-  dateFilterRow: { minHeight: 56, flexDirection: 'row', alignItems: 'stretch', borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, borderCurve: 'continuous', backgroundColor: '#FFFFFF' },
+  filterLabel: { ...typography.label, color: colors.textPrimary },
+  filterInput: { minHeight: 48, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, borderCurve: 'continuous', fontFamily: fontFamily.semibold, fontSize: 15, color: colors.textPrimary, backgroundColor: colors.surface },
+  dateFilterRow: { minHeight: 58, flexDirection: 'row', alignItems: 'stretch', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, borderCurve: 'continuous', backgroundColor: colors.surface },
   dateFilterRowActive: { borderColor: colors.accent },
   dateFilterMain: { flex: 1, minWidth: 0, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
-  dateFilterLabel: { fontFamily: fontFamily.regular, fontSize: 11, color: colors.textSecondary },
-  dateFilterValue: { marginTop: 2, fontFamily: fontFamily.semibold, fontSize: 15, color: colors.textPrimary, fontVariant: ['tabular-nums'] },
+  dateFilterLabel: { fontFamily: fontFamily.regular, fontSize: 12, color: colors.textSecondary },
+  dateFilterValue: { marginTop: 2, ...typography.row, color: colors.textPrimary, fontVariant: ['tabular-nums'] },
   dateFilterPlaceholder: { fontFamily: fontFamily.regular, color: colors.textSecondary },
   dateFilterClear: { width: 44, alignItems: 'center', justifyContent: 'center', borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: colors.border },
-  datePickerPanel: { overflow: 'hidden', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, borderCurve: 'continuous', backgroundColor: '#FFFFFF' },
+  datePickerPanel: { overflow: 'hidden', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, borderCurve: 'continuous', backgroundColor: colors.surface },
   datePickerHeader: { minHeight: 44, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  datePickerTitle: { fontFamily: fontFamily.semibold, fontSize: 13, color: colors.textPrimary },
-  datePickerDone: { fontFamily: fontFamily.semibold, fontSize: 14, color: colors.accent },
+  datePickerTitle: { ...typography.label, color: colors.textPrimary },
+  datePickerDone: { ...typography.label, fontSize: 14, color: colors.accent },
   inlineFields: { flexDirection: 'row', gap: spacing.sm },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  chip: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  chip: { paddingHorizontal: spacing.md, paddingVertical: 8, borderRadius: radius.pill, backgroundColor: colors.surfaceSubtle, borderWidth: 1, borderColor: colors.border },
   chipSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
-  chipText: { fontFamily: fontFamily.regular, fontSize: 12, color: colors.textSecondary },
-  chipTextSelected: { fontFamily: fontFamily.semibold, color: '#FFFFFF' },
-  currencyHint: { fontFamily: fontFamily.regular, fontSize: 12, color: colors.textSecondary },
-  errorText: { fontFamily: fontFamily.regular, fontSize: 13, color: '#B42318', textAlign: 'center' },
-  applyButton: { minHeight: 48, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ctaBackground },
-  applyText: { fontFamily: fontFamily.semibold, fontSize: 15, color: colors.ctaText },
+  chipText: { ...typography.label, color: colors.textSecondary },
+  chipTextSelected: { color: colors.ctaText },
+  currencyHint: { ...typography.meta, fontSize: 12, color: colors.textSecondary },
+  errorText: { ...typography.meta, color: colors.danger, textAlign: 'center' },
+  applyButton: { height: 54, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ctaBackground },
+  applyText: { ...typography.button, color: colors.ctaText },
 });

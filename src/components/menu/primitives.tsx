@@ -1,48 +1,59 @@
 /**
- * Menu primitives — the shared building blocks for the Export / Search /
- * Settings screens, ported from the finance-app reference into RN.
+ * Menu primitives — the shared building blocks for the Export / Search / Plan /
+ * Settings screens.
  *
- * Same design tokens as the receipt card: grey-only hierarchy, white cards with
- * a 1px ring + soft shadow, rounded-20, tracked uppercase eyebrows.
+ * These used to carry their own Tailwind grey scale, which is how the menu
+ * drifted away from the rest of the app: four screens imported `GRAY` and none
+ * of them ever touched `theme/tokens`. Everything here now reads from tokens,
+ * so the menu and the onboarding/receipt screens move together.
+ *
+ * Two rules the whole menu follows:
+ *   - selection is `colors.accent` (forest) — a chosen chip, plan, or format
+ *   - a primary action is `colors.ctaBackground` (dark pill)
+ * They are never swapped.
  */
 import React from 'react';
-import { Pressable, StyleSheet, Text, View, type TextStyle, type ViewStyle } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type TextStyle,
+  type ViewStyle,
+} from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useDerivedValue, withTiming } from 'react-native-reanimated';
 
-import { fontFamily } from '@/theme/tokens';
-
-/** Spec greys (Tailwind scale). */
-export const GRAY = {
-  900: '#111827',
-  700: '#374151',
-  600: '#4B5563',
-  500: '#6B7280',
-  400: '#9CA3AF',
-  200: '#E5E7EB',
-  100: '#F3F4F6',
-  50: '#F9FAFB',
-  ring: 'rgba(17,24,39,0.05)',
-} as const;
+import { colors, elevation, radius, spacing, typography } from '@/theme/tokens';
 
 type FeatherName = React.ComponentProps<typeof Feather>['name'];
 
+/** Uppercase section marker. Matches the "SETUP" eyebrow on onboarding. */
 export function Eyebrow({ children, style }: { children: string; style?: TextStyle }) {
   return <Text style={[styles.eyebrow, style]}>{children}</Text>;
 }
 
-/** White rounded card with a 1px ring + soft shadow; rows stack inside. */
+/** White rounded card with a hairline border + soft shadow; rows stack inside. */
 export function Card({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
   return <View style={[styles.card, style]}>{children}</View>;
 }
 
-/** Hairline divider, inset past the icon like the reference. */
-export function Divider({ inset = 56 }: { inset?: number }) {
-  return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: GRAY[100], marginLeft: inset }} />;
+/** Hairline divider, inset past the icon chip so it aligns with the label. */
+export function Divider({ inset = 60 }: { inset?: number }) {
+  return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginLeft: inset }} />;
 }
 
 /** Round icon chip that leads a row. */
-export function IconChip({ icon, color = GRAY[500], bg = GRAY[50] }: { icon: FeatherName; color?: string; bg?: string }) {
+export function IconChip({
+  icon,
+  color = colors.textSecondary,
+  bg = colors.surfaceSubtle,
+}: {
+  icon: FeatherName;
+  color?: string;
+  bg?: string;
+}) {
   return (
     <View style={[styles.iconChip, { backgroundColor: bg }]}>
       <Feather name={icon} size={16} color={color} />
@@ -59,7 +70,7 @@ export function Row({
   iconColor,
   iconBg,
   label,
-  labelColor = GRAY[900],
+  labelColor = colors.textPrimary,
   value,
   right,
   onPress,
@@ -81,38 +92,51 @@ export function Row({
       </View>
       <View style={styles.rowRight}>
         {value ? <Text style={styles.rowValue}>{value}</Text> : null}
-        {right ?? (onPress ? <Feather name="chevron-right" size={16} color={GRAY[400]} /> : null)}
+        {right ?? (onPress ? <Feather name="chevron-right" size={16} color={colors.textFaint} /> : null)}
       </View>
     </View>
   );
 
   if (!onPress) return body;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => pressed && { backgroundColor: GRAY[50] }}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={value ? `${label}, ${value}` : label}
+      style={({ pressed }) => pressed && { backgroundColor: colors.surfaceSubtle }}
+    >
       {body}
     </Pressable>
   );
 }
 
-/** Custom pill toggle: grey when off, `activeColor` (default gray-900) when on. */
+/** Pill toggle: grey when off, `activeColor` (default forest) when on. */
 export function Toggle({
   value,
   onValueChange,
-  activeColor = GRAY[900],
+  activeColor = colors.accent,
+  label,
 }: {
   value: boolean;
   onValueChange: (v: boolean) => void;
   activeColor?: string;
+  label?: string;
 }) {
   const p = useDerivedValue(() => withTiming(value ? 1 : 0, { duration: 200 }));
 
   const track = useAnimatedStyle(() => ({
-    backgroundColor: p.value > 0.5 ? activeColor : GRAY[200],
+    backgroundColor: p.value > 0.5 ? activeColor : colors.borderStrong,
   }));
   const knob = useAnimatedStyle(() => ({ transform: [{ translateX: p.value * 20 }] }));
 
   return (
-    <Pressable onPress={() => onValueChange(!value)} hitSlop={8}>
+    <Pressable
+      onPress={() => onValueChange(!value)}
+      hitSlop={8}
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityState={{ checked: value }}
+    >
       <Animated.View style={[styles.track, track]}>
         <Animated.View style={[styles.knob, knob]} />
       </Animated.View>
@@ -120,40 +144,207 @@ export function Toggle({
   );
 }
 
+/**
+ * The one primary action button — the dark pill from onboarding's "Continue to
+ * camera". Export's Generate, Plan's Subscribe and the filter sheet's Apply are
+ * all the same control, so they are all this.
+ */
+export function PrimaryButton({
+  label,
+  icon,
+  busy = false,
+  busyLabel,
+  onPress,
+  style,
+}: {
+  label: string;
+  icon?: FeatherName;
+  busy?: boolean;
+  busyLabel?: string;
+  onPress?: () => void;
+  style?: ViewStyle;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={busy}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: busy }}
+      style={({ pressed }) => [styles.primaryBtn, (pressed || busy) && styles.primaryBtnPressed, style]}
+    >
+      <View style={styles.primaryInner}>
+        {busy ? (
+          <ActivityIndicator size="small" color={colors.ctaText} />
+        ) : icon ? (
+          <Feather name={icon} size={18} color={colors.ctaText} />
+        ) : null}
+        <Text style={styles.primaryText}>{busy ? (busyLabel ?? label) : label}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+export type SegmentOption<T extends string> = { key: T; label: string; icon?: FeatherName; activeColor?: string };
+
+/**
+ * Segmented control with a sliding white indicator. Export's PDF/Excel and
+ * Plan's Pro/Max were two near-identical hand-rolled copies; this is both.
+ */
+export function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  compact = false,
+}: {
+  value: T;
+  options: SegmentOption<T>[];
+  onChange: (next: T) => void;
+  compact?: boolean;
+}) {
+  const [trackW, setTrackW] = React.useState(0);
+  const index = Math.max(0, options.findIndex((option) => option.key === value));
+  const segW = trackW > 0 ? (trackW - SEG_PAD * 2) / options.length : 0;
+  const p = useDerivedValue(() => withTiming(index, { duration: 220 }));
+  const indicator = useAnimatedStyle(() => ({ width: segW, transform: [{ translateX: p.value * segW }] }));
+
+  return (
+    <View style={styles.segTrack} onLayout={(e) => setTrackW(e.nativeEvent.layout.width)}>
+      {segW > 0 && <Animated.View style={[styles.segIndicator, indicator]} />}
+      {options.map((option) => {
+        const on = option.key === value;
+        return (
+          <Pressable
+            key={option.key}
+            style={[styles.segBtn, compact && styles.segBtnCompact]}
+            onPress={() => onChange(option.key)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: on }}
+            accessibilityLabel={option.label}
+          >
+            {option.icon ? (
+              <Feather
+                name={option.icon}
+                size={16}
+                color={on ? (option.activeColor ?? colors.accent) : colors.textFaint}
+              />
+            ) : null}
+            <Text style={[styles.segLabel, { color: on ? colors.textPrimary : colors.textSecondary }]}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/** Pill chip. Selected chips are forest, matching onboarding's green checks. */
+export function Chip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      style={[styles.chip, selected ? styles.chipOn : styles.chipOff]}
+    >
+      <Text style={[styles.chipText, { color: selected ? colors.ctaText : colors.textSecondary }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+const SEG_PAD = 4;
+
 const styles = StyleSheet.create({
   eyebrow: {
-    fontFamily: fontFamily.display,
-    fontSize: 10,
-    letterSpacing: 1.5,
-    color: GRAY[400],
+    ...typography.eyebrow,
+    color: colors.textFaint,
     textTransform: 'uppercase',
   },
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderCurve: 'continuous',
     borderWidth: 1,
-    borderColor: GRAY.ring,
+    borderColor: colors.border,
     overflow: 'hidden',
-    boxShadow: [{ offsetX: 0, offsetY: 8, blurRadius: 30, color: 'rgba(0,0,0,0.04)' }],
+    boxShadow: elevation.card,
   },
   iconChip: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   row: {
+    minHeight: 58,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
-  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flexShrink: 1 },
-  rowLabel: { fontFamily: fontFamily.semibold, fontSize: 14 },
-  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  rowValue: { fontFamily: fontFamily.regular, fontSize: 13, color: GRAY[500] },
-  track: { width: 44, height: 24, borderRadius: 999, padding: 2, justifyContent: 'center' },
+  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, flexShrink: 1 },
+  rowLabel: { ...typography.row },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  rowValue: { ...typography.meta, color: colors.textSecondary },
+
+  track: { width: 44, height: 24, borderRadius: radius.pill, padding: 2, justifyContent: 'center' },
   knob: {
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    boxShadow: [{ offsetX: 0, offsetY: 2, blurRadius: 4, color: 'rgba(0,0,0,0.15)' }],
+    backgroundColor: colors.surface,
+    boxShadow: elevation.raised,
   },
+
+  primaryBtn: {
+    height: 54,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.pill,
+    backgroundColor: colors.ctaBackground,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryBtnPressed: { opacity: 0.82, transform: [{ scale: 0.99 }] },
+  primaryInner: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  primaryText: { ...typography.button, color: colors.ctaText },
+
+  segTrack: {
+    flexDirection: 'row',
+    backgroundColor: colors.surfaceSubtle,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: SEG_PAD,
+  },
+  segIndicator: {
+    position: 'absolute',
+    top: SEG_PAD,
+    bottom: SEG_PAD,
+    left: SEG_PAD,
+    borderRadius: radius.sm + 4,
+    borderCurve: 'continuous',
+    backgroundColor: colors.surface,
+    boxShadow: elevation.raised,
+  },
+  segBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: 10,
+  },
+  segBtnCompact: { paddingVertical: 8 },
+  segLabel: { ...typography.label },
+
+  chip: { paddingHorizontal: spacing.md, paddingVertical: 8, borderRadius: radius.pill },
+  chipOn: { backgroundColor: colors.accent },
+  chipOff: { backgroundColor: colors.surfaceSubtle, borderWidth: 1, borderColor: colors.border },
+  chipText: { ...typography.label },
 });

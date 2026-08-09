@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { ReceiptCard, type ReceiptCardDetails } from '@/components/ui/ReceiptCard';
-import { colors } from '@/theme/tokens';
+import { colors, radius, spacing, typography } from '@/theme/tokens';
 
 export type FanItem = { id: string; total: string; details: ReceiptCardDetails };
 
@@ -191,7 +191,7 @@ export function FanCarousel({ items, onOpenItem, onDeleteItem }: {
           ) : null}
           {onDeleteItem ? (
             <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${selectedItem.details.merchant}`} onPress={() => onDeleteItem(selectedItem.id)} style={styles.deleteButton} hitSlop={6}>
-              <Ionicons name="trash-outline" size={17} color="#B42318" />
+              <Ionicons name="trash-outline" size={17} color={colors.danger} />
             </Pressable>
           ) : null}
         </View>
@@ -204,14 +204,42 @@ const styles = StyleSheet.create({
   root: { alignItems: 'center' },
   stage: { alignSelf: 'stretch' },
   card: { position: 'absolute' },
-  controls: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 8 },
-  arrow: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(120,120,128,0.10)' },
+  controls: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm },
+  arrow: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   disabled: { opacity: 0.35 },
   dots: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: 'rgba(0,0,0,0.15)' },
-  dotActive: { backgroundColor: colors.textPrimary, transform: [{ scale: 1.3 }] },
-  actions: { minHeight: 40, marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  actionButton: { minHeight: 36, paddingHorizontal: 14, borderRadius: 18, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(120,120,128,0.10)' },
-  actionText: { fontFamily: 'InstrumentSans_600SemiBold', fontSize: 13, color: colors.textPrimary },
-  deleteButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FEF3F2' },
+  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.borderStrong },
+  dotActive: { backgroundColor: colors.accent, transform: [{ scale: 1.3 }] },
+  actions: { minHeight: 40, marginTop: spacing.sm + 2, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  actionButton: {
+    minHeight: 36,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  actionText: { ...typography.label, color: colors.textPrimary },
+  deleteButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.dangerSurface,
+    borderWidth: 1,
+    borderColor: colors.dangerBorder,
+  },
 });
