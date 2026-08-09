@@ -14,6 +14,7 @@ import {
   InstrumentSans_600SemiBold_Italic,
 } from '@expo-google-fonts/instrument-sans';
 import { AuthProvider, useAuth } from '@/lib/auth/auth-context';
+import { EntitlementProvider } from '@/lib/billing/entitlement-store';
 import { purgeAbandonedCaptures, retryPending } from '@/lib/receipts/capture';
 import { syncFromServer } from '@/lib/receipts/server-sync';
 import { countProviderDelayed } from '@/lib/receipts/store';
@@ -128,13 +129,17 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AuthProvider>
-          <ProviderDelayPoller />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: colors.background },
-            }}
-          />
+          {/* Inside AuthProvider: entitlements are per-account and the store
+              re-identifies to RevenueCat whenever the signed-in user changes. */}
+          <EntitlementProvider>
+            <ProviderDelayPoller />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: colors.background },
+              }}
+            />
+          </EntitlementProvider>
         </AuthProvider>
         <StatusBar style="dark" />
       </SafeAreaProvider>

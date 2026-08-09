@@ -8,12 +8,8 @@
  * The arithmetic is NOT duplicated here: both sides call `decideQuota` from
  * contracts. Only the data-fetching differs.
  */
-import {
-  decideQuota,
-  PRODUCT_PLUS,
-  PRODUCT_UNLIMITED,
-  type QuotaVerdict,
-} from '@/../packages/contracts/src/quota';
+import { tierForProduct, type Tier } from '@/../packages/contracts/src/products';
+import { decideQuota, type QuotaVerdict } from '@/../packages/contracts/src/quota';
 import { supabase } from '@/lib/auth/supabase';
 import * as store from '@/lib/receipts/store';
 
@@ -23,7 +19,7 @@ const STALE_AFTER_MS = 5 * 60 * 1000;
 
 export type QuotaGate = {
   canScan: boolean;
-  paywall: 'plus' | 'unlimited';
+  paywall: Tier;
   remaining: number | null;
   /** True when we have never successfully synced — the optimistic allowance. */
   unknown: boolean;
@@ -45,20 +41,24 @@ async function fetchVerdict(userId: string): Promise<QuotaVerdict> {
   const subscription = subscriptions?.[0] ?? null;
   const productId = subscription?.product_id ?? null;
 
-  if (productId === PRODUCT_UNLIMITED) {
-    return decideQuota({ productId, periodStart: null, usedThisPeriod: null, freeBalance: null });
-  }
-
-  const periodStart = productId === PRODUCT_PLUS ? subscription?.current_period_start ?? null : null;
-  if (periodStart) {
-    const { count, error } = await supabase
-      .from('scan_ledger')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .eq('reason', 'scan_used')
-      .gte('created_at', periodStart);
-    if (error) throw error;
-    return decideQuota({ productId, periodStart, usedThisPeriod: count ?? 0, freeBalance: null });
+  // Any paid tier counts from its own period start (D16). The count is fetched
+  // even for the uncapped tier, where it decides nothing about access — only
+  // whether the user is past the fair-use threshold.
+  const tier = tierForProduct(productId);
+  if (tier) {
+    const periodStart = subscription?.current_period_start ?? null;
+    let usedThisPeriod: number | null = null;
+    if (periodStart) {
+      const { count, error } = await supabase
+        .from('scan_ledger')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('reason', 'scan_used')
+        .gte('created_at', periodStart);
+      if (error) throw error;
+      usedThisPeriod = count ?? 0;
+    }
+    return decideQuota({ productId, periodStart, usedThisPeriod, freeBalance: null });
   }
 
   const { data: ledger, error } = await supabase.from('scan_ledger').select('delta').eq('user_id', userId);
@@ -94,13 +94,13 @@ export async function refreshQuota(userId: string): Promise<QuotaVerdict | null>
  * scans when they are not, and the server still refuses if they really are.
  */
 export async function checkQuotaGate(userId: string | null | undefined): Promise<QuotaGate> {
-  if (!userId) return { canScan: true, paywall: 'plus', remaining: null, unknown: true };
+  if (!userId) return { canScan: true, paywall: 'pro', remaining: null, unknown: true };
 
   const cached = await store.getCachedQuota(userId);
   if (!cached) {
     if (__DEV__) console.warn('[quota] no cached balance — allowing optimistically');
     void refreshQuota(userId);
-    return { canScan: true, paywall: 'plus', remaining: null, unknown: true };
+    return { canScan: true, paywall: 'pro', remaining: null, unknown: true };
   }
 
   if (Date.now() - cached.fetchedAt > STALE_AFTER_MS) void refreshQuota(userId);
@@ -125,7 +125,7 @@ export async function applyServerQuota(
   if (!userId) return;
   if (typeof scansRemaining === 'number') {
     const cached = await store.getCachedQuota(userId);
-    await store.setCachedQuota(userId, { remaining: scansRemaining, paywall: cached?.paywall ?? 'plus' });
+    await store.setCachedQuota(userId, { remaining: scansRemaining, paywall: cached?.paywall ?? 'pro' });
     return;
   }
   await store.decrementCachedQuota(userId);

@@ -8,6 +8,7 @@ import React, { useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
+import { DeleteAccountScreen } from '@/components/menu/DeleteAccountScreen';
 import { Card, Divider, Eyebrow, Row, Toggle } from '@/components/menu/primitives';
 import { useAuth } from '@/lib/auth/auth-context';
 import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
@@ -26,6 +27,10 @@ export function SettingsScreen() {
   const [darkMode, setDarkMode] = useState(false);
   const [push, setPush] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  // Deletion is an interstitial, not a dialog: Blueprint §13.2 requires the
+  // billing warning and both manage-subscription links to be READ before the
+  // destructive action is reachable, which an alert cannot carry.
+  const [deleting, setDeleting] = useState(false);
   const email = auth.user?.email ?? 'Signed in';
   const displayName = auth.user?.user_metadata?.full_name ?? email.split('@')[0] ?? 'Parse user';
 
@@ -38,6 +43,8 @@ export function SettingsScreen() {
       setSigningOut(false);
     }
   };
+
+  if (deleting) return <DeleteAccountScreen onCancel={() => setDeleting(false)} />;
 
   return (
     <ScrollView
@@ -98,6 +105,17 @@ export function SettingsScreen() {
           onPress={() => {
             void logOut();
           }}
+        />
+        <Divider />
+        {/* Both stores require in-app account deletion to be reachable from the
+            app itself, not only from a website. */}
+        <Row
+          icon="trash-2"
+          iconColor={colors.danger}
+          iconBg={colors.dangerSurface}
+          label="Delete Account"
+          labelColor={colors.danger}
+          onPress={() => setDeleting(true)}
         />
       </Section>
 
