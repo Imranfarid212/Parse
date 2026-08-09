@@ -1,18 +1,17 @@
 /**
- * PlanScreen — the Plan tab content: the subscription screen (finance-app
- * reference). A Pro/Max segmented toggle drives which plan's features + prices
- * show; an "Early promotion discount" switch applies the discounted prices; two
- * billing cards (month/year) pick the term. Everything below reacts to those
- * three choices, ending in a Subscribe button that reflects the live price.
- * MenuPanel renders the "Subscription" title.
+ * PlanScreen — the Plan tab content: the subscription screen. A Pro/Max
+ * segmented toggle drives which plan's features + prices show; an "Early
+ * promotion discount" switch applies the discounted prices; two billing cards
+ * (month/year) pick the term. Everything below reacts to those three choices,
+ * ending in a Subscribe button that reflects the live price. MenuPanel renders
+ * the "Subscription" title.
  */
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import Animated, { useAnimatedStyle, useDerivedValue, withTiming } from 'react-native-reanimated';
 
-import { Card, GRAY, Toggle } from '@/components/menu/primitives';
-import { fontFamily, spacing } from '@/theme/tokens';
+import { Card, PrimaryButton, Segmented, Toggle } from '@/components/menu/primitives';
+import { colors, elevation, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 type PlanKey = 'pro' | 'max';
 type Billing = 'month' | 'year';
@@ -37,28 +36,7 @@ const PLANS: Record<PlanKey, {
   },
 };
 
-const GREEN = '#22C55E';
-const AMBER = { fg: '#B45309', bg: '#FFFBEB', border: '#FDE68A' };
-
-/** Two-segment Pro/Max toggle with a sliding white pill. */
-const SEG_PAD = 4;
-function PlanToggle({ value, onChange }: { value: PlanKey; onChange: (p: PlanKey) => void }) {
-  const [trackW, setTrackW] = useState(0);
-  const segW = trackW > 0 ? (trackW - SEG_PAD * 2) / 2 : 0;
-  const p = useDerivedValue(() => withTiming(value === 'max' ? 1 : 0, { duration: 220 }));
-  const indicator = useAnimatedStyle(() => ({ width: segW, transform: [{ translateX: p.value * segW }] }));
-
-  return (
-    <View style={styles.segTrack} onLayout={(e) => setTrackW(e.nativeEvent.layout.width)}>
-      {segW > 0 && <Animated.View style={[styles.segIndicator, indicator]} />}
-      {(['pro', 'max'] as PlanKey[]).map((k) => (
-        <Pressable key={k} style={styles.segBtn} onPress={() => onChange(k)}>
-          <Text style={[styles.segLabel, { color: value === k ? GRAY[900] : GRAY[500] }]}>{PLANS[k].name}</Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
+const PLAN_OPTIONS = (['pro', 'max'] as PlanKey[]).map((key) => ({ key, label: PLANS[key].name }));
 
 /** A billing card: bold price (with strikethrough when the promo is on) + term. */
 function BillingCard({
@@ -79,6 +57,9 @@ function BillingCard({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`$${(promo ? discounted : original).toFixed(2)} per ${term}`}
       style={[styles.billCard, selected ? styles.billCardOn : styles.billCardOff]}
     >
       <View style={styles.billPriceRow}>
@@ -101,12 +82,12 @@ export function PlanScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <PlanToggle value={plan} onChange={setPlan} />
+      <Segmented value={plan} options={PLAN_OPTIONS} onChange={setPlan} />
 
       {/* Trial badge */}
       <View style={styles.trialWrap}>
         <View style={styles.trialBadge}>
-          <Feather name="alert-circle" size={14} color={AMBER.fg} />
+          <Feather name="alert-circle" size={14} color={colors.warning} />
           <Text style={styles.trialText}>Free Trial: 9 scans left</Text>
         </View>
       </View>
@@ -115,7 +96,7 @@ export function PlanScreen() {
       <Card style={styles.featureCard}>
         {current.features.map((f) => (
           <View key={f} style={styles.featureRow}>
-            <Feather name="check" size={18} color={GREEN} />
+            <Feather name="check" size={18} color={colors.accent} />
             <Text style={styles.featureText}>{f}</Text>
           </View>
         ))}
@@ -127,7 +108,7 @@ export function PlanScreen() {
           <Text style={styles.promoTitle}>Early promotion discount</Text>
           <Text style={styles.promoSub}>30% off — tap now to avail</Text>
         </View>
-        <Toggle value={promo} onValueChange={setPromo} activeColor={GREEN} />
+        <Toggle label="Early promotion discount" value={promo} onValueChange={setPromo} />
       </View>
 
       {/* Billing */}
@@ -150,86 +131,79 @@ export function PlanScreen() {
         />
       </View>
 
-      {/* Subscribe */}
-      <Pressable style={({ pressed }) => [styles.subscribe, pressed && { transform: [{ scale: 0.98 }] }]}>
-        <Text style={styles.subscribeText}>Subscribe for ${displayPrice.toFixed(2)} / {billing}</Text>
-      </Pressable>
+      <PrimaryButton
+        label={`Subscribe for $${displayPrice.toFixed(2)} / ${billing}`}
+        style={styles.subscribe}
+      />
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: 40 },
-
-  segTrack: {
-    flexDirection: 'row',
-    backgroundColor: GRAY[200],
-    borderRadius: 999,
-    padding: SEG_PAD,
+  content: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xl,
+    gap: spacing.lg,
   },
-  segIndicator: {
-    position: 'absolute',
-    top: SEG_PAD,
-    bottom: SEG_PAD,
-    left: SEG_PAD,
-    borderRadius: 999,
-    backgroundColor: '#FFFFFF',
-    boxShadow: [{ offsetX: 0, offsetY: 1, blurRadius: 3, color: 'rgba(0,0,0,0.10)' }],
-  },
-  segBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 9 },
-  segLabel: { fontFamily: fontFamily.semibold, fontSize: 13 },
 
-  trialWrap: { alignItems: 'center', marginTop: 24 },
+  trialWrap: { alignItems: 'center' },
   trialBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
+    gap: spacing.xs + 2,
+    paddingHorizontal: spacing.md,
     paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: AMBER.bg,
+    borderRadius: radius.pill,
+    backgroundColor: colors.warningSurface,
     borderWidth: 1,
-    borderColor: AMBER.border,
+    borderColor: colors.warningBorder,
   },
-  trialText: { fontFamily: fontFamily.semibold, fontSize: 12, color: AMBER.fg },
+  trialText: { ...typography.eyebrow, color: colors.warning },
 
-  featureCard: { borderRadius: 24, padding: 24, gap: 16, marginTop: 24 },
-  featureRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  featureText: { fontFamily: fontFamily.regular, fontSize: 14, color: GRAY[600] },
+  featureCard: { padding: spacing.lg, gap: spacing.md },
+  featureRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  featureText: { ...typography.meta, fontSize: 15, color: colors.textSecondary },
 
   promoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginTop: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
+    gap: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 4,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: GRAY[100],
-    boxShadow: [{ offsetX: 0, offsetY: 4, blurRadius: 12, color: 'rgba(0,0,0,0.02)' }],
+    borderColor: colors.border,
   },
-  promoTitle: { fontFamily: fontFamily.semibold, fontSize: 13, color: GRAY[900] },
-  promoSub: { fontFamily: fontFamily.regular, fontSize: 11, color: GRAY[500], marginTop: 2 },
+  promoTitle: { ...typography.label, color: colors.textPrimary },
+  promoSub: { ...typography.eyebrow, fontFamily: fontFamily.regular, color: colors.textSecondary, marginTop: 2 },
 
-  billRow: { flexDirection: 'row', gap: 16, marginTop: 24 },
-  billCard: { flex: 1, padding: 16, borderRadius: 20, borderWidth: 2 },
-  billCardOn: { borderColor: GRAY[900], backgroundColor: GRAY[50] },
-  billCardOff: { borderColor: GRAY[200], backgroundColor: '#FFFFFF' },
+  billRow: { flexDirection: 'row', gap: spacing.md },
+  billCard: {
+    flex: 1,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    borderWidth: 2,
+  },
+  billCardOn: { borderColor: colors.accent, backgroundColor: colors.accentSurface },
+  billCardOff: { borderColor: colors.border, backgroundColor: colors.surface },
   billPriceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
-  billStrike: { fontFamily: fontFamily.regular, fontSize: 13, color: GRAY[400], textDecorationLine: 'line-through' },
-  billPrice: { fontFamily: fontFamily.display, fontSize: 16, color: GRAY[900] },
-  billTerm: { fontFamily: fontFamily.regular, fontSize: 11, color: GRAY[500], marginTop: 4 },
-
-  subscribe: {
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: GRAY[900],
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 32,
-    boxShadow: [{ offsetX: 0, offsetY: 8, blurRadius: 20, color: 'rgba(0,0,0,0.15)' }],
+  billStrike: {
+    ...typography.meta,
+    color: colors.textFaint,
+    textDecorationLine: 'line-through',
   },
-  subscribeText: { fontFamily: fontFamily.semibold, fontSize: 15, color: '#FFFFFF' },
+  billPrice: {
+    fontFamily: fontFamily.display,
+    fontSize: 20,
+    letterSpacing: -0.4,
+    color: colors.textPrimary,
+    fontVariant: ['tabular-nums'],
+  },
+  billTerm: { ...typography.eyebrow, fontFamily: fontFamily.regular, color: colors.textSecondary, marginTop: spacing.xs },
+
+  subscribe: { marginTop: spacing.sm, boxShadow: elevation.card },
 });

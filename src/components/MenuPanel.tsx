@@ -17,7 +17,7 @@ import { ExportScreen } from '@/components/menu/ExportScreen';
 import { PlanScreen } from '@/components/menu/PlanScreen';
 import { SettingsScreen } from '@/components/menu/SettingsScreen';
 import { SearchView } from '@/components/search/SearchView';
-import { colors, radius, spacing, typography } from '@/theme/tokens';
+import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const GLASS = isLiquidGlassAvailable();
 const PAD = 5;
@@ -65,7 +65,7 @@ function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: 
           const on = i === active;
           return (
             <Pressable key={t.label} onPress={() => onChange(i)} style={{ width: tabW, height: TAB_H, alignItems: 'center', justifyContent: 'center', gap: 2 }}>
-              <Ionicons name={t.icon} size={20} color={on ? '#111' : colors.textSecondary} />
+              <Ionicons name={t.icon} size={20} color={on ? colors.textPrimary : colors.textSecondary} />
               <Text style={[styles.tabLabel, on && styles.tabLabelActive]}>{t.label}</Text>
             </Pressable>
           );
@@ -115,17 +115,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
-    height: 52,
+    paddingBottom: spacing.sm,
+    minHeight: 56,
   },
   headerBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  title: { fontFamily: typography.display.fontFamily, fontSize: 22, color: colors.textPrimary },
+  title: { ...typography.heading, color: colors.textPrimary },
   content: { flex: 1 },
 
   toggleArea: { paddingHorizontal: spacing.lg },
-  tabsWrap: { borderRadius: radius.pill, overflow: 'hidden', backgroundColor: 'rgba(120,120,128,0.10)', justifyContent: 'center' },
+  tabsWrap: { borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.surfaceSubtle, justifyContent: 'center' },
   tabsRow: { flexDirection: 'row' },
   indicator: { position: 'absolute', left: 0, borderRadius: radius.pill, overflow: 'hidden' },
   indicatorSolid: { backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: radius.pill },
-  tabLabel: { fontFamily: typography.subtitle.fontFamily, fontSize: 11, color: colors.textSecondary },
-  tabLabelActive: { color: '#111', fontFamily: typography.button.fontFamily },
+  tabLabel: { fontFamily: fontFamily.medium, fontSize: 11, color: colors.textSecondary },
+  tabLabelActive: { color: colors.textPrimary, fontFamily: fontFamily.semibold },
 });

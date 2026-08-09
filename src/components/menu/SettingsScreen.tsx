@@ -1,21 +1,21 @@
 /**
- * SettingsScreen — the Settings tab content (finance-app reference).
+ * SettingsScreen — the Settings tab content.
  * Profile card, then Preferences / Finance / Support / Account sections, each a
- * ringed white Card of Rows. Renders into MenuPanel's content area (MenuPanel
- * owns the "Settings" title + close).
+ * white Card of Rows. Renders into MenuPanel's content area (MenuPanel owns the
+ * "Settings" title + close).
  */
 import React, { useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
-import { Card, Divider, Eyebrow, GRAY, Row, Toggle } from '@/components/menu/primitives';
+import { Card, Divider, Eyebrow, Row, Toggle } from '@/components/menu/primitives';
 import { useAuth } from '@/lib/auth/auth-context';
-import { fontFamily, spacing } from '@/theme/tokens';
+import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <View style={{ gap: 12 }}>
-      <Eyebrow style={{ marginLeft: 8 }}>{title}</Eyebrow>
+    <View style={styles.section}>
+      <Eyebrow style={{ marginLeft: spacing.sm }}>{title}</Eyebrow>
       <Card>{children}</Card>
     </View>
   );
@@ -47,7 +47,7 @@ export function SettingsScreen() {
       {/* Profile */}
       <Card style={styles.profile}>
         <View style={styles.avatar}>
-          <Feather name="user" size={24} color={GRAY[500]} />
+          <Feather name="user" size={24} color={colors.textSecondary} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text numberOfLines={1} style={styles.name}>{displayName}</Text>
@@ -63,13 +63,20 @@ export function SettingsScreen() {
         <Divider />
         <Row icon="tag" label="Categories" value={`${auth.selectedCategoryIds.length} active`} onPress={() => {}} />
         <Divider />
-        <Row icon="moon" label="Dark Mode" right={<Toggle value={darkMode} onValueChange={setDarkMode} />} />
+        <Row icon="moon" label="Dark Mode" right={<Toggle label="Dark Mode" value={darkMode} onValueChange={setDarkMode} />} />
         <Divider />
-        <Row icon="bell" label="Push Notifications" right={<Toggle value={push} onValueChange={setPush} />} />
+        <Row icon="bell" label="Push Notifications" right={<Toggle label="Push Notifications" value={push} onValueChange={setPush} />} />
       </Section>
 
       <Section title="Finance">
-        <Row icon="credit-card" iconColor="#2563EB" iconBg="#EFF6FF" label="Connected Cards" value="2 active" onPress={() => {}} />
+        <Row
+          icon="credit-card"
+          iconColor={colors.info}
+          iconBg={colors.infoSurface}
+          label="Connected Cards"
+          value="2 active"
+          onPress={() => {}}
+        />
       </Section>
 
       <Section title="Support">
@@ -83,11 +90,11 @@ export function SettingsScreen() {
       <Section title="Account Actions">
         <Row
           icon="log-out"
-          iconColor="#EF4444"
-          iconBg="#FEF2F2"
+          iconColor={colors.danger}
+          iconBg={colors.dangerSurface}
           label={signingOut ? 'Logging out' : 'Log Out'}
-          labelColor="#EF4444"
-          right={signingOut ? <ActivityIndicator color="#EF4444" /> : undefined}
+          labelColor={colors.danger}
+          right={signingOut ? <ActivityIndicator color={colors.danger} /> : undefined}
           onPress={() => {
             void logOut();
           }}
@@ -100,28 +107,34 @@ export function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: 40, gap: 28 },
-  profile: { flexDirection: 'row', alignItems: 'center', gap: 16, padding: 16 },
+  content: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xl,
+    gap: spacing.lg,
+  },
+  section: { gap: spacing.sm },
+  profile: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.md },
   avatar: {
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: GRAY[100],
+    backgroundColor: colors.surfaceSubtle,
     borderWidth: 1,
-    borderColor: GRAY[200],
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  name: { fontFamily: fontFamily.display, fontSize: 16, color: GRAY[900] },
-  email: { fontFamily: fontFamily.semibold, fontSize: 13, color: GRAY[500], marginTop: 2 },
+  name: { fontFamily: fontFamily.display, fontSize: 17, color: colors.textPrimary },
+  email: { ...typography.meta, color: colors.textSecondary, marginTop: 2 },
   editBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-    backgroundColor: GRAY[50],
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSubtle,
     borderWidth: 1,
-    borderColor: GRAY[200],
+    borderColor: colors.border,
   },
-  editText: { fontFamily: fontFamily.semibold, fontSize: 12, color: GRAY[900] },
-  version: { fontFamily: fontFamily.semibold, fontSize: 12, color: GRAY[400], textAlign: 'center', marginTop: 4 },
+  editText: { ...typography.eyebrow, color: colors.textPrimary },
+  version: { ...typography.eyebrow, color: colors.textFaint, textAlign: 'center', marginTop: spacing.xs },
 });

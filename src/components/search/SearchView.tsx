@@ -4,7 +4,7 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 import type { ReceiptView, SearchQuery } from '@/../packages/contracts/src';
-import { GRAY, Toggle } from '@/components/menu/primitives';
+import { PrimaryButton, Segmented, type SegmentOption } from '@/components/menu/primitives';
 import {
   filtersActive,
   ReceiptFilterSheet,
@@ -23,10 +23,17 @@ import {
 import * as receiptStore from '@/lib/receipts/store';
 import { useRealtimeReceipts } from '@/lib/receipts/use-realtime-receipts';
 import { isCategory, type ReceiptFields } from '@/lib/receipts/types';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { colors, radius, spacing, typography } from '@/theme/tokens';
 
 const SEARCH_DEBOUNCE_MS = 300;
 const UNDO_WINDOW_MS = 5_000;
+
+/** Card / list is a choice between two views, so it reads as a segmented
+ *  control here rather than the on/off switch it used to be. */
+const VIEW_OPTIONS: SegmentOption<ReceiptView>[] = [
+  { key: 'card', label: 'Card', icon: 'grid' },
+  { key: 'list', label: 'List', icon: 'list' },
+];
 
 const formatTotal = (receipt: ManagedReceipt) => `${receipt.fields.currency} ${receipt.fields.total.toFixed(2)}`;
 
@@ -149,17 +156,21 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
   return (
     <View style={styles.root}>
       <View style={styles.headerRow}>
-        <Pressable style={[styles.filterPill, filtersActive(filters) && styles.filterPillActive]} onPress={() => setFiltersOpen(true)} hitSlop={6}>
-          <Feather name="sliders" size={14} color={filtersActive(filters) ? '#FFFFFF' : GRAY[500]} />
-          <Text style={[styles.filterText, filtersActive(filters) && { color: '#FFFFFF' }]}>
+        <Pressable
+          style={[styles.filterPill, filtersActive(filters) && styles.filterPillActive]}
+          onPress={() => setFiltersOpen(true)}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel={filtersActive(filters) ? 'Filters active, edit filters' : 'Edit filters'}
+        >
+          <Feather name="sliders" size={14} color={filtersActive(filters) ? colors.ctaText : colors.textSecondary} />
+          <Text style={[styles.filterText, filtersActive(filters) && { color: colors.ctaText }]}>
             {filtersActive(filters) ? 'Filtered' : 'All Receipts'}
           </Text>
         </Pressable>
 
         <View style={styles.viewToggle}>
-          <Feather name={view === 'card' ? 'grid' : 'list'} size={14} color={GRAY[500]} />
-          <Text style={styles.viewLabel}>{view === 'card' ? 'Card view' : 'List view'}</Text>
-          <Toggle value={view === 'card'} onValueChange={(enabled) => changeView(enabled ? 'card' : 'list')} />
+          <Segmented value={view} options={VIEW_OPTIONS} onChange={changeView} compact />
         </View>
       </View>
 
@@ -186,7 +197,7 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
         ) : error && receipts.length === 0 ? (
           <View style={styles.center}>
             <Text selectable style={styles.errorText}>{error}</Text>
-            <Pressable style={styles.retryButton} onPress={() => void reload()}><Text style={styles.retryText}>Try again</Text></Pressable>
+            <PrimaryButton label="Try again" onPress={() => void reload()} />
           </View>
         ) : receipts.length === 0 ? (
           <Animated.View entering={FadeIn.duration(250)} style={styles.center}>
@@ -251,14 +262,14 @@ type ReceiptItemProps = { receipt: ManagedReceipt; onEdit: (receipt: ManagedRece
 function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
   return (
     <Pressable style={styles.listRow} onPress={() => onEdit(receipt)}>
-      <View style={styles.listIcon}><Ionicons name="receipt-outline" size={20} color={colors.textPrimary} /></View>
+      <View style={styles.listIcon}><Ionicons name="receipt-outline" size={18} color={colors.textSecondary} /></View>
       <View style={styles.listText}>
         <Text selectable numberOfLines={1} style={styles.listLabel}>{receipt.fields.store}</Text>
         <Text selectable numberOfLines={1} style={styles.listMeta}>{[receipt.fields.date, receipt.fields.category].filter(Boolean).join(' • ')}</Text>
       </View>
       <Text selectable style={styles.listTotal}>{formatTotal(receipt)}</Text>
       <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${receipt.fields.store}`} onPress={() => onDelete(receipt)} hitSlop={10}>
-        <Ionicons name="trash-outline" size={18} color="#B42318" />
+        <Ionicons name="trash-outline" size={18} color={colors.danger} />
       </Pressable>
     </Pressable>
   );
@@ -266,28 +277,83 @@ function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
-  filterPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.pill, backgroundColor: 'rgba(120,120,128,0.10)' },
-  filterPillActive: { backgroundColor: colors.accent },
-  filterText: { fontFamily: typography.button.fontFamily, fontSize: 13, color: colors.textPrimary },
-  viewToggle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  viewLabel: { fontFamily: typography.subtitle.fontFamily, fontSize: 12, color: GRAY[500] },
-  searchBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, height: 44, marginHorizontal: spacing.lg, paddingHorizontal: spacing.md, borderRadius: radius.md, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: GRAY[200], boxShadow: '0 1px 2px rgba(0,0,0,0.04)' },
-  searchInput: { flex: 1, fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: colors.textPrimary, padding: 0 },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  filterPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  filterPillActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  filterText: { ...typography.label, color: colors.textPrimary },
+  viewToggle: { width: 156 },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    height: 48,
+    marginHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  searchInput: { flex: 1, ...typography.row, color: colors.textPrimary, padding: 0 },
   body: { flex: 1, marginTop: spacing.sm },
   fanWrap: { flex: 1, paddingTop: 30 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
-  emptyText: { fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: GRAY[500], marginTop: -28 },
-  errorText: { fontFamily: fontFamily.regular, fontSize: 13, color: '#B42318', textAlign: 'center' },
-  retryButton: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radius.pill, backgroundColor: colors.ctaBackground },
-  retryText: { fontFamily: fontFamily.semibold, color: colors.ctaText },
-  listRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E7EB' },
-  listIcon: { width: 32, alignItems: 'center' },
+  emptyText: { ...typography.row, color: colors.textSecondary, marginTop: -28 },
+  errorText: { ...typography.meta, color: colors.danger, textAlign: 'center' },
+  listRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  listIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surfaceSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   listText: { flex: 1, minWidth: 0 },
-  listLabel: { fontFamily: typography.subtitle.fontFamily, fontSize: 15, color: colors.textPrimary },
-  listMeta: { marginTop: 2, fontFamily: typography.subtitle.fontFamily, fontSize: 12, color: colors.textSecondary },
-  listTotal: { fontFamily: typography.button.fontFamily, fontSize: 14, color: colors.textPrimary, fontVariant: ['tabular-nums'] },
-  snackbar: { position: 'absolute', left: spacing.lg, right: spacing.lg, bottom: spacing.md, minHeight: 48, paddingHorizontal: spacing.lg, borderRadius: radius.md, backgroundColor: '#1C1C1E', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 6px 18px rgba(0,0,0,0.24)' },
-  snackbarText: { fontFamily: fontFamily.regular, fontSize: 14, color: '#FFFFFF' },
-  undoText: { fontFamily: fontFamily.semibold, fontSize: 14, color: '#9ED5FF' },
+  listLabel: { ...typography.row, color: colors.textPrimary },
+  listMeta: { marginTop: 2, ...typography.meta, fontSize: 12, color: colors.textSecondary },
+  listTotal: { ...typography.row, color: colors.textPrimary, fontVariant: ['tabular-nums'] },
+  snackbar: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    bottom: spacing.md,
+    minHeight: 52,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    backgroundColor: colors.ctaBackground,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    boxShadow: '0 6px 18px rgba(12,13,16,0.24)',
+  },
+  snackbarText: { ...typography.meta, fontSize: 14, color: colors.ctaText },
+  undoText: { ...typography.button, fontSize: 14, color: colors.ctaText },
 });
