@@ -76,9 +76,9 @@ final class HybridDocumentTracker: HybridDocumentTrackerSpec {
   private static func exifOrientation(for orientation: CameraOrientation) -> CGImagePropertyOrientation {
     switch orientation {
     case .up: return .up
-    case .right: return .right
+    case .right: return .left
     case .down: return .down
-    case .left: return .left
+    case .left: return .right
     }
   }
 }
