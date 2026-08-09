@@ -57,11 +57,14 @@ const MIN_AREA = 0.04;
 const CENTER_X_TOL = 0.36;
 const CENTER_Y_TOL = 0.42;
 /**
- * withTiming toward each accepted detection — this IS the smoothing. Roughly
- * matched to the detection interval so the box is always gliding toward the
- * next detection rather than snapping and waiting (which reads as stepping).
+ * withTiming toward each accepted detection — this IS the smoothing. A touch
+ * above the detection interval so overlapping eases low-pass the frame-to-
+ * frame corner jitter (the wobble) a little more without slowing how fast a
+ * genuine move gets caught — that's gated separately, by REJECT_FRAC/MAX below,
+ * so this can't affect which corners get accepted, only how smoothly accepted
+ * ones are drawn.
  */
-const TRACK_MS = 100;
+const TRACK_MS = 140;
 /**
  * Continuity gate. Vision returns SOME rectangle every frame — often the wrong
  * one (screen, keyboard) as the receipt wavers. A detection whose centre jumps
@@ -190,14 +193,16 @@ export function useDocumentTracking(): DocumentTracking {
       // Reject implausible pages by area (shoelace on normalised corners): a
       // near-full-frame quad is the desk or wall, a speck is noise.
       //
-      // Both axes are mirrored here — a 180° correction. The Swift's EXIF
-      // orientation mapping lands the frame rotated half a turn from the
-      // portrait preview, so a card moved left/up sends the box right/down.
-      // (App is portrait-locked, so a constant flip is safe. The proper home
-      // for this is the orientation mapping in HybridDocumentTracker.swift, to
-      // be cleaned up on the next rebuild; here it's buildless.)
-      const nx = [1 - q.x1, 1 - q.x2, 1 - q.x3, 1 - q.x4];
-      const ny = [1 - q.y1, 1 - q.y2, 1 - q.y3, 1 - q.y4];
+      // No axis flip here anymore. HybridDocumentTracker.swift's EXIF
+      // orientation mapping (.left/.right) was wrong, which is what made the
+      // frame land rotated half a turn from the portrait preview — the 180°
+      // mirror here was a buildless compensation for that. Now that the native
+      // mapping is fixed, mirroring on top of already-correct data just
+      // displaces an otherwise-right box (constant offset, same shape) rather
+      // than correcting anything. If a genuine native regression brings the
+      // 180° back, it belongs in Swift again, not here.
+      const nx = [q.x1, q.x2, q.x3, q.x4];
+      const ny = [q.y1, q.y2, q.y3, q.y4];
       let a2 = 0;
       for (let i = 0; i < 4; i++) {
         const j = (i + 1) % 4;
@@ -245,8 +250,11 @@ export function useDocumentTracking(): DocumentTracking {
       const topx = vx[1] - vx[0], topy = vy[1] - vy[0];
       const botx = vx[2] - vx[3], boty = vy[2] - vy[3];
       let ang = Math.atan2(topy + boty, topx + botx);
-      // Deadzone: a near-straight card stays perfectly upright.
-      if (Math.abs(ang) < 0.05) ang = 0;
+      // Deadzone: a near-straight card stays perfectly upright. Widened from
+      // 0.05 (~2.9°) to 0.09 (~5.2°) — the residual few-degree tilt left over
+      // once the mirror/offset bug was fixed is small detection noise, not a
+      // genuine hold angle. A real deliberate tilt is well clear of this.
+      if (Math.abs(ang) < 0.09) ang = 0;
       const w = (Math.hypot(topx, topy) + Math.hypot(botx, boty)) / 2;
       const h =
         (Math.hypot(vx[3] - vx[0], vy[3] - vy[0]) + Math.hypot(vx[2] - vx[1], vy[2] - vy[1])) / 2;
