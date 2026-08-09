@@ -117,20 +117,15 @@ const FOLDER_W = 82;
 
 const toCaptureMode = (mode: Mode): CaptureMode => (mode === 'oneclick' ? 'one_click' : 'default');
 
-function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
+/** Single tap toggles Default ↔ One click — styled to match the Menu button
+ *  it sits beneath, rather than the segmented pill this used to be. */
+function ModeButton({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
+  const next = mode === 'default' ? 'oneclick' : 'default';
   return (
-    <View style={styles.toggle}>
-      {(['default', 'oneclick'] as const).map((m) => {
-        const active = mode === m;
-        return (
-          <Pressable key={m} onPress={() => onChange(m)} style={[styles.toggleSeg, active && styles.toggleSegActive]}>
-            <Text style={[styles.toggleText, active && styles.toggleTextActive]}>
-              {m === 'default' ? 'Default' : 'One click'}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
+    <Pressable style={styles.menuCard} onPress={() => onChange(next)}>
+      <Ionicons name={mode === 'default' ? 'albums-outline' : 'flash-outline'} size={22} color="#fff" />
+      <Text style={styles.menuLabel}>{mode === 'default' ? 'Default' : 'One click'}</Text>
+    </Pressable>
   );
 }
 
@@ -1036,10 +1031,14 @@ export default function CameraScreen() {
             </Pressable>
           </Animated.View>
 
-          <Pressable style={[styles.menuCard, { top: insets.top + spacing.sm }]} onPress={() => openMenu()}>
-            <Ionicons name="menu" size={22} color="#fff" />
-            <Text style={styles.menuLabel}>Menu</Text>
-          </Pressable>
+          <View style={[styles.topRight, { top: insets.top + spacing.sm }]}>
+            <Pressable style={styles.menuCard} onPress={() => openMenu()}>
+              <Ionicons name="menu" size={22} color="#fff" />
+              <Text style={styles.menuLabel}>Menu</Text>
+            </Pressable>
+
+            <ModeButton mode={mode} onChange={setMode} />
+          </View>
 
           {/* The static framing hint yields while the live outline is on the
               document — two rectangles at once reads as a bug. Where tracking
@@ -1049,8 +1048,6 @@ export default function CameraScreen() {
           </Animated.View>
 
           <View style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}>
-            <ExtractionModeToggle mode={extractionMode} onChange={setExtractionMode} />
-
             <Pressable style={[styles.capture, busy && styles.captureBusy]} onPress={onCapture} disabled={busy}>
               <View style={styles.captureInner} />
             </Pressable>
@@ -1060,7 +1057,7 @@ export default function CameraScreen() {
                 <Ionicons name="images-outline" size={26} color="#fff" />
               </Pressable>
 
-              <ModeToggle mode={mode} onChange={setMode} />
+              <ExtractionModeToggle mode={extractionMode} onChange={setExtractionMode} />
 
               <View style={styles.sideBtn} />
             </View>
@@ -1106,9 +1103,8 @@ const styles = StyleSheet.create({
 
   folder: { position: 'absolute', zIndex: 6 },
 
+  topRight: { position: 'absolute', right: spacing.md, alignItems: 'center', gap: spacing.sm },
   menuCard: {
-    position: 'absolute',
-    right: spacing.md,
     width: 56,
     paddingVertical: spacing.sm,
     borderRadius: radius.md,
@@ -1142,12 +1138,6 @@ const styles = StyleSheet.create({
   },
   captureBusy: { opacity: 0.5 },
   captureInner: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#fff' },
-
-  toggle: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.14)', borderRadius: radius.pill, padding: 3 },
-  toggleSeg: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: radius.pill },
-  toggleSegActive: { backgroundColor: 'rgba(255,255,255,0.95)' },
-  toggleText: { color: 'rgba(255,255,255,0.8)', fontSize: 13 },
-  toggleTextActive: { color: '#111', fontWeight: '600' },
 
   extractionToggle: {
     flexDirection: 'row',
