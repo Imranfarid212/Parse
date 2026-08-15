@@ -1,9 +1,11 @@
 export const COPY_PROVIDER_DELAY =
   "Your receipt is being processed due to connectivity issues - we'll update you when it's complete. Check the Recents folder when you're back.";
 
-export const TOAST_REFERRAL_SUCCESS = 'Referral sign up complete, enjoy more free scans';
-
 export const TOAST_REFERRAL_PROMPT = 'Add your referral code under menu -> plan to get more free scans';
+
+export const COPY_REFERRAL_BLOCKED = 'This referral could not be applied.';
+export const COPY_REFERRAL_ALREADY_USED = 'A referral has already been applied to this account.';
+export const COPY_REFERRAL_UNAVAILABLE = 'Referral verification is unavailable right now. Please try again.';
 
 export const COPY_QUOTA_EXHAUSTED_TITLE = 'Out of scans';
 

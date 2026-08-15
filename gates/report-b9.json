@@ -1,0 +1,29 @@
+{
+  "phase": "b9",
+  "status": "passed_local_backend",
+  "note": "Local B9 checks passed: referral contracts, App Store invite sharing, App Attest and Play Integrity lifecycles, atomic grants, cap/fraud/replay controls, and recurring influencer commission. The amended T9.1 share/install/manual-redemption flow, live Play Integrity verdict, and manual half of T9.4 remain physical/vendor evidence (docs/B9-referral-runbook.md).",
+  "duration_ms": 32041,
+  "commit_sha": "a64e5c716d5b1c4dbc5fdeb1afb3d79802ed9712",
+  "tests": [
+    {
+      "id": "T9.1-T9.2-T9.5-referral-app-source",
+      "status": "passed",
+      "duration_ms": 6324
+    },
+    {
+      "id": "T9.1-T9.5-referral-backend-source",
+      "status": "passed",
+      "duration_ms": 203
+    },
+    {
+      "id": "T9.1-T9.3-referral-validation",
+      "status": "passed",
+      "duration_ms": 601
+    },
+    {
+      "id": "T9.1-T9.5-referral-db",
+      "status": "passed",
+      "duration_ms": 24913
+    }
+  ]
+}

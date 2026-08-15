@@ -978,17 +978,6 @@ export default function CameraScreen() {
     );
   }
 
-  // No device yet means the camera list is still enumerating (or this is a
-  // simulator with no camera at all).
-  if (hasPermission && !device) {
-    return (
-      <View style={styles.gate}>
-        <StatusBar style="light" />
-        <ActivityIndicator color="#fff" />
-      </View>
-    );
-  }
-
   if (!hasPermission) {
     return (
       <View style={styles.gate}>
@@ -1027,9 +1016,17 @@ export default function CameraScreen() {
             />
           )}
 
+          {!device && (
+            <View style={styles.cameraUnavailable} pointerEvents="none">
+              <Ionicons name="camera-outline" size={34} color="rgba(255,255,255,0.8)" />
+              <Text style={styles.cameraUnavailableTitle}>Camera unavailable in Simulator</Text>
+              <Text style={styles.cameraUnavailableText}>Use Photos below, or open Menu to continue.</Text>
+            </View>
+          )}
+
           {/* Tap bare preview to focus THERE. Sits directly on the camera so
               every control below paints above it. */}
-          <TapToFocusLayer point={focus.point} onFocus={focusAt} enabled={!busy} />
+          <TapToFocusLayer point={focus.point} onFocus={focusAt} enabled={!busy && Boolean(device)} />
 
           {/* Live document outline, riding the tracker's shared values. */}
           <TrackingQuad tracking={tracking} />
@@ -1058,12 +1055,18 @@ export default function CameraScreen() {
           {/* The static framing hint yields while the live outline is on the
               document — two rectangles at once reads as a bug. Where tracking
               isn't available, `shown` never leaves 0 and the guide just stays. */}
-          <Animated.View style={[styles.guideWrap, guideStyle]} pointerEvents="none">
-            <View style={styles.guide} />
-          </Animated.View>
+          {device && (
+            <Animated.View style={[styles.guideWrap, guideStyle]} pointerEvents="none">
+              <View style={styles.guide} />
+            </Animated.View>
+          )}
 
           <View style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}>
-            <Pressable style={[styles.capture, busy && styles.captureBusy]} onPress={onCapture} disabled={busy}>
+            <Pressable
+              style={[styles.capture, (busy || !device) && styles.captureBusy]}
+              onPress={onCapture}
+              disabled={busy || !device}
+            >
               <View style={styles.captureInner} />
             </Pressable>
 
@@ -1115,6 +1118,20 @@ const styles = StyleSheet.create({
   gateText: { color: '#fff', fontSize: 16, textAlign: 'center' },
   gateBtn: { paddingHorizontal: spacing.xl, paddingVertical: spacing.md, backgroundColor: '#fff', borderRadius: radius.pill },
   gateBtnText: { color: '#000', fontWeight: '600' },
+
+  cameraUnavailable: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+    gap: spacing.sm,
+  },
+  cameraUnavailableTitle: { color: '#fff', fontSize: 17, fontFamily: fontFamily.semibold, textAlign: 'center' },
+  cameraUnavailableText: { color: 'rgba(255,255,255,0.68)', fontSize: 14, textAlign: 'center' },
 
   folder: { position: 'absolute', zIndex: 6 },
 

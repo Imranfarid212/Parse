@@ -9,7 +9,7 @@ import { AnimatedGridBackground } from '@/components/ui/AnimatedGridBackground';
 import { useAuth } from '@/lib/auth/auth-context';
 import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
-const OTP_LENGTH = 8;
+const OTP_LENGTH = 6;
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();

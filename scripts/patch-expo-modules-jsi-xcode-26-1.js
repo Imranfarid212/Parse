@@ -1,13 +1,14 @@
 const fs = require("fs");
 const path = require("path");
 
+// npm may install ExpoModulesJSI either beside expo-modules-core or nested
+// under it. Resolve the package through Node instead of baking either layout
+// into the postinstall patch. This also keeps CocoaPods and the patch pointed
+// at the same package after an Expo SDK patch upgrade changes hoisting.
 const packageRoot = path.join(
-  __dirname,
-  "..",
-  "node_modules",
-  "expo-modules-core",
-  "node_modules",
-  "expo-modules-jsi",
+  path.dirname(require.resolve("expo-modules-jsi/package.json", {
+    paths: [path.join(__dirname, "..")],
+  })),
   "apple",
   "Sources",
   "ExpoModulesJSI",

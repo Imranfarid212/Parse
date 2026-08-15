@@ -28,7 +28,14 @@ const DB_NAME = 'parse.db';
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 async function open(): Promise<SQLite.SQLiteDatabase> {
-  const db = await SQLite.openDatabaseAsync(DB_NAME);
+  const db = await SQLite.openDatabaseAsync(DB_NAME, {
+    // expo-sqlite's default close cleanup also finalizes statements owned by
+    // FTS5. FTS5 then finalizes the same statement while disconnecting its
+    // virtual table, which crashes iOS during Fast Refresh/runtime teardown.
+    // Our convenience queries finalize their own statements, so letting SQLite
+    // own FTS teardown is both safe and required.
+    finalizeUnusedStatementsBeforeClosing: false,
+  });
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS receipts (
