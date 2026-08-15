@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { rewriteRelativeImports } = require('./contracts-sync');
+
 const root = path.resolve(__dirname, '..');
 
 function read(relPath) {
@@ -23,7 +25,10 @@ const fixtures = read('packages/contracts/src/fixtures.ts');
 includes(schemas, 'extractAckSchema', 'contracts ack schema');
 includes(schemas, 'image_path', 'contracts ack image path');
 includes(schemas, 'acked_at', 'contracts ack timestamp');
-if (schemas !== mirrorSchemas) fail('contracts mirror differs; run npm run contracts:sync');
+// Compared through the same rewrite contracts:sync applies, because the mirror
+// is deliberately not byte-identical any more: Deno needs .ts on relative
+// import specifiers and the app must not have them.
+if (rewriteRelativeImports(schemas) !== mirrorSchemas) fail('contracts mirror differs; run npm run contracts:sync');
 includes(fixtures, 'extractRequestFixture', 'extract request fixture');
 includes(fixtures, 'extractionResultFixture', 'fixture result');
 

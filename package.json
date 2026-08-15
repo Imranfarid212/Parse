@@ -46,6 +46,7 @@
     "react-native-gesture-handler": "~2.32.0",
     "react-native-nitro-image": "^0.15.1",
     "react-native-nitro-modules": "^0.36.1",
+    "react-native-purchases": "^10.7.0",
     "react-native-reanimated": "4.5.0",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
@@ -127,7 +128,14 @@
     "b7:db:verify": "node scripts/verify-b7-db.js",
     "b7:e2e": "node scripts/b7-e2e.js",
     "b7:fonts": "node scripts/build-export-fonts.js",
-    "b7:all": "npm run b7:app && npm run b7:backend && npm run b7:builders"
+    "b7:all": "npm run b7:app && npm run b7:backend && npm run b7:builders",
+    "b8:app": "npm run typecheck && expo lint --no-cache && node scripts/verify-b8-app.js",
+    "b8:backend": "npm run contracts:sync && node scripts/verify-b8-backend.js",
+    "b8:deno": "node scripts/verify-b8-deno.js",
+    "b8:db:verify": "node scripts/verify-b8-db.js",
+    "b8:all": "npm run b8:app && npm run b8:backend && npm run b8:deno && npm run b8:db:verify",
+    "pods": "cd ios && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install",
+    "prebuild:ios": "npx expo prebuild --platform ios && npm run pods"
   },
   "private": true
 }

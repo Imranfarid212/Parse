@@ -30,7 +30,14 @@ import { TapToFocusLayer, useFocusReticle } from '@/components/camera/TapToFocus
 import { TrackingDebug, TrackingQuad, useDocumentTracking } from '@/components/camera/TrackingQuad';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { TOAST_REFERRAL_PROMPT, useAuth } from '@/lib/auth/auth-context';
-import { COPY_PROVIDER_DELAY, COPY_QUOTA_EXHAUSTED_BODY, COPY_QUOTA_EXHAUSTED_TITLE } from '@/../packages/contracts/src/copy';
+import { useEntitlements } from '@/lib/billing/entitlement-store';
+import {
+  COPY_PAYWALL_MAX_BODY,
+  COPY_PAYWALL_MAX_TITLE,
+  COPY_PAYWALL_PRO_BODY,
+  COPY_PAYWALL_PRO_TITLE,
+  COPY_PROVIDER_DELAY,
+} from '@/../packages/contracts/src/copy';
 import { markReferralPromptSeen, shouldShowReferralPrompt } from '@/lib/auth/referralPrompt';
 import {
   confirm,
@@ -168,6 +175,7 @@ function showNotReceiptAlert(
 export default function CameraScreen() {
   const router = useRouter();
   const auth = useAuth();
+  const entitlements = useEntitlements();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { hasPermission, requestPermission, canRequestPermission } = useCameraPermission();
@@ -429,19 +437,26 @@ export default function CameraScreen() {
   /**
    * Out of scans. A blocking alert rather than a toast: this is a dead end the
    * user has to act on, not a status update they can miss. "Upgrade" opens the
-   * Plan tab — note its Subscribe button is still a shell until billing lands.
+   * Plan tab.
+   *
+   * Which paywall to show is D8's rule — a free user is sold Pro, a capped Pro
+   * user is sold Max — and it is derived from the tier the user already holds
+   * rather than threaded back from the server's 402 hint through four layers of
+   * capture outcome. The two agree by construction: the server computes its hint
+   * from the same subscription row this tier came from.
    */
   const showQuotaExhaustedAlert = useCallback(() => {
+    const sellingMax = entitlements.tier === 'pro';
     Alert.alert(
-      COPY_QUOTA_EXHAUSTED_TITLE,
-      COPY_QUOTA_EXHAUSTED_BODY,
+      sellingMax ? COPY_PAYWALL_MAX_TITLE : COPY_PAYWALL_PRO_TITLE,
+      sellingMax ? COPY_PAYWALL_MAX_BODY : COPY_PAYWALL_PRO_BODY,
       [
         { text: 'OK', style: 'cancel' },
         { text: 'Upgrade', onPress: () => openMenu(PLAN_TAB_INDEX) },
       ],
       { cancelable: true },
     );
-  }, [openMenu]);
+  }, [openMenu, entitlements.tier]);
 
   /**
    * The shutter gate. Answers from the local cache, so an out-of-scans user is

@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { rewriteRelativeImports } = require('./contracts-sync');
+
 const root = path.resolve(__dirname, '..');
 
 function read(relPath) {
@@ -42,6 +44,7 @@ const quotaModule = read('supabase/functions/_shared/quota.ts');
 const contractsQuota = read('packages/contracts/src/quota.ts');
 const confirmFn = read('supabase/functions/receipt-confirm/index.ts');
 const schemas = read('packages/contracts/src/schemas.ts');
+const products = read('packages/contracts/src/products.ts');
 const mirrorSchemas = read('supabase/functions/_shared/contracts/schemas.ts');
 const fixtures = read('packages/contracts/src/fixtures.ts');
 const grants = read('supabase/migrations/20260723000100_b4_extract_fast_path_grants.sql');
@@ -57,7 +60,10 @@ const authContext = read('src/lib/auth/auth-context.tsx');
 const receiptClient = read('src/lib/receipts/client.ts');
 const metricsFn = read('supabase/functions/capture-metrics/index.ts');
 
-if (schemas !== mirrorSchemas) fail('contracts mirror differs; run npm run contracts:sync');
+// Compared through the same rewrite contracts:sync applies, because the mirror
+// is deliberately not byte-identical any more: Deno needs .ts on relative
+// import specifiers and the app must not have them.
+if (rewriteRelativeImports(schemas) !== mirrorSchemas) fail('contracts mirror differs; run npm run contracts:sync');
 
 includes(fn, "Deno.env.get('XAI_API_KEY')", 'server-only Grok key');
 includes(fn, "Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')", 'service role server env');
@@ -180,12 +186,30 @@ if (/EXPO_PUBLIC_.*XAI|EXPO_PUBLIC_.*GROK|EXPO_PUBLIC_.*GEMINI|EXPO_PUBLIC_.*OPE
 // modes and by the client's shutter gate. A free user must not be able to
 // bypass the cap by switching mode, and the client must not invent its own
 // arithmetic.
-includes(contractsQuota, 'PLUS_MONTHLY_CAP = 500', 'shared quota Plus cap');
-includes(contractsQuota, "PRODUCT_PLUS = 'rf_plus_699_m'", 'shared quota Plus product id');
-includes(contractsQuota, "PRODUCT_UNLIMITED = 'rf_unlimited_1199_m'", 'shared quota Unlimited product id');
+// Rewritten by DL-007: the tiers are Pro/Max, four store products grant each,
+// and the allowance is a property of the tier rather than of a product id. The
+// invariant B4 cares about is unchanged — ONE pure rule, shared by both sides,
+// with neither inventing its own arithmetic.
+includes(contractsQuota, 'MONTHLY_SCAN_CAP', 'the cap comes from the product catalogue');
+includes(contractsQuota, "from './products'", 'the quota rule resolves tiers through the catalogue');
+includes(products, 'export const tiers = [', 'the catalogue defines the tiers');
+includes(products, 'export function productId(', 'product ids are generated from one rule');
 includes(contractsQuota, 'export function decideQuota', 'quota rule is one pure function');
 // Imported from Deno, where extensionless relative imports do not resolve.
-excludesPattern(contractsQuota, /^import\s/m, 'contracts quota rule must stay dependency-free');
+//
+// The rule used to be "this file imports nothing", which held only while every
+// contract was a single self-contained file. B8 split the product catalogue out
+// of the quota rule and broke it silently: the app typechecked and the mirror
+// looked fine, but no edge function could have booted. contracts:sync now
+// rewrites relative specifiers to carry .ts, so what is asserted is the property
+// that actually matters — the MIRROR Deno loads must have no bare or
+// extensionless relative import left in it.
+excludesPattern(contractsQuota, /from\s+['"]\w[^'"]*['"]/, 'contracts quota rule must not import a bare specifier');
+excludesPattern(
+  read('supabase/functions/_shared/contracts/quota.ts'),
+  /from\s+['"]\.\.?\/[^'"]*(?<!\.ts)['"]/,
+  'the mirrored quota rule must carry .ts on every relative import',
+);
 
 includes(quotaModule, "from './contracts/quota.ts'", 'server quota defers to the shared rule');
 
@@ -242,9 +266,9 @@ includes(balancedFn, 'evaluateQuota(admin, userId, captureId)', 'balanced charge
 includes(balancedFn, 'refundScan(admin, userId, captureId)', 'balanced gives back a rejected scan');
 includes(fn, "from '../_shared/quota.ts'", 'precise uses the shared quota module');
 includes(balancedFn, "from '../_shared/quota.ts'", 'balanced uses the shared quota module');
-excludes(fn, 'rf_plus_699_m', 'precise must not re-implement product tiers');
-excludes(balancedFn, 'rf_plus_699_m', 'balanced must not re-implement product tiers');
-excludes(quotaModule, 'PLUS_MONTHLY_CAP = 500', 'server must not re-declare the cap');
+excludes(fn, 'parse_pro_m', 'precise must not re-implement product tiers');
+excludes(balancedFn, 'parse_pro_m', 'balanced must not re-implement product tiers');
+excludes(quotaModule, 'MONTHLY_SCAN_CAP =', 'server must not re-declare the cap');
 
 // The balance rides back on a call the client already made, so the cached
 // figure refreshes without a second request.

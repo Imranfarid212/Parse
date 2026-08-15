@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { rewriteRelativeImports } = require('./contracts-sync');
+
 const root = path.resolve(__dirname, '..');
 
 function fail(message) {
@@ -81,7 +83,9 @@ if (sourceFiles.join('\n') !== mirrorFiles.join('\n')) {
   for (const file of sourceFiles) {
     const source = fs.readFileSync(path.join(sourceDir, file), 'utf8');
     const mirror = fs.readFileSync(path.join(mirrorDir, file), 'utf8');
-    if (source !== mirror) fail(`contracts mirror differs for ${file}; run npm run contracts:sync`);
+    // Through the same rewrite contracts:sync applies — the mirror carries .ts
+    // on relative imports so Deno can resolve them, and the source must not.
+    if (rewriteRelativeImports(source) !== mirror) fail(`contracts mirror differs for ${file}; run npm run contracts:sync`);
   }
 }
 

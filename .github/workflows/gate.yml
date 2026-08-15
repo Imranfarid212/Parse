@@ -1,0 +1,148 @@
+name: Gate
+
+# Runs the gate for the phase a pull request is actually working on.
+#
+# This replaces b1-gate.yml, which ran `npm run gate -- b1` on every pull
+# request regardless of phase. That was right in B1 and quietly wrong from B2
+# onwards: B2 through B7 all merged on B1's checks, and nothing in CI ever
+# executed the tests those phases were gated by. Worse, the B1 gate itself went
+# red at some point (a db.types.ts drift the drift check was correctly
+# reporting) and stayed red across several merges, because a check that is
+# always the same check stops being read.
+#
+# The phase comes from the PR's `phase:bN` label — the same label the phase lock
+# already keys on — so there is one place to say which phase a PR belongs to. A
+# PR with no phase label still runs b1, which keeps the schema, drift and
+# typecheck baseline on every change.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+jobs:
+  phase-lock:
+    name: Phase Lock
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+
+      - name: Check phase label lock
+        run: npm run phase-lock
+
+  resolve-phase:
+    name: Resolve Phase
+    runs-on: ubuntu-latest
+    outputs:
+      phase: ${{ steps.pick.outputs.phase }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pick the phase
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          # Serialized rather than interpolated into the script body: a label is
+          # attacker-controllable text on a fork PR, and expanding it inline
+          # would run it.
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          phase=""
+
+          if [ "$EVENT" = "pull_request" ]; then
+            phase=$(printf '%s' "$LABELS" | grep -oE 'phase:b[0-9]+' | head -1 | cut -d: -f2 || true)
+            [ -n "$phase" ] || echo "No phase:bN label on this PR; running the b1 baseline."
+          else
+            # A push to main has no label to read. The playbook's rule is that a
+            # phase flips to passed on a green gate for *that* phase on main, so
+            # take the phase the project is actually on: the furthest one that is
+            # not still locked.
+            phase=$(node -e "
+              const phases = require('./gates/phases.json');
+              const open = Object.entries(phases)
+                .filter(([, value]) => value.state !== 'locked')
+                .map(([key]) => key)
+                .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+              process.stdout.write(open[open.length - 1] ?? 'b1');
+            ")
+            echo "Push to ${GITHUB_REF_NAME}; phases.json says the project is on $phase."
+          fi
+
+          [ -n "$phase" ] || phase=b1
+          echo "phase=$phase" >> "$GITHUB_OUTPUT"
+          echo "Gate phase: $phase"
+
+  gate:
+    name: Gate ${{ needs.resolve-phase.outputs.phase }}
+    needs: resolve-phase
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The B7 suites run under Deno: the libraries that read an xlsx and a PDF
+      # back only exist there, which is what makes those assertions about the
+      # file the user opens rather than about the code that wrote it.
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install Supabase CLI runtime dependencies
+        run: |
+          if command -v apk >/dev/null 2>&1; then
+            apk add --no-cache libstdc++ libgcc
+          else
+            sudo apt-get update
+            sudo apt-get install -y libstdc++6 libgcc1
+          fi
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: 2.109.1
+          github-token: ${{ github.token }}
+
+      # Every gate from b5 onwards asserts against a live database. b1's own
+      # first test is the reset, so starting the stack here costs it a duplicate
+      # reset and buys every later phase a stack to run against.
+      - name: Start Supabase
+        run: |
+          supabase start -x vector
+          supabase db reset
+
+      - name: Run gate ${{ needs.resolve-phase.outputs.phase }}
+        run: npm run gate -- ${{ needs.resolve-phase.outputs.phase }}
+
+      # The report names the phase, the commit and each test's result. Keeping it
+      # makes a red gate diagnosable without re-running it locally.
+      - name: Upload gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-report-${{ needs.resolve-phase.outputs.phase }}
+          path: gates/report-${{ needs.resolve-phase.outputs.phase }}.json
+          if-no-files-found: warn
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup

@@ -4,6 +4,7 @@ export * from './enums';
 export * from './errors';
 export * from './exports';
 export * from './fixtures';
+export * from './products';
 export * from './quota';
 export * from './schemas';
 export * from './types';

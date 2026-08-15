@@ -10,6 +10,7 @@
  * an honest message rather than a green check over a dropped receipt.
  */
 import * as SQLite from 'expo-sqlite';
+import type { Tier } from '@/../packages/contracts/src/products';
 import { normalizeReceiptItems } from '@/lib/receipts/types';
 
 import type {
@@ -1146,7 +1147,7 @@ export async function countProviderDelayed(): Promise<number> {
  * every scan, so a tampered value buys nothing but a camera that opens onto a
  * 402. `remaining: null` means unlimited.
  */
-export type CachedQuota = { remaining: number | null; paywall: 'plus' | 'unlimited'; fetchedAt: number };
+export type CachedQuota = { remaining: number | null; paywall: Tier; fetchedAt: number };
 
 export async function getCachedQuota(userId: string): Promise<CachedQuota | null> {
   const db = await getDb();
@@ -1157,14 +1158,17 @@ export async function getCachedQuota(userId: string): Promise<CachedQuota | null
   if (!row) return null;
   return {
     remaining: row.remaining == null ? null : Number(row.remaining),
-    paywall: row.paywall === 'unlimited' ? 'unlimited' : 'plus',
+    // A row written by a build that predates the Pro/Max rename holds 'plus' or
+    // 'unlimited'; both map forward rather than being discarded, so an upgrade
+    // does not silently reset every user's cached balance.
+    paywall: row.paywall === 'max' || row.paywall === 'unlimited' ? 'max' : 'pro',
     fetchedAt: row.fetched_at,
   };
 }
 
 export async function setCachedQuota(
   userId: string,
-  quota: { remaining: number | null; paywall: 'plus' | 'unlimited' },
+  quota: { remaining: number | null; paywall: Tier },
 ): Promise<void> {
   const db = await getDb();
   const now = Date.now();

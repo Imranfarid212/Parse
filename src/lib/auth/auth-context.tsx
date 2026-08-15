@@ -602,6 +602,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         token: credential.identityToken,
       });
       if (error) throw error;
+
+      // Apple requires an app offering Sign in with Apple to revoke the user's
+      // tokens when they delete their account, and revocation needs a refresh
+      // token. The only way to get one is to exchange this authorization code —
+      // it is single-use and expires in minutes, so it happens now or never.
+      //
+      // Deliberately not awaited into the sign-in's failure path: the user is
+      // already signed in, and failing that because a follow-up call to our own
+      // backend hiccuped would be a poor trade. The cost of a miss is that
+      // deletion later reports apple_revoked: false.
+      if (credential.authorizationCode) {
+        void supabase.functions
+          .invoke('apple-link', { body: { authorization_code: credential.authorizationCode } })
+          .catch((cause) => {
+            if (__DEV__) console.warn('[auth] apple-link failed', cause);
+          });
+      }
+
       await refreshProfile();
     } finally {
       setBusy(false);

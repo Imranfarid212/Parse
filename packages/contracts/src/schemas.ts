@@ -14,6 +14,7 @@ import {
   referralStatuses,
 } from './enums';
 import { errorCodes } from './errors';
+import { offerings, terms, tiers } from './products';
 
 export const uuidSchema = z.string().uuid();
 export const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -111,7 +112,7 @@ export const extractResponseSchema = z.union([
     }),
   }),
   extractAckSchema.extend({ status: z.literal(202), code: z.literal('PROVIDER_DELAY') }),
-  z.object({ status: z.literal(402), code: z.literal('QUOTA_EXHAUSTED'), paywall: z.enum(['plus', 'unlimited']) }),
+  z.object({ status: z.literal(402), code: z.literal('QUOTA_EXHAUSTED'), paywall: z.enum(tiers) }),
   z.object({ status: z.literal(429), code: z.literal('RATE_LIMITED') }),
 ]);
 
@@ -197,3 +198,99 @@ export const referralRedeemSchema = z.object({
   code: z.string().length(6),
   entry_method: z.enum(['link', 'code']),
 });
+
+/* ------------------------------------------------------------------ *
+ * B8 — monetization & deletion
+ * ------------------------------------------------------------------ */
+
+export const tierSchema = z.enum(tiers);
+export const termSchema = z.enum(terms);
+export const offeringSchema = z.enum(offerings);
+
+/**
+ * RevenueCat webhook event types we act on.
+ *
+ * The list is open by design: `rcEventSchema` accepts an unknown `type` and the
+ * webhook stores it verbatim, because an event we cannot classify is still
+ * evidence and dropping it would lose the audit trail. Only the types below
+ * change subscription state.
+ */
+export const rcEventTypes = [
+  'INITIAL_PURCHASE',
+  'RENEWAL',
+  'PRODUCT_CHANGE',
+  'CANCELLATION',
+  'UNCANCELLATION',
+  'EXPIRATION',
+  'BILLING_ISSUE',
+  'SUBSCRIPTION_PAUSED',
+  'TRANSFER',
+  'REFUND',
+] as const;
+export type RcEventType = (typeof rcEventTypes)[number];
+
+/** Events that credit an influencer commission (Blueprint §11): real money in. */
+export const rcRevenueEventTypes = ['INITIAL_PURCHASE', 'RENEWAL', 'PRODUCT_CHANGE'] as const;
+
+/** Events that reverse one. */
+export const rcReversalEventTypes = ['REFUND'] as const;
+
+/**
+ * The subset of RevenueCat's payload the server relies on.
+ *
+ * Deliberately permissive: `.passthrough()` keeps every field RevenueCat sends
+ * so `payment_events.raw` is the verbatim log the Blueprint asks for, and the
+ * unknown-type case above stays representable. `app_user_id` is RevenueCat's
+ * alias for our auth uid — set by the client at login, never guessed here.
+ */
+export const rcEventSchema = z
+  .object({
+    id: z.string().min(1),
+    type: z.string().min(1),
+    app_user_id: z.string().min(1),
+    product_id: z.string().min(1).nullish(),
+    store: z.string().min(1).nullish(),
+    /** Milliseconds since epoch, RevenueCat's format throughout. */
+    event_timestamp_ms: z.number().int().nonnegative().nullish(),
+    purchased_at_ms: z.number().int().nonnegative().nullish(),
+    expiration_at_ms: z.number().int().nonnegative().nullish(),
+    price: z.number().nullish(),
+    price_in_purchased_currency: z.number().nullish(),
+    currency: z.string().length(3).nullish(),
+    is_trial_period: z.boolean().nullish(),
+    cancel_reason: z.string().nullish(),
+  })
+  .passthrough();
+
+export const rcWebhookSchema = z.object({
+  api_version: z.string().optional(),
+  event: rcEventSchema,
+});
+
+export const rcWebhookResponseSchema = z.union([
+  /** Accepted and applied, or accepted and already known (replay). */
+  z.object({ status: z.literal(200), applied: z.boolean(), reason: z.string().optional() }),
+  z.object({ status: z.literal(401), code: z.literal('UNAUTHORIZED') }),
+  z.object({ status: z.literal(400), code: z.literal('VALIDATION_FAILED'), message: z.string() }),
+]);
+
+/**
+ * account-delete takes no body: the JWT identifies the account, and letting a
+ * caller name the user to delete would be the whole vulnerability. The client
+ * must have shown the interstitial first (Blueprint §13.2) — that is a UI
+ * obligation the server cannot verify, which is why the copy lives in contracts
+ * and the gate asserts the screen renders it.
+ */
+export const accountDeleteResponseSchema = z.union([
+  z.object({
+    status: z.literal(200),
+    deleted: z.literal(true),
+    /** True when Apple tokens were revoked; false when the user never used SIWA. */
+    apple_revoked: z.boolean(),
+    /** True when the RevenueCat subscriber was unlinked. */
+    revenuecat_unlinked: z.boolean(),
+    purge_financial_at: z.string().datetime(),
+  }),
+  z.object({ status: z.literal(401), code: z.literal('UNAUTHORIZED') }),
+  z.object({ status: z.literal(500), code: z.literal('DELETE_FAILED'), message: z.string() }),
+]);

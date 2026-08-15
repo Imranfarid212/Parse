@@ -12,10 +12,11 @@
  *
  * This is the only authority.
  */
-import { PRODUCT_PLUS, PRODUCT_UNLIMITED, type QuotaVerdict } from './contracts/quota.ts';
+import { PRO_MONTHLY_CAP, type QuotaVerdict } from './contracts/quota.ts';
+import { MAX_FAIR_USE_THRESHOLD, tierForProduct, type Tier } from './contracts/products.ts';
 
-export { PRODUCT_PLUS, PRODUCT_UNLIMITED };
-export type { QuotaVerdict };
+export { MAX_FAIR_USE_THRESHOLD, PRO_MONTHLY_CAP, tierForProduct };
+export type { QuotaVerdict, Tier };
 
 /** Just the slice of a supabase-js client this needs, so callers can pass either. */
 type RpcClient = { rpc: (name: string, params: Record<string, unknown>) => any };
@@ -41,7 +42,10 @@ export async function evaluateQuota(client: RpcClient, userId: string, captureId
     canScan: row.out_allowed === true,
     reason: row.out_reason,
     remaining: row.out_remaining == null ? null : Number(row.out_remaining),
-    paywall: row.out_paywall === 'unlimited' ? 'unlimited' : 'plus',
+    // The paywall hint names the tier being SOLD, not the tier held: a
+    // free user is sold Pro, a capped Pro user is sold Max (D8).
+    paywall: row.out_paywall === 'max' ? 'max' : 'pro',
+    deprioritized: row.out_deprioritized === true,
   };
 }
 

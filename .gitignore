@@ -48,3 +48,13 @@ example
 # Supabase local runtime metadata
 supabase/.branches/
 supabase/.temp/
+
+# Build artifacts from local native modules (the top-level /ios and /android
+# rules do not reach nested module build dirs).
+modules/*/android/build/
+modules/*/android/.cxx/
+
+# Scratch and tooling output — none of this is source.
+tmp/
+output/
+.codex_snapshots/

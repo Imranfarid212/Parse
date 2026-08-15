@@ -1,0 +1,4 @@
+appId: com.imranfarid.parse
+---
+- tapOn:
+    point: 90%, 12%
