@@ -51,7 +51,9 @@
   },
   "b9": {
     "name": "Referrals + commissions",
-    "state": "locked"
+    "state": "locked",
+    "evidence": "gates/report-b9.json",
+    "note": "Local gate covers App Store invite copy, atomic dual grants, code/link entry_method compatibility, cap, self/second referral blocks, failed attestation, replay idempotency, recurring 15% commission and refund reversal. The product owner replaced paid deferred-install attribution with explicit manual code redemption on 2026-08-15. Physical share/install/manual redemption and live App Attest/Play Integrity verdicts remain manual; see docs/B9-referral-runbook.md."
   },
   "b10": {
     "name": "Hardening + launch",

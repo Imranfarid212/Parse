@@ -15,6 +15,7 @@ import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
 import type { Profile } from '@/lib/auth/types';
 import { withNetworkRetry } from '@/lib/network/retry';
 import { syncFromServer } from '@/lib/receipts/server-sync';
+import { ensureSignupIntegrity } from '@/lib/referrals/integrity';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -238,6 +239,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return nextState.profileRow;
     }
     if (claim?.out_status !== 'active') throw new Error('Could not verify this device.');
+
+    // B9 admits a signed-in installation only after platform attestation. The
+    // device claim must happen first because enrollment is bound server-side to
+    // the one active installation. Referral release later requires its own
+    // fresh assertion, so this cannot be replayed to obtain scans.
+    await ensureSignupIntegrity(currentSession.user.id);
 
     applySignedIn(currentSession);
     setDeviceStatus('active');

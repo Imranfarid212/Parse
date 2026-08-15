@@ -5,8 +5,8 @@ const path = require('path');
 const phase = process.argv[2]?.toLowerCase();
 const root = path.resolve(__dirname, '..');
 
-if (!['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8'].includes(phase)) {
-  console.error('Usage: npm run gate -- b1|b2|b3|b4|b5|b6|b7|b8');
+if (!['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9'].includes(phase)) {
+  console.error('Usage: npm run gate -- b1|b2|b3|b4|b5|b6|b7|b8|b9');
   process.exit(1);
 }
 
@@ -189,6 +189,24 @@ const testsByPhase = {
       command: ['npm', ['run', 'b8:db:verify']],
     },
   ],
+  b9: [
+    {
+      id: 'T9.1-T9.2-T9.5-referral-app-source',
+      command: ['npm', ['run', 'b9:app']],
+    },
+    {
+      id: 'T9.1-T9.5-referral-backend-source',
+      command: ['npm', ['run', 'b9:backend']],
+    },
+    {
+      id: 'T9.1-T9.3-referral-validation',
+      command: ['npm', ['run', 'b9:deno']],
+    },
+    {
+      id: 'T9.1-T9.5-referral-db',
+      command: ['npm', ['run', 'b9:db:verify']],
+    },
+  ],
 };
 
 const tests = testsByPhase[phase];
@@ -229,7 +247,9 @@ const report = {
                 ? 'Local B6 static app/backend checks passed. Ranked-search latency and two-session convergence evidence is b6:staging plus the device audit.'
                 : phase === 'b7'
                 ? 'Local B7 checks passed: builders and job runner under Deno, the job lifecycle against a live database, and a full seed-export-download-diff run including the 1,000-receipt and chunked-images cases. Deploying the export function to staging and opening a mixed-currency file on-device remains the manual integration step.'
-                  : 'Local B8 checks passed: catalogue parity between SQL and contracts, the RevenueCat mapping layer, and the money paths against a live database (quota matrix, no-double-spend, replay, refund reversal, tombstoned events, clock-mocked five-year purge). T8.1 and T8.3 need sandbox purchases on both platforms and T8.5 needs a full deletion on staging — all four blocked on store accounts that do not exist yet (docs/B8-store-runbook.md).',
+                  : phase === 'b8'
+                    ? 'Local B8 checks passed: catalogue parity between SQL and contracts, the RevenueCat mapping layer, and the money paths against a live database (quota matrix, no-double-spend, replay, refund reversal, tombstoned events, clock-mocked five-year purge). T8.1 and T8.3 need sandbox purchases on both platforms and T8.5 needs a full deletion on staging — all four blocked on store accounts that do not exist yet (docs/B8-store-runbook.md).'
+                    : 'Local B9 checks passed: referral contracts, App Store invite sharing, App Attest and Play Integrity lifecycles, atomic grants, cap/fraud/replay controls, and recurring influencer commission. The amended T9.1 share/install/manual-redemption flow, live Play Integrity verdict, and manual half of T9.4 remain physical/vendor evidence (docs/B9-referral-runbook.md).',
   duration_ms: Date.now() - startedAt,
   commit_sha: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim(),
   tests: results,

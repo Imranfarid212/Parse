@@ -17,21 +17,32 @@
  * both prices are always real, and why the switch hides itself entirely when the
  * promo offering does not exist.
  */
-import React, { useCallback, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 import {
   COPY_PURCHASE_PENDING_ENTITLEMENT,
+  COPY_REFERRAL_ALREADY_USED,
+  COPY_REFERRAL_BLOCKED,
   COPY_RESTORE_PURCHASES,
   COPY_RESTORE_PURCHASES_DONE,
   COPY_RESTORE_PURCHASES_NONE,
 } from '@/../packages/contracts/src/copy';
+import {
+  REFERRED_REWARD_SCANS,
+  REFERRER_REWARD_SCANS,
+  USER_REFERRAL_MAX_REWARDS,
+  isReferralCode,
+  normalizeReferralCode,
+  type ReferralSummary,
+} from '@/../packages/contracts/src/referrals';
 import { MONTHLY_SCAN_CAP, type Term, type Tier } from '@/../packages/contracts/src/products';
-import { Card, PrimaryButton, Segmented, Toggle } from '@/components/menu/primitives';
+import { Card, Eyebrow, PrimaryButton, Segmented, Toggle } from '@/components/menu/primitives';
 import { useEntitlements } from '@/lib/billing/entitlement-store';
 import { describeBillingDiagnosis, purchasePackage } from '@/lib/billing/purchases';
 import { priceKey, usePlanOfferings } from '@/lib/billing/use-plan-offerings';
+import { getReferralSummary, redeemReferral, shareReferral } from '@/lib/referrals/client';
 import { colors, elevation, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 type Billing = Term;
@@ -104,9 +115,83 @@ export function PlanScreen() {
   const [promo, setPromo] = useState(false);
   const [billing, setBilling] = useState<Billing>('month');
   const [busy, setBusy] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [redeemBusy, setRedeemBusy] = useState(false);
+  const [referralCode, setReferralCode] = useState('');
+  const [referral, setReferral] = useState<ReferralSummary | null>(null);
+  const referralRef = useRef<ReferralSummary | null>(referral);
+  const [referralError, setReferralError] = useState<string | null>(null);
+  const [referralLoading, setReferralLoading] = useState(true);
 
   const prices = usePlanOfferings();
   const entitlements = useEntitlements();
+
+  const loadReferral = useCallback(async () => {
+    setReferralLoading(true);
+    try {
+      setReferralError(null);
+      const summary = await getReferralSummary();
+      referralRef.current = summary;
+      setReferral(summary);
+    } catch (error) {
+      // A refresh failure must not contradict a valid summary already rendered
+      // on screen (for example, "Referral already applied" plus a load error).
+      // Keep the last confirmed server state and surface an error only when the
+      // screen has never loaded referral details successfully.
+      if (!referralRef.current) {
+        setReferralError(error instanceof Error ? error.message : 'Could not load referral details.');
+      }
+    } finally {
+      setReferralLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadReferral(); }, [loadReferral]);
+
+  const applyReferral = useCallback(async () => {
+    const code = normalizeReferralCode(referralCode);
+    if (!isReferralCode(code) || redeemBusy) return;
+    setRedeemBusy(true);
+    setReferralError(null);
+    try {
+      const result = await redeemReferral(code, 'code');
+      if (result.granted) {
+        setReferralCode('');
+        Alert.alert('Referral applied', result.toast ?? `You received ${REFERRED_REWARD_SCANS} extra scans.`);
+        await Promise.all([loadReferral(), entitlements.refresh()]);
+      } else if (result.reason === 'already_redeemed') {
+        Alert.alert('Referral already used', COPY_REFERRAL_ALREADY_USED);
+      } else {
+        Alert.alert('Referral not applied', COPY_REFERRAL_BLOCKED);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not apply the referral code.';
+      setReferralError(message);
+    } finally {
+      setRedeemBusy(false);
+    }
+  }, [entitlements, loadReferral, redeemBusy, referralCode]);
+
+  const share = useCallback(async () => {
+    if (shareBusy) return;
+    if (!referral?.code) {
+      Alert.alert(
+        'Invite unavailable',
+        referralError ?? (referralLoading ? 'Your referral code is still loading.' : 'Your referral code is not ready yet.'),
+      );
+      return;
+    }
+    setShareBusy(true);
+    setReferralError(null);
+    try {
+      await shareReferral(referral.code);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not open the share sheet. Please try again.';
+      setReferralError(message);
+      Alert.alert('Could not share invite', message);
+    }
+    finally { setShareBusy(false); }
+  }, [referral, shareBusy, referralError, referralLoading]);
 
   const listEntry = prices.entries[priceKey('default', plan, billing)] ?? null;
   const promoEntry = prices.entries[priceKey('promo', plan, billing)] ?? null;
@@ -181,6 +266,83 @@ export function PlanScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <View style={styles.referralSection}>
+        <Eyebrow>INVITE FRIENDS</Eyebrow>
+        <Card style={styles.referralCard}>
+          <View style={styles.referralHeading}>
+            <View style={{ flex: 1, gap: 3 }}>
+              <Text style={styles.referralTitle}>Earn {REFERRER_REWARD_SCANS} scans per friend</Text>
+              <Text style={styles.referralSub}>They start with {10 + REFERRED_REWARD_SCANS} free scans.</Text>
+            </View>
+            <Text selectable style={styles.ownCode}>{referral?.code ?? '------'}</Text>
+          </View>
+          <View style={styles.progressTrack}>
+            <View
+              style={[
+                styles.progressFill,
+                { width: `${Math.min(100, ((referral?.rewarded ?? 0) / (referral?.max_rewards ?? USER_REFERRAL_MAX_REWARDS)) * 100)}%` },
+              ]}
+            />
+          </View>
+          <View style={styles.referralMeta}>
+            <Text style={styles.progressText}>{referral?.rewarded ?? 0}/{referral?.max_rewards ?? USER_REFERRAL_MAX_REWARDS} rewarded</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Share referral invite"
+              accessibilityState={{ busy: shareBusy }}
+              disabled={shareBusy}
+              onPress={() => void share()}
+              style={({ pressed }) => [styles.shareButton, (pressed || shareBusy) && styles.secondaryPressed]}
+            >
+              <Feather name="share-2" size={15} color={colors.ctaText} />
+              <Text style={styles.shareText}>{shareBusy ? 'Opening…' : 'Share invite'}</Text>
+            </Pressable>
+          </View>
+        </Card>
+
+        {!referral?.referred ? (
+          <View style={styles.codeRow}>
+            <TextInput
+              value={referralCode}
+              onChangeText={(value) => setReferralCode(normalizeReferralCode(value).slice(0, 6))}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={6}
+              placeholder="6-character code"
+              placeholderTextColor={colors.textFaint}
+              accessibilityLabel="Referral code"
+              style={styles.codeInput}
+              editable={!redeemBusy}
+              onSubmitEditing={() => void applyReferral()}
+              returnKeyType="done"
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Apply referral code"
+              accessibilityState={{ disabled: !isReferralCode(referralCode) || redeemBusy }}
+              disabled={!isReferralCode(referralCode) || redeemBusy}
+              onPress={() => void applyReferral()}
+              style={({ pressed }) => [styles.applyButton, (pressed || !isReferralCode(referralCode) || redeemBusy) && styles.secondaryPressed]}
+            >
+              <Text style={styles.applyText}>{redeemBusy ? 'Checking…' : 'Apply'}</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View
+            accessible
+            accessibilityRole="text"
+            accessibilityLabel={`Referral already applied. You received ${REFERRED_REWARD_SCANS} extra scans.`}
+            style={styles.referralApplied}
+          >
+            <Feather name="check-circle" size={17} color={colors.accent} />
+            <Text style={styles.referralAppliedText}>
+              Referral already applied · {REFERRED_REWARD_SCANS} extra scans received
+            </Text>
+          </View>
+        )}
+        {referralError && <Text selectable style={styles.referralError}>{referralError}</Text>}
+      </View>
+
       <Segmented value={plan} options={PLAN_OPTIONS} onChange={setPlan} />
 
       {/* Trial badge */}
@@ -279,6 +441,72 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
     gap: spacing.lg,
   },
+
+  referralSection: { gap: spacing.sm },
+  referralCard: { padding: spacing.lg, gap: spacing.md },
+  referralHeading: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  referralTitle: { ...typography.label, color: colors.textPrimary },
+  referralSub: { ...typography.meta, color: colors.textSecondary },
+  ownCode: {
+    fontFamily: fontFamily.display,
+    fontSize: 20,
+    letterSpacing: 2,
+    color: colors.accent,
+    fontVariant: ['tabular-nums'],
+  },
+  progressTrack: { height: 6, borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.surfaceSubtle },
+  progressFill: { height: '100%', borderRadius: radius.pill, backgroundColor: colors.accent },
+  referralMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
+  progressText: { ...typography.meta, color: colors.textSecondary, fontVariant: ['tabular-nums'] },
+  shareButton: {
+    minHeight: 38,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill,
+    backgroundColor: colors.ctaBackground,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  shareText: { ...typography.label, color: colors.ctaText },
+  codeRow: { flexDirection: 'row', alignItems: 'stretch', gap: spacing.sm },
+  codeInput: {
+    flex: 1,
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    fontFamily: fontFamily.semibold,
+    fontSize: 16,
+    letterSpacing: 1.2,
+    color: colors.textPrimary,
+  },
+  applyButton: {
+    minWidth: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    backgroundColor: colors.accent,
+  },
+  applyText: { ...typography.label, color: colors.ctaText },
+  secondaryPressed: { opacity: 0.5 },
+  referralApplied: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  referralAppliedText: { ...typography.meta, flex: 1, color: colors.textSecondary },
+  referralError: { ...typography.meta, color: colors.danger },
 
   trialWrap: { alignItems: 'center' },
   trialBadge: {

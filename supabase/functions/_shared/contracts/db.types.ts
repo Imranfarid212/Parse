@@ -7,25 +7,171 @@ export type Json =
   | Json[]
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.5"
+  }
   public: {
     Tables: {
       account_tombstones: {
         Row: {
           deleted_at: string
+          financial_ref: string
           purge_financial_at: string
           user_id: string
         }
         Insert: {
           deleted_at?: string
+          financial_ref?: string
           purge_financial_at: string
           user_id: string
         }
         Update: {
           deleted_at?: string
+          financial_ref?: string
           purge_financial_at?: string
           user_id?: string
         }
         Relationships: []
+      }
+      app_attest_challenges: {
+        Row: {
+          challenge_hash: string
+          consumed_at: string | null
+          context: Json
+          created_at: string
+          device_id: string
+          expires_at: string
+          id: string
+          key_id: string
+          purpose: string
+          user_id: string
+        }
+        Insert: {
+          challenge_hash: string
+          consumed_at?: string | null
+          context?: Json
+          created_at?: string
+          device_id: string
+          expires_at: string
+          id?: string
+          key_id: string
+          purpose: string
+          user_id: string
+        }
+        Update: {
+          challenge_hash?: string
+          consumed_at?: string | null
+          context?: Json
+          created_at?: string
+          device_id?: string
+          expires_at?: string
+          id?: string
+          key_id?: string
+          purpose?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_attest_challenges_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      app_attest_keys: {
+        Row: {
+          active: boolean
+          attested_at: string
+          bundle_version: string | null
+          created_at: string
+          device_id: string
+          environment: string
+          extensions_present: boolean
+          key_id: string
+          last_asserted_at: string | null
+          public_key_pem: string
+          receipt_base64: string
+          sign_count: number
+          updated_at: string
+          user_id: string
+          validation_category: number | null
+        }
+        Insert: {
+          active?: boolean
+          attested_at?: string
+          bundle_version?: string | null
+          created_at?: string
+          device_id: string
+          environment: string
+          extensions_present?: boolean
+          key_id: string
+          last_asserted_at?: string | null
+          public_key_pem: string
+          receipt_base64: string
+          sign_count?: number
+          updated_at?: string
+          user_id: string
+          validation_category?: number | null
+        }
+        Update: {
+          active?: boolean
+          attested_at?: string
+          bundle_version?: string | null
+          created_at?: string
+          device_id?: string
+          environment?: string
+          extensions_present?: boolean
+          key_id?: string
+          last_asserted_at?: string | null
+          public_key_pem?: string
+          receipt_base64?: string
+          sign_count?: number
+          updated_at?: string
+          user_id?: string
+          validation_category?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_attest_keys_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      apple_auth_tokens: {
+        Row: {
+          created_at: string
+          refresh_token: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          refresh_token: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          refresh_token?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "apple_auth_tokens_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       categories: {
         Row: {
@@ -391,34 +537,40 @@ export type Database = {
       payment_events: {
         Row: {
           currency: string | null
+          environment: string | null
           gross_amount: number | null
           id: string
           occurred_at: string | null
           raw: Json
           rc_event_id: string
           store: string | null
+          subject_ref: string | null
           type: string
           user_id: string | null
         }
         Insert: {
           currency?: string | null
+          environment?: string | null
           gross_amount?: number | null
           id?: string
           occurred_at?: string | null
           raw?: Json
           rc_event_id: string
           store?: string | null
+          subject_ref?: string | null
           type: string
           user_id?: string | null
         }
         Update: {
           currency?: string | null
+          environment?: string | null
           gross_amount?: number | null
           id?: string
           occurred_at?: string | null
           raw?: Json
           rc_event_id?: string
           store?: string | null
+          subject_ref?: string | null
           type?: string
           user_id?: string | null
         }
@@ -431,6 +583,39 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      products: {
+        Row: {
+          active: boolean
+          created_at: string
+          fair_use_threshold: number | null
+          id: string
+          monthly_scan_cap: number | null
+          offering: string
+          term: string
+          tier: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          fair_use_threshold?: number | null
+          id: string
+          monthly_scan_cap?: number | null
+          offering: string
+          term: string
+          tier: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          fair_use_threshold?: number | null
+          id?: string
+          monthly_scan_cap?: number | null
+          offering?: string
+          term?: string
+          tier?: string
+        }
+        Relationships: []
       }
       profiles: {
         Row: {
@@ -974,6 +1159,57 @@ export type Database = {
           },
         ]
       }
+      referral_redeem_attempts: {
+        Row: {
+          attestation_verdict: string
+          code_id: string | null
+          created_at: string
+          device_id: string
+          fraud_flags: Json
+          id: number
+          ip_hash: string
+          result: string
+          user_id: string
+        }
+        Insert: {
+          attestation_verdict: string
+          code_id?: string | null
+          created_at?: string
+          device_id: string
+          fraud_flags?: Json
+          id?: never
+          ip_hash: string
+          result: string
+          user_id: string
+        }
+        Update: {
+          attestation_verdict?: string
+          code_id?: string | null
+          created_at?: string
+          device_id?: string
+          fraud_flags?: Json
+          id?: never
+          ip_hash?: string
+          result?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "referral_redeem_attempts_code_id_fkey"
+            columns: ["code_id"]
+            isOneToOne: false
+            referencedRelation: "referral_codes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "referral_redeem_attempts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       referrals: {
         Row: {
           code_id: string
@@ -1085,6 +1321,7 @@ export type Database = {
           current_period_end: string | null
           current_period_start: string
           id: string
+          offering: string | null
           product_id: string
           status: Database["public"]["Enums"]["subscription_status"]
           store: Database["public"]["Enums"]["subscription_store"]
@@ -1095,6 +1332,7 @@ export type Database = {
           current_period_end?: string | null
           current_period_start: string
           id?: string
+          offering?: string | null
           product_id: string
           status: Database["public"]["Enums"]["subscription_status"]
           store: Database["public"]["Enums"]["subscription_store"]
@@ -1105,6 +1343,7 @@ export type Database = {
           current_period_end?: string | null
           current_period_start?: string
           id?: string
+          offering?: string | null
           product_id?: string
           status?: Database["public"]["Enums"]["subscription_status"]
           store?: Database["public"]["Enums"]["subscription_store"]
@@ -1112,6 +1351,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "subscriptions_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "subscriptions_user_id_fkey"
             columns: ["user_id"]
@@ -1297,6 +1543,36 @@ export type Database = {
       }
     }
     Functions: {
+      advance_app_attest_counter: {
+        Args: {
+          p_device_id: string
+          p_expected_count: number
+          p_key_id: string
+          p_next_count: number
+          p_user_id: string
+        }
+        Returns: boolean
+      }
+      apply_rc_event: {
+        Args: {
+          p_currency: string
+          p_environment?: string
+          p_event_id: string
+          p_gross: number
+          p_occurred_at: string
+          p_period_end: string
+          p_period_start: string
+          p_product_id: string
+          p_raw: Json
+          p_store: string
+          p_type: string
+          p_user_id: string
+        }
+        Returns: {
+          out_applied: boolean
+          out_reason: string
+        }[]
+      }
       assert_active_device: {
         Args: { p_device_id: string; p_user_id: string }
         Returns: boolean
@@ -1305,10 +1581,22 @@ export type Database = {
         Args: { p_capture_id: string; p_user_id: string }
         Returns: {
           out_allowed: boolean
+          out_deprioritized: boolean
           out_paywall: string
           out_reason: string
           out_remaining: number
         }[]
+      }
+      claim_app_attest_challenge: {
+        Args: {
+          p_challenge_hash: string
+          p_context: Json
+          p_device_id: string
+          p_key_id: string
+          p_purpose: string
+          p_user_id: string
+        }
+        Returns: boolean
       }
       claim_export_job: {
         Args: { p_job_id: string; p_lease_seconds?: number }
@@ -1450,6 +1738,16 @@ export type Database = {
         }
         Returns: boolean
       }
+      delete_account: {
+        Args: { p_retention_years?: number; p_user_id: string }
+        Returns: {
+          out_exports_queued: number
+          out_images_queued: number
+          out_payment_events_anonymized: number
+          out_purge_financial_at: string
+          out_receipts_deleted: number
+        }[]
+      }
       enqueue_export_job: {
         Args: {
           p_filters: Json
@@ -1503,6 +1801,10 @@ export type Database = {
           out_breaker_state: string
           out_receipt_id: string
         }[]
+      }
+      ensure_user_referral_code: {
+        Args: { p_user_id: string }
+        Returns: string
       }
       export_receipt_rows: {
         Args: {
@@ -1573,6 +1875,7 @@ export type Database = {
         Args: { p_job_id: string; p_provider_attempted?: string }
         Returns: undefined
       }
+      generate_referral_code: { Args: never; Returns: string }
       get_provider_state: {
         Args: never
         Returns: {
@@ -1582,7 +1885,17 @@ export type Database = {
           out_state: string
         }[]
       }
+      get_referral_summary: {
+        Args: never
+        Returns: {
+          out_code: string
+          out_max_rewards: number
+          out_referred: boolean
+          out_rewarded: number
+        }[]
+      }
       health_check: { Args: never; Returns: number }
+      prune_app_attest_challenges: { Args: never; Returns: number }
       purge_expired_exports: {
         Args: { p_before?: string; p_dry_run?: boolean; p_limit?: number }
         Returns: {
@@ -1590,11 +1903,37 @@ export type Database = {
           out_job_id: string
         }[]
       }
+      purge_expired_financial_records: {
+        Args: { p_dry_run?: boolean; p_limit?: number; p_now?: string }
+        Returns: {
+          out_commissions: number
+          out_payment_events: number
+          out_user_id: string
+        }[]
+      }
       purge_soft_deleted_receipts: {
         Args: { p_before?: string; p_dry_run?: boolean; p_limit?: number }
         Returns: {
           image_path: string
           receipt_id: string
+        }[]
+      }
+      redeem_referral: {
+        Args: {
+          p_attestation_valid: boolean
+          p_attestation_verdict: string
+          p_code: string
+          p_device_id: string
+          p_entry_method: string
+          p_fraud_flags?: Json
+          p_ip_hash: string
+          p_user_id: string
+        }
+        Returns: {
+          out_granted: boolean
+          out_reason: string
+          out_referral_id: string
+          out_status: Database["public"]["Enums"]["referral_status"]
         }[]
       }
       refresh_receipt_search_text: {
@@ -1665,6 +2004,11 @@ export type Database = {
         }[]
       }
       soft_delete_receipt: { Args: { p_receipt_id: string }; Returns: string }
+      store_apple_refresh_token: {
+        Args: { p_refresh_token: string; p_user_id: string }
+        Returns: undefined
+      }
+      take_apple_refresh_token: { Args: { p_user_id: string }; Returns: string }
       update_receipt_with_items: {
         Args: {
           p_category_id: number
@@ -1718,7 +2062,7 @@ export type Database = {
       referral_code_kind: "user" | "influencer"
       referral_status: "pending" | "released" | "blocked"
       subscription_status: "active" | "grace" | "expired"
-      subscription_store: "apple" | "google"
+      subscription_store: "apple" | "google" | "test"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1818,101 +2162,6 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
-      }
-      iceberg_namespaces: {
-        Row: {
-          bucket_name: string
-          catalog_id: string
-          created_at: string
-          id: string
-          metadata: Json
-          name: string
-          updated_at: string
-        }
-        Insert: {
-          bucket_name: string
-          catalog_id: string
-          created_at?: string
-          id?: string
-          metadata?: Json
-          name: string
-          updated_at?: string
-        }
-        Update: {
-          bucket_name?: string
-          catalog_id?: string
-          created_at?: string
-          id?: string
-          metadata?: Json
-          name?: string
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "iceberg_namespaces_catalog_id_fkey"
-            columns: ["catalog_id"]
-            isOneToOne: false
-            referencedRelation: "buckets_analytics"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      iceberg_tables: {
-        Row: {
-          bucket_name: string
-          catalog_id: string
-          created_at: string
-          id: string
-          location: string
-          name: string
-          namespace_id: string
-          remote_table_id: string | null
-          shard_id: string | null
-          shard_key: string | null
-          updated_at: string
-        }
-        Insert: {
-          bucket_name: string
-          catalog_id: string
-          created_at?: string
-          id?: string
-          location: string
-          name: string
-          namespace_id: string
-          remote_table_id?: string | null
-          shard_id?: string | null
-          shard_key?: string | null
-          updated_at?: string
-        }
-        Update: {
-          bucket_name?: string
-          catalog_id?: string
-          created_at?: string
-          id?: string
-          location?: string
-          name?: string
-          namespace_id?: string
-          remote_table_id?: string | null
-          shard_id?: string | null
-          shard_key?: string | null
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "iceberg_tables_catalog_id_fkey"
-            columns: ["catalog_id"]
-            isOneToOne: false
-            referencedRelation: "buckets_analytics"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "iceberg_tables_namespace_id_fkey"
-            columns: ["namespace_id"]
-            isOneToOne: false
-            referencedRelation: "iceberg_namespaces"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       migrations: {
         Row: {
@@ -2416,7 +2665,7 @@ export const Constants = {
       referral_code_kind: ["user", "influencer"],
       referral_status: ["pending", "released", "blocked"],
       subscription_status: ["active", "grace", "expired"],
-      subscription_store: ["apple", "google"],
+      subscription_store: ["apple", "google", "test"],
     },
   },
   storage: {
@@ -2425,4 +2674,3 @@ export const Constants = {
     },
   },
 } as const
-

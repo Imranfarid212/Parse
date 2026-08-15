@@ -15,6 +15,11 @@ import {
 } from './enums';
 import { errorCodes } from './errors';
 import { offerings, terms, tiers } from './products';
+import {
+  REFERRED_REWARD_SCANS,
+  REFERRAL_CODE_PATTERN,
+  REFERRER_REWARD_SCANS,
+} from './referrals';
 
 export const uuidSchema = z.string().uuid();
 export const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -194,10 +199,37 @@ export const exportResponseSchema = z.union([
   z.object({ status: z.literal(429), code: z.literal('RATE_LIMITED') }),
 ]);
 
-export const referralRedeemSchema = z.object({
-  code: z.string().length(6),
+export const referralRedeemRequestSchema = z.object({
+  code: z.string().trim().toUpperCase().regex(REFERRAL_CODE_PATTERN),
   entry_method: z.enum(['link', 'code']),
+  attestation: z.object({
+    platform: z.enum(['ios', 'android']),
+    token: z.string().min(16).max(16_384),
+    key_id: z.string().min(1).max(512).optional(),
+    challenge: z.string().min(16).max(512).optional(),
+  }),
 });
+
+/** Backwards-compatible name for callers created during the B1 scaffold. */
+export const referralRedeemSchema = referralRedeemRequestSchema;
+
+export const referralRedeemResponseSchema = z.union([
+  z.object({
+    status: z.literal(200),
+    granted: z.boolean(),
+    reason: z.enum(['released', 'already_redeemed', 'blocked']),
+    toast: z.string().nullable(),
+    rewards: z.object({
+      referrer: z.literal(REFERRER_REWARD_SCANS),
+      friend: z.literal(REFERRED_REWARD_SCANS),
+    }),
+  }),
+  z.object({ status: z.literal(400), code: z.literal('VALIDATION_FAILED'), message: z.string() }),
+  z.object({ status: z.literal(401), code: z.literal('UNAUTHORIZED') }),
+  z.object({ status: z.literal(409), code: z.literal('REFERRAL_BLOCKED'), message: z.string() }),
+  z.object({ status: z.literal(429), code: z.literal('RATE_LIMITED'), message: z.string() }),
+  z.object({ status: z.literal(503), code: z.literal('ATTESTATION_UNAVAILABLE'), message: z.string() }),
+]);
 
 /* ------------------------------------------------------------------ *
  * B8 — monetization & deletion

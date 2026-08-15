@@ -20,3 +20,18 @@ additional_redirect_urls = ["receiptflow://auth/callback", "parse://auth/callbac
 
 [storage]
 enabled = true
+
+[functions.app-attest-enroll]
+verify_jwt = true
+
+[functions.app-integrity-admit]
+verify_jwt = true
+
+# Called only by trusted Edge Functions with a constant-time checked internal secret.
+# The gateway JWT check must be off because this service-to-service credential
+# is intentionally not a user JWT.
+[functions.app-integrity-verify]
+verify_jwt = false
+
+[functions.referral-redeem]
+verify_jwt = true

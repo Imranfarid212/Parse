@@ -5,6 +5,14 @@ export type Category = {
   is_system: boolean;
 };
 
+export type {
+  ReferralAttestationProof,
+  ReferralEntryMethod,
+  ReferralRedeemRequest,
+  ReferralRedeemResponse,
+  ReferralSummary,
+} from './referrals.ts';
+
 export type OnboardingState = {
   user_id: string;
   country: string | null;
