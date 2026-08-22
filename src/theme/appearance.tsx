@@ -30,10 +30,13 @@ import * as SystemUI from 'expo-system-ui';
 import {
   darkColors,
   darkElevation,
+  darkPaper,
   lightColors,
   lightElevation,
+  lightPaper,
   type ColorTokens,
   type ElevationTokens,
+  type PaperTokens,
 } from '@/theme/tokens';
 
 /** Settings exposes this as a two-state switch, so the model is two-state too —
@@ -43,13 +46,16 @@ export type ThemeMode = 'light' | 'dark';
 export type Theme = {
   colors: ColorTokens;
   elevation: ElevationTokens;
+  /** The silver-receipt material. Dimmed rather than darkened in dark mode —
+   *  a receipt stays paper, it just sits under lower light. */
+  paper: PaperTokens;
   isDark: boolean;
 };
 
 /** Both themes are module constants, so their identity is stable and they can
  *  key the per-theme StyleSheet cache in `makeStyles`. */
-const lightTheme: Theme = { colors: lightColors, elevation: lightElevation, isDark: false };
-const darkTheme: Theme = { colors: darkColors, elevation: darkElevation, isDark: true };
+const lightTheme: Theme = { colors: lightColors, elevation: lightElevation, paper: lightPaper, isDark: false };
+const darkTheme: Theme = { colors: darkColors, elevation: darkElevation, paper: darkPaper, isDark: true };
 
 const THEME_MODE_KEY = 'parse.theme-mode';
 
@@ -143,6 +149,11 @@ export function useColors(): ColorTokens {
   return useAppAppearance().theme.colors;
 }
 
+/** The receipt material for the active theme. */
+export function usePaper(): PaperTokens {
+  return useAppAppearance().theme.paper;
+}
+
 type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
 
 /**
@@ -163,7 +174,7 @@ type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
  * what keeps `React.memo` and RN's prop diffing working as they did before.
  */
 export function makeStyles<T extends NamedStyles<T>>(
-  factory: (colors: ColorTokens, elevation: ElevationTokens, isDark: boolean) => T,
+  factory: (colors: ColorTokens, elevation: ElevationTokens, isDark: boolean, paper: PaperTokens) => T,
 ): () => T {
   const cache = new WeakMap<Theme, T>();
 
@@ -171,7 +182,7 @@ export function makeStyles<T extends NamedStyles<T>>(
     const theme = useTheme();
     let styles = cache.get(theme);
     if (!styles) {
-      styles = StyleSheet.create(factory(theme.colors, theme.elevation, theme.isDark));
+      styles = StyleSheet.create(factory(theme.colors, theme.elevation, theme.isDark, theme.paper));
       cache.set(theme, styles);
     }
     return styles;

@@ -12,7 +12,8 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
-import { BandFill, DashedLine, headerKeylinePath, ReceiptFooter, SEAM } from '@/components/ui/receiptTheme';
+import { BandFill, DashedLine, headerKeylinePath, ReceiptFooter } from '@/components/ui/receiptTheme';
+import { usePaper } from '@/theme/appearance';
 import { fontFamily } from '@/theme/tokens';
 
 const DESIGN_W = 340;
@@ -53,6 +54,7 @@ function Circle({ selected, s }: { selected: boolean; s: number }) {
 }
 
 export function CategoryChecklist({ s, empty = false }: { s: number; empty?: boolean }) {
+  const paper = usePaper();
   const bandW = DESIGN_W * s; // equals the card width in px
   const headerH = 97 * s; // tightened after moving the progress meter inline
   const footerH = 88.4 * s;
@@ -99,7 +101,7 @@ export function CategoryChecklist({ s, empty = false }: { s: number; empty?: boo
       {/* Continuous grey line: the header's clean bottom edge. With the dashed
           line above it, this mirrors the body/footer seam so the header reads as
           a clean block above the white body. */}
-      <View style={{ height: 1, backgroundColor: SEAM }} />
+      <View style={{ height: 1, backgroundColor: paper.seam }} />
 
       {/* Category Checklist — full-bleed rows on a pure-white body. `empty`
           renders just the white body (same size) for the not-yet-authored

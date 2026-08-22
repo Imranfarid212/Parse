@@ -29,7 +29,6 @@ export function SettingsScreen() {
   const styles = useStyles();
   const colors = useColors();
   const { isDark, setMode } = useAppAppearance();
-  const [push, setPush] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   // Deletion is an interstitial, not a dialog: Blueprint §13.2 requires the
   // billing warning and both manage-subscription links to be READ before the
@@ -75,8 +74,6 @@ export function SettingsScreen() {
         <Row icon="tag" label="Categories" value={`${auth.selectedCategoryIds.length} active`} onPress={() => {}} />
         <Divider />
         <Row icon="moon" label="Dark Mode" right={<Toggle label="Dark Mode" value={isDark} onValueChange={(value) => setMode(value ? 'dark' : 'light')} />} />
-        <Divider />
-        <Row icon="bell" label="Push Notifications" right={<Toggle label="Push Notifications" value={push} onValueChange={setPush} />} />
       </Section>
 
       <Section title="Finance">

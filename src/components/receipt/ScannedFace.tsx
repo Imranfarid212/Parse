@@ -7,10 +7,11 @@
  * untouched.
  */
 import React from 'react';
-import { StyleSheet, Text, View, type BoxShadowValue } from 'react-native';
+import { Text, View, type BoxShadowValue } from 'react-native';
 
 import { TornEdge } from '@/components/receipt/TornEdge';
-import { BandFill, DashedLine, headerKeylinePath, ReceiptFooter, SEAM } from '@/components/ui/receiptTheme';
+import { BandFill, DashedLine, headerKeylinePath, ReceiptFooter } from '@/components/ui/receiptTheme';
+import { makeStyles, usePaper } from '@/theme/appearance';
 import type { ReceiptFields } from '@/lib/receipts/types';
 import { fontFamily } from '@/theme/tokens';
 
@@ -18,7 +19,6 @@ const RING = 'rgba(17,24,39,0.06)';
 const INK = '#111827';
 const MUTED = '#6B7280';
 const FAINT = '#E5E7EB';
-const PAPER = '#FFFFFF';
 const TAG = '#F9FAFB';
 
 const HEADER_U = 72;
@@ -65,6 +65,8 @@ function Placeholder({ width, height, s }: { width: number | `${number}%`; heigh
 }
 
 export function ScannedFace({ width, fields, loading = false }: { width: number; fields?: ReceiptFields | null; loading?: boolean }) {
+  const paper = usePaper();
+  const styles = useStyles();
   const s = width / 340;
   const r = 18 * s;
   const bandW = width;
@@ -102,9 +104,9 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
             <DashedLine s={s} />
           </View>
 
-          <View style={{ height: 1, backgroundColor: SEAM }} />
+          <View style={{ height: 1, backgroundColor: paper.seam }} />
 
-          <View style={{ minHeight: bodyMinH, backgroundColor: PAPER, paddingHorizontal: 20 * s, paddingTop: 16 * s, paddingBottom: 14 * s }}>
+          <View style={{ minHeight: bodyMinH, backgroundColor: paper.body, paddingHorizontal: 20 * s, paddingTop: 16 * s, paddingBottom: 14 * s }}>
             <Text style={[styles.eyebrow, { fontSize: 10 * s }]}>ITEMS</Text>
             <View style={{ marginTop: 8 * s, gap: 7 * s }}>
               {!final ? (
@@ -190,14 +192,14 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
       </View>
 
       <View style={{ marginTop: -1 }}>
-        <TornEdge width={width} s={s} color={PAPER} />
+        <TornEdge width={width} s={s} color={paper.body} />
       </View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  clip: { overflow: 'hidden', backgroundColor: PAPER },
+const useStyles = makeStyles((colors, elevation, isDark, paper) => ({
+  clip: { overflow: 'hidden', backgroundColor: paper.body },
   headerContent: { position: 'absolute', alignItems: 'center' },
   store: { fontFamily: fontFamily.display, color: INK, letterSpacing: 0.4 },
   date: { fontFamily: fontFamily.semibold, color: MUTED, letterSpacing: 0.9 },
@@ -213,4 +215,4 @@ const styles = StyleSheet.create({
   notes: { fontFamily: fontFamily.regular, color: MUTED },
   tag: { alignSelf: 'center', backgroundColor: TAG, borderWidth: 1, borderColor: FAINT, borderRadius: 999 },
   tagText: { fontFamily: fontFamily.semibold, color: '#374151' },
-});
+}));

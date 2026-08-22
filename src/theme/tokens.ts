@@ -119,6 +119,69 @@ export const darkColors = {
   infoSurface: darkPalette.infoSurface,
 } satisfies ColorTokens;
 
+/**
+ * The silver-receipt material.
+ *
+ * A receipt is a physical object, so it does not flip to a dark surface the way
+ * chrome does — it stays paper. But a sheet of #FFFFFF against the #111215
+ * canvas reads at 18.7:1 and glares, so dark mode renders the same paper under
+ * dimmer light: every value scaled to 76% luminance, which brings the card to
+ * 10.5:1 while keeping it unmistakably a receipt.
+ *
+ * The inks come down with it. Scaling paper alone would have pushed the muted
+ * ink to 2.7:1, so `inkMuted` and `inkFaint` are darkened to hold 4.6:1 and
+ * 3.3:1 against the dimmed body — and deliberately not to a flat 4.5:1 each,
+ * which would have collapsed faint and muted into the same grey and lost the
+ * three-step ladder the card is designed around.
+ */
+export const lightPaper = {
+  body: '#FFFFFF',
+  band: ['#e2e3e4', '#eef0f0', '#f7f8f8', '#eff0f0', '#dee0e1'],
+  seam: '#c4c6ca',
+  dash: '#b1b3b8',
+  headerStroke: '#9099a1',
+  rule: '#E5E7EB',
+  inkStrong: '#374151',
+  inkMuted: '#6B7280',
+  inkFaint: '#9CA3AF',
+  footerInk: '#1a1815',
+  footerMuted: '#8a877e',
+  tint: 'rgba(17,17,17,0.03)',
+} as const;
+
+export type PaperTokens = {
+  body: string;
+  /** Five-stop horizontal gradient across a header/footer band. */
+  band: readonly string[];
+  seam: string;
+  dash: string;
+  headerStroke: string;
+  rule: string;
+  /** Three-step ink ladder, darkest to lightest. */
+  inkStrong: string;
+  inkMuted: string;
+  inkFaint: string;
+  footerInk: string;
+  footerMuted: string;
+  /** Faint wash used for the thumbnail placeholder block. */
+  tint: string;
+};
+
+export const darkPaper = {
+  body: '#C2C2C2',
+  band: ['#ACADAD', '#B5B6B6', '#BCBCBC', '#B6B6B6', '#A9AAAB'],
+  seam: '#95969A',
+  dash: '#87888C',
+  headerStroke: '#6D747A',
+  rule: '#AEB0B3',
+  inkStrong: '#374151',
+  inkMuted: '#4A4F58',
+  inkFaint: '#61656C',
+  footerInk: '#141311',
+  footerMuted: '#69675F',
+  tint: 'rgba(17,17,17,0.05)',
+} satisfies PaperTokens;
+
 type Shadow = { offsetX: number; offsetY: number; blurRadius: number; color: string };
 export type ElevationTokens = { card: Shadow[]; raised: Shadow[] };
 
