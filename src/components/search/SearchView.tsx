@@ -24,7 +24,7 @@ import * as receiptStore from '@/lib/receipts/store';
 import { useRealtimeReceipts } from '@/lib/receipts/use-realtime-receipts';
 import { isCategory, type ReceiptFields } from '@/lib/receipts/types';
 import { makeStyles, useColors } from '@/theme/appearance';
-import { radius, spacing, typography } from '@/theme/tokens';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const SEARCH_DEBOUNCE_MS = 300;
 const UNDO_WINDOW_MS = 5_000;
@@ -183,7 +183,7 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
           value={text}
           onChangeText={setText}
           placeholder="Merchant, note, or line item description"
-          placeholderTextColor={colors.textSecondary}
+          placeholderTextColor={colors.textFaint}
           style={styles.searchInput}
           returnKeyType="search"
         />
@@ -317,7 +317,25 @@ const useStyles = makeStyles((colors) => ({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  searchInput: { flex: 1, ...typography.row, color: colors.textPrimary, padding: 0 },
+  // Matches the app's canonical text-entry input (EditSheet's `input`): regular
+  // weight at 15, not the semibold `typography.row` used for list rows. A
+  // semibold placeholder read as heavy against every other field in the app.
+  // includeFontPadding is Android-only and strips the extra leading it adds
+  // around TextInput glyphs; the bar centres its own content already.
+  searchInput: {
+    flex: 1,
+    fontFamily: fontFamily.regular,
+    fontSize: 15,
+    // Deliberate exception: the only body-level style in the app carrying
+    // tracking — every other body token leaves it unset. Kept because the
+    // search field reads better slightly tighter. If it ever needs undoing,
+    // revert to unset, NOT to 0 — on iOS any explicit value overrides the
+    // font's own kerning pairs.
+    letterSpacing: -0.2,
+    color: colors.textPrimary,
+    padding: 0,
+    includeFontPadding: false,
+  },
   body: { flex: 1, marginTop: spacing.sm },
   fanWrap: { flex: 1, paddingTop: 30 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
