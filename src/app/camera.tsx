@@ -124,8 +124,9 @@ const FOLDER_W = 82;
 
 const toCaptureMode = (mode: Mode): CaptureMode => (mode === 'oneclick' ? 'one_click' : 'default');
 
-/** Single tap toggles Default ↔ One click — styled to match the Menu button
- *  it sits beneath, rather than the segmented pill this used to be. */
+/** Single tap toggles Default ↔ One click. Bottom-right of the controls row,
+ *  mirroring the gallery button on the left; it keeps the Menu button's card
+ *  styling (and its 56pt width, which is what balances the row). */
 function ModeButton({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
   const next = mode === 'default' ? 'oneclick' : 'default';
   return (
@@ -1048,8 +1049,6 @@ export default function CameraScreen() {
               <Ionicons name="menu" size={22} color="#fff" />
               <Text style={styles.menuLabel}>Menu</Text>
             </Pressable>
-
-            <ModeButton mode={mode} onChange={setMode} />
           </View>
 
           {/* The static framing hint yields while the live outline is on the
@@ -1077,7 +1076,7 @@ export default function CameraScreen() {
 
               <ExtractionModeToggle mode={extractionMode} onChange={setExtractionMode} />
 
-              <View style={styles.sideBtn} />
+              <ModeButton mode={mode} onChange={setMode} />
             </View>
           </View>
 

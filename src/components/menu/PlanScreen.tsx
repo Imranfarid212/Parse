@@ -559,7 +559,9 @@ const styles = StyleSheet.create({
   },
   billPrice: {
     fontFamily: fontFamily.display,
-    fontSize: 20,
+    // 15% down from 20 — with the promo on, the struck list price sits beside
+    // this one in the same fixed-width card and the pair overflowed the border.
+    fontSize: 17,
     letterSpacing: -0.4,
     color: colors.textPrimary,
     fontVariant: ['tabular-nums'],
