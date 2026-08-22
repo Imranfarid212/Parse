@@ -17,6 +17,7 @@ import { ExportScreen } from '@/components/menu/ExportScreen';
 import { PlanScreen } from '@/components/menu/PlanScreen';
 import { SettingsScreen } from '@/components/menu/SettingsScreen';
 import { SearchView } from '@/components/search/SearchView';
+import { SPRING_SETTLE } from '@/theme/motion';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
 
@@ -42,7 +43,7 @@ function GlassTabs({ active, onChange, width, isDark }: { active: number; onChan
   const pos = useSharedValue(active);
 
   useEffect(() => {
-    pos.value = withSpring(active, { damping: 18, stiffness: 200 });
+    pos.value = withSpring(active, SPRING_SETTLE);
   }, [active, pos]);
 
   const indicator = useAnimatedStyle(() => ({ transform: [{ translateX: PAD + pos.value * tabW }] }));

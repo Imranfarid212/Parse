@@ -62,7 +62,28 @@ async function functionErrorPayload(data: unknown, error: unknown) {
   return null;
 }
 
-export async function getReferralSummary(): Promise<ReferralSummary> {
+/**
+ * Last successful summary, held so re-opening the Plan screen can paint the
+ * real code and progress immediately instead of a placeholder.
+ *
+ * Keyed by user id, and that key is not optional: referral codes are
+ * per-account, so a cache that outlived a sign-out would show the previous
+ * user their predecessor's code until the refetch landed. A mismatched id is
+ * treated as a miss, and `clearReferralCache` wipes it on sign-out.
+ */
+let cached: { userId: string; summary: ReferralSummary } | null = null;
+
+/** Synchronous read of the cached summary, or null on a miss. */
+export function peekReferralSummary(userId: string | null | undefined): ReferralSummary | null {
+  if (!userId || !cached || cached.userId !== userId) return null;
+  return cached.summary;
+}
+
+export function clearReferralCache(): void {
+  cached = null;
+}
+
+export async function getReferralSummary(userId?: string | null): Promise<ReferralSummary> {
   if (getFoundationEnv().mockBackend) {
     return { code: 'PARSE2', rewarded: 0, max_rewards: USER_REFERRAL_MAX_REWARDS, referred: false };
   }
@@ -70,12 +91,14 @@ export async function getReferralSummary(): Promise<ReferralSummary> {
   if (error) throw new ReferralError('Could not load your referral details.', error.code ?? 'SUMMARY_FAILED');
   const row = Array.isArray(data) ? data[0] : data;
   if (!row?.out_code) throw new ReferralError('Your referral code is not ready yet.', 'SUMMARY_MISSING');
-  return {
+  const summary: ReferralSummary = {
     code: row.out_code,
     rewarded: Number(row.out_rewarded ?? 0),
     max_rewards: Number(row.out_max_rewards ?? USER_REFERRAL_MAX_REWARDS),
     referred: row.out_referred === true,
   };
+  if (userId) cached = { userId, summary };
+  return summary;
 }
 
 export async function redeemReferral(codeInput: string, entryMethod: ReferralEntryMethod): Promise<ReferralRedeemResponse> {

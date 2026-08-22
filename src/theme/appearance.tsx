@@ -28,6 +28,7 @@ import Storage from 'expo-sqlite/kv-store';
 import * as SystemUI from 'expo-system-ui';
 
 import {
+  palette,
   darkColors,
   darkElevation,
   darkPaper,
@@ -111,9 +112,15 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   }, [mode]);
 
   useEffect(() => {
-    // The root view sits behind every screen; without this a push or a modal
-    // dismissal can flash the old theme's background through the gap.
-    void SystemUI.setBackgroundColorAsync(theme.colors.background);
+    // The root view sits behind every screen; setting it stops a push or a
+    // modal dismissal flashing the old theme through the gap.
+    //
+    // Light gets pure white, NOT colors.background. The app never called
+    // expo-system-ui before dark mode existed, so the root view was the native
+    // default — white — and using the #FBFBFD canvas here quietly dimmed every
+    // light-mode screen that lets the root show through. Dark has no such
+    // baseline to preserve and takes the canvas.
+    void SystemUI.setBackgroundColorAsync(theme.isDark ? theme.colors.background : palette.surface);
   }, [theme]);
 
   const setMode = useCallback((next: ThemeMode) => {

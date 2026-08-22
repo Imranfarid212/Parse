@@ -28,6 +28,21 @@ export const EMPHASIZED_SETTLE = Easing.bezier(0.5, 0, 0.2, 1);
  */
 export const EMPHASIZED_DECELERATE = Easing.bezier(0.12, 0.75, 0.25, 1);
 
+/**
+ * A spring that arrives and stops.
+ *
+ * damping/stiffness give a damping ratio of ~0.99 — critically damped — so an
+ * indicator tracking a discrete selection settles without oscillating. Bounce
+ * belongs on a thrown card or a pop; on a control that marks *which tab you are
+ * on* it reads as lag, because the thing you selected is still moving after you
+ * selected it. `overshootClamping` keeps that true if the numbers are ever
+ * retuned.
+ *
+ * Stiffer than the value it replaced (200), so it also arrives sooner: ~0.36s
+ * to rest against ~0.41s, with none of it spent wobbling.
+ */
+export const SPRING_SETTLE = { damping: 32, stiffness: 260, overshootClamping: true } as const;
+
 export const FOLDER_IN_MS = 520;
 export const FOLDER_OUT_MS = 400;
 
