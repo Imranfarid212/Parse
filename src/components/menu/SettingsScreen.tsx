@@ -11,6 +11,7 @@ import { Feather } from '@expo/vector-icons';
 import { DeleteAccountScreen } from '@/components/menu/DeleteAccountScreen';
 import { Card, Divider, Eyebrow, Row, Toggle } from '@/components/menu/primitives';
 import { useAuth } from '@/lib/auth/auth-context';
+import { useAppAppearance } from '@/theme/appearance';
 import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -24,7 +25,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function SettingsScreen() {
   const auth = useAuth();
-  const [darkMode, setDarkMode] = useState(false);
+  const { isDark, setMode } = useAppAppearance();
   const [push, setPush] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   // Deletion is an interstitial, not a dialog: Blueprint §13.2 requires the
@@ -70,7 +71,7 @@ export function SettingsScreen() {
         <Divider />
         <Row icon="tag" label="Categories" value={`${auth.selectedCategoryIds.length} active`} onPress={() => {}} />
         <Divider />
-        <Row icon="moon" label="Dark Mode" right={<Toggle label="Dark Mode" value={darkMode} onValueChange={setDarkMode} />} />
+        <Row icon="moon" label="Dark Mode" right={<Toggle label="Dark Mode" value={isDark} onValueChange={(value) => setMode(value ? 'dark' : 'light')} />} />
         <Divider />
         <Row icon="bell" label="Push Notifications" right={<Toggle label="Push Notifications" value={push} onValueChange={setPush} />} />
       </Section>

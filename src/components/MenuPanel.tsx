@@ -18,6 +18,7 @@ import { PlanScreen } from '@/components/menu/PlanScreen';
 import { SettingsScreen } from '@/components/menu/SettingsScreen';
 import { SearchView } from '@/components/search/SearchView';
 import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { useAppAppearance } from '@/theme/appearance';
 
 const GLASS = isLiquidGlassAvailable();
 const PAD = 5;
@@ -34,7 +35,7 @@ const TABS: { label: string; icon: IconName }[] = [
 /** Header title shown per tab, where it differs from the nav label. */
 const HEADER_TITLE: Record<string, string> = { Plan: 'Subscription' };
 
-function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: number) => void; width: number }) {
+function GlassTabs({ active, onChange, width, isDark }: { active: number; onChange: (i: number) => void; width: number; isDark: boolean }) {
   const tabW = (width - PAD * 2) / TABS.length;
   const pos = useSharedValue(active);
 
@@ -47,14 +48,14 @@ function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: 
   return (
     <View style={[styles.tabsWrap, { width, height: TAB_H + PAD * 2 }]}>
       {GLASS ? (
-        <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" colorScheme="light" />
+        <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" colorScheme={isDark ? 'dark' : 'light'} />
       ) : (
-        <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
+        <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
       )}
 
       <Animated.View style={[styles.indicator, { width: tabW, height: TAB_H, top: PAD }, indicator]}>
         {GLASS ? (
-          <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="clear" isInteractive colorScheme="light" />
+          <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="clear" isInteractive colorScheme={isDark ? 'dark' : 'light'} />
         ) : (
           <View style={[StyleSheet.absoluteFill, styles.indicatorSolid]} />
         )}
@@ -76,6 +77,7 @@ function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: 
 }
 
 export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; initialTab?: number }) {
+  const { isDark } = useAppAppearance();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [active, setActive] = useState(initialTab);
@@ -102,7 +104,7 @@ export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; in
       </View>
 
       <View style={[styles.toggleArea, { paddingBottom: insets.bottom + spacing.md }]}>
-        <GlassTabs active={active} onChange={setActive} width={width - spacing.lg * 2} />
+        <GlassTabs active={active} onChange={setActive} width={width - spacing.lg * 2} isDark={isDark} />
       </View>
     </View>
   );

@@ -3,7 +3,7 @@
  * both track (clean-fintech direction). Keep names/values in sync with the
  * Figma Variables of the same names.
  */
-import { type TextStyle } from 'react-native';
+import { DynamicColorIOS, Platform, PlatformColor, type TextStyle } from 'react-native';
 
 /** Raw palette. Aurora hues mirror the landing-screen background streaks. */
 export const palette = {
@@ -40,33 +40,50 @@ export const palette = {
   auroraViolet: '#DDD6FE',
 } as const;
 
+/** Dark counterparts for the semantic palette. Light mode deliberately keeps
+ * the exact existing values above. */
+const darkPalette = {
+  ink: '#F4F4F5', inkSoft: '#B6B8C0', inkFaint: '#787B85', buttonDark: '#F4F4F5',
+  forest: '#34D399', forestSurface: '#123D32', hairline: '#2A2C32', hairlineStrong: '#373941',
+  canvas: '#111215', canvasSubtle: '#1B1C21', surface: '#191A1F', white: '#17181C',
+  danger: '#FF8A82', dangerSurface: '#4A2020', dangerBorder: '#773434',
+  warning: '#F6C665', warningSurface: '#423515', warningBorder: '#705A20',
+  info: '#8AB4FF', infoSurface: '#1C3457',
+} as const;
+
+function adaptiveColor(light: string, dark: string, resource: string): string {
+  if (Platform.OS === 'ios') return DynamicColorIOS({ light, dark }) as unknown as string;
+  if (Platform.OS === 'android') return PlatformColor(`@color/parse_${resource}`) as unknown as string;
+  return light;
+}
+
 /** Semantic colors — reference these in components, not the raw palette. */
 export const colors = {
-  background: palette.canvas,
-  surface: palette.surface,
+  background: adaptiveColor(palette.canvas, darkPalette.canvas, 'background'),
+  surface: adaptiveColor(palette.surface, darkPalette.surface, 'surface'),
   /** Recessed fill *inside* a surface. Never a page background. */
-  surfaceSubtle: palette.canvasSubtle,
-  textPrimary: palette.ink,
-  textSecondary: palette.inkSoft,
-  textFaint: palette.inkFaint,
-  border: palette.hairline,
-  borderStrong: palette.hairlineStrong,
+  surfaceSubtle: adaptiveColor(palette.canvasSubtle, darkPalette.canvasSubtle, 'surface_subtle'),
+  textPrimary: adaptiveColor(palette.ink, darkPalette.ink, 'text_primary'),
+  textSecondary: adaptiveColor(palette.inkSoft, darkPalette.inkSoft, 'text_secondary'),
+  textFaint: adaptiveColor(palette.inkFaint, darkPalette.inkFaint, 'text_faint'),
+  border: adaptiveColor(palette.hairline, darkPalette.hairline, 'border'),
+  borderStrong: adaptiveColor(palette.hairlineStrong, darkPalette.hairlineStrong, 'border_strong'),
   /** Deep-green accent for "done"/progress marks. Also the single selection
    *  colour across the app: a chosen chip, plan, or filter is forest. */
-  accent: palette.forest,
-  accentSurface: palette.forestSurface,
+  accent: adaptiveColor(palette.forest, darkPalette.forest, 'accent'),
+  accentSurface: adaptiveColor(palette.forestSurface, darkPalette.forestSurface, 'accent_surface'),
   /** Dark pill used for the one primary action on a screen. Actions are dark,
    *  selections are forest — the two are never swapped. */
-  ctaBackground: palette.buttonDark,
-  ctaText: palette.white,
-  danger: palette.danger,
-  dangerSurface: palette.dangerSurface,
-  dangerBorder: palette.dangerBorder,
-  warning: palette.warning,
-  warningSurface: palette.warningSurface,
-  warningBorder: palette.warningBorder,
-  info: palette.info,
-  infoSurface: palette.infoSurface,
+  ctaBackground: adaptiveColor(palette.buttonDark, darkPalette.buttonDark, 'cta_background'),
+  ctaText: adaptiveColor(palette.white, darkPalette.white, 'cta_text'),
+  danger: adaptiveColor(palette.danger, darkPalette.danger, 'danger'),
+  dangerSurface: adaptiveColor(palette.dangerSurface, darkPalette.dangerSurface, 'danger_surface'),
+  dangerBorder: adaptiveColor(palette.dangerBorder, darkPalette.dangerBorder, 'danger_border'),
+  warning: adaptiveColor(palette.warning, darkPalette.warning, 'warning'),
+  warningSurface: adaptiveColor(palette.warningSurface, darkPalette.warningSurface, 'warning_surface'),
+  warningBorder: adaptiveColor(palette.warningBorder, darkPalette.warningBorder, 'warning_border'),
+  info: adaptiveColor(palette.info, darkPalette.info, 'info'),
+  infoSurface: adaptiveColor(palette.infoSurface, darkPalette.infoSurface, 'info_surface'),
 } as const;
 
 /** The two shadows in the system. Anything deeper reads as a different app. */

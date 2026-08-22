@@ -19,6 +19,7 @@ import { purgeAbandonedCaptures, retryPending } from '@/lib/receipts/capture';
 import { syncFromServer } from '@/lib/receipts/server-sync';
 import { countProviderDelayed } from '@/lib/receipts/store';
 import { colors } from '@/theme/tokens';
+import { AppearanceProvider, useAppAppearance } from '@/theme/appearance';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -76,6 +77,11 @@ function ProviderDelayPoller() {
 }
 
 export default function RootLayout() {
+  return <AppearanceProvider><RootLayoutContent /></AppearanceProvider>;
+}
+
+function RootLayoutContent() {
+  const { isDark } = useAppAppearance();
   const [fontsLoaded] = useFonts({
     InstrumentSans_400Regular,
     InstrumentSans_500Medium,
@@ -141,7 +147,7 @@ export default function RootLayout() {
             />
           </EntitlementProvider>
         </AuthProvider>
-        <StatusBar style="dark" />
+        <StatusBar style={isDark ? 'light' : 'dark'} />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
