@@ -69,6 +69,15 @@ export const COLORS = {
   sheetFront: '#FFFFFF',
   /** Hairline along the panel edges — what sells glass as a physical pane. */
   edge: 'rgba(255,255,255,0.55)',
+  /**
+   * The "Recents" label printed on the folder front.
+   *
+   * Material ink, not chrome: the folder is green in both themes, so this stays
+   * white in both. It used to be `colors.ctaText`, which is white in light but
+   * inverts to near-black in dark when the CTA pill flips — printing the label
+   * in black on a green folder.
+   */
+  label: '#FFFFFF',
 } as const;
 
 /** Corner rounding, in viewbox units. */

@@ -5,7 +5,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { EditSheet } from '@/components/receipt/EditSheet';
 import type { ManagedReceipt } from '@/lib/receipts/management';
 import type { Category, ReceiptFields } from '@/lib/receipts/types';
-import { colors, fontFamily, spacing } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, spacing } from '@/theme/tokens';
 
 export function ReceiptEditorModal({
   receipt,
@@ -18,6 +19,8 @@ export function ReceiptEditorModal({
   onSave: (fields: ReceiptFields) => Promise<void>;
   categoryOptions?: readonly Category[];
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   const [fields, setFields] = useState<ReceiptFields | null>(receipt?.fields ?? null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +71,7 @@ export function ReceiptEditorModal({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.surface },
   header: {
     minHeight: 58,
@@ -80,4 +83,4 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   title: { fontFamily: fontFamily.semibold, fontSize: 18, color: colors.textPrimary },
-});
+}));

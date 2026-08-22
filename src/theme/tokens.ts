@@ -40,12 +40,41 @@ export const palette = {
   auroraViolet: '#DDD6FE',
 } as const;
 
-/** Semantic colors — reference these in components, not the raw palette. */
-export const colors = {
+/** Dark counterparts for the semantic palette. Light mode deliberately keeps
+ * the exact existing values above. */
+export const darkPalette = {
+  ink: '#F4F4F5', inkSoft: '#B6B8C0', inkFaint: '#787B85', buttonDark: '#F4F4F5',
+  forest: '#34D399', forestSurface: '#123D32', hairline: '#2A2C32', hairlineStrong: '#373941',
+  canvas: '#111215', canvasSubtle: '#1B1C21', surface: '#191A1F', white: '#17181C',
+  danger: '#FF8A82', dangerSurface: '#4A2020', dangerBorder: '#773434',
+  warning: '#F6C665', warningSurface: '#423515', warningBorder: '#705A20',
+  info: '#8AB4FF', infoSurface: '#1C3457',
+} as const;
+
+/**
+ * Semantic colors — reference these in components, not the raw palette.
+ *
+ * These are plain hex strings, deliberately. They are read by three separate
+ * renderers — RN style props, Reanimated worklets and Skia — and only the first
+ * of those accepts DynamicColorIOS/PlatformColor objects, so a native dynamic
+ * colour would silently become `null` in a worklet and throw in Skia. Themes
+ * are therefore swapped in JS and delivered through `@/theme/appearance`.
+ */
+export const lightColors = {
   background: palette.canvas,
   surface: palette.surface,
   /** Recessed fill *inside* a surface. Never a page background. */
   surfaceSubtle: palette.canvasSubtle,
+  /**
+   * A control sitting *above* a recessed track — the selected pill of a
+   * segmented control, a knob. In light this is plain white and the separation
+   * comes from `elevation.raised`; that shadow does nothing on a dark canvas,
+   * so dark has to carry the same job with a lighter fill and a visible edge.
+   */
+  surfaceRaised: palette.surface,
+  /** Edge of a `surfaceRaised` control. Transparent in light, where the shadow
+   *  already defines the boundary. */
+  raisedBorder: 'transparent',
   textPrimary: palette.ink,
   textSecondary: palette.inkSoft,
   textFaint: palette.inkFaint,
@@ -69,13 +98,126 @@ export const colors = {
   infoSurface: palette.infoSurface,
 } as const;
 
+/** Every semantic colour, as a plain string. */
+export type ColorTokens = Record<keyof typeof lightColors, string>;
+
+/**
+ * The dark set. `satisfies` is what keeps the two in lockstep: a token added to
+ * `lightColors` without a counterpart here is a compile error, not a screen
+ * that renders the wrong colour in one mode.
+ */
+export const darkColors = {
+  background: darkPalette.canvas,
+  surface: darkPalette.surface,
+  surfaceSubtle: darkPalette.canvasSubtle,
+  // 1.57:1 against the track — enough to read as a raised block — with a
+  // 3.41:1 border doing the real work of marking the boundary. Fill alone
+  // cannot reach 3:1 between two colours this dark.
+  surfaceRaised: '#3A3D45',
+  raisedBorder: '#6B7078',
+  textPrimary: darkPalette.ink,
+  textSecondary: darkPalette.inkSoft,
+  textFaint: darkPalette.inkFaint,
+  border: darkPalette.hairline,
+  borderStrong: darkPalette.hairlineStrong,
+  accent: darkPalette.forest,
+  accentSurface: darkPalette.forestSurface,
+  ctaBackground: darkPalette.buttonDark,
+  ctaText: darkPalette.white,
+  danger: darkPalette.danger,
+  dangerSurface: darkPalette.dangerSurface,
+  dangerBorder: darkPalette.dangerBorder,
+  warning: darkPalette.warning,
+  warningSurface: darkPalette.warningSurface,
+  warningBorder: darkPalette.warningBorder,
+  info: darkPalette.info,
+  infoSurface: darkPalette.infoSurface,
+} satisfies ColorTokens;
+
+/**
+ * The silver-receipt material.
+ *
+ * A receipt is a physical object, so it does not flip to a dark surface the way
+ * chrome does — it stays paper. But a sheet of #FFFFFF against the #111215
+ * canvas reads at 18.7:1 and glares, so dark mode renders the same paper under
+ * dimmer light: every value scaled to 76% luminance, which brings the card to
+ * 10.5:1 while keeping it unmistakably a receipt.
+ *
+ * The inks come down with it. Scaling paper alone would have pushed the muted
+ * ink to 2.7:1, so `inkMuted` and `inkFaint` are darkened to hold 4.6:1 and
+ * 3.3:1 against the dimmed body — and deliberately not to a flat 4.5:1 each,
+ * which would have collapsed faint and muted into the same grey and lost the
+ * three-step ladder the card is designed around.
+ */
+export const lightPaper = {
+  body: '#FFFFFF',
+  band: ['#e2e3e4', '#eef0f0', '#f7f8f8', '#eff0f0', '#dee0e1'],
+  seam: '#c4c6ca',
+  dash: '#b1b3b8',
+  headerStroke: '#9099a1',
+  rule: '#E5E7EB',
+  inkStrong: '#374151',
+  inkMuted: '#6B7280',
+  inkFaint: '#9CA3AF',
+  footerInk: '#1a1815',
+  footerMuted: '#8a877e',
+  tint: 'rgba(17,17,17,0.03)',
+} as const;
+
+export type PaperTokens = {
+  body: string;
+  /** Five-stop horizontal gradient across a header/footer band. */
+  band: readonly string[];
+  seam: string;
+  dash: string;
+  headerStroke: string;
+  rule: string;
+  /** Three-step ink ladder, darkest to lightest. */
+  inkStrong: string;
+  inkMuted: string;
+  inkFaint: string;
+  footerInk: string;
+  footerMuted: string;
+  /** Faint wash used for the thumbnail placeholder block. */
+  tint: string;
+};
+
+export const darkPaper = {
+  body: '#C2C2C2',
+  band: ['#ACADAD', '#B5B6B6', '#BCBCBC', '#B6B6B6', '#A9AAAB'],
+  seam: '#95969A',
+  dash: '#87888C',
+  headerStroke: '#6D747A',
+  rule: '#AEB0B3',
+  inkStrong: '#374151',
+  inkMuted: '#4A4F58',
+  inkFaint: '#61656C',
+  footerInk: '#141311',
+  footerMuted: '#69675F',
+  tint: 'rgba(17,17,17,0.05)',
+} satisfies PaperTokens;
+
+type Shadow = { offsetX: number; offsetY: number; blurRadius: number; color: string };
+export type ElevationTokens = { card: Shadow[]; raised: Shadow[] };
+
 /** The two shadows in the system. Anything deeper reads as a different app. */
-export const elevation = {
+export const lightElevation: ElevationTokens = {
   /** Resting white card on the canvas. */
   card: [{ offsetX: 0, offsetY: 8, blurRadius: 30, color: 'rgba(12,13,16,0.04)' }],
   /** A control that sits above a card — segmented indicators, knobs. */
   raised: [{ offsetX: 0, offsetY: 1, blurRadius: 3, color: 'rgba(12,13,16,0.10)' }],
-} as const;
+};
+
+/**
+ * Dark shadows are much heavier than their light counterparts and still read as
+ * less. A 4%-black shadow is simply invisible on a #111215 canvas, which would
+ * leave every card flat — on dark it is `colors.border` that does most of the
+ * separating and the shadow only deepens it.
+ */
+export const darkElevation: ElevationTokens = {
+  card: [{ offsetX: 0, offsetY: 8, blurRadius: 24, color: 'rgba(0,0,0,0.40)' }],
+  raised: [{ offsetX: 0, offsetY: 1, blurRadius: 3, color: 'rgba(0,0,0,0.50)' }],
+};
 
 export const spacing = {
   xs: 4,

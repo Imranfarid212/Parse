@@ -17,7 +17,9 @@ import { ExportScreen } from '@/components/menu/ExportScreen';
 import { PlanScreen } from '@/components/menu/PlanScreen';
 import { SettingsScreen } from '@/components/menu/SettingsScreen';
 import { SearchView } from '@/components/search/SearchView';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { SPRING_SETTLE } from '@/theme/motion';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
 
 const GLASS = isLiquidGlassAvailable();
 const PAD = 5;
@@ -34,12 +36,14 @@ const TABS: { label: string; icon: IconName }[] = [
 /** Header title shown per tab, where it differs from the nav label. */
 const HEADER_TITLE: Record<string, string> = { Plan: 'Subscription' };
 
-function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: number) => void; width: number }) {
+function GlassTabs({ active, onChange, width, isDark }: { active: number; onChange: (i: number) => void; width: number; isDark: boolean }) {
+  const styles = useStyles();
+  const colors = useColors();
   const tabW = (width - PAD * 2) / TABS.length;
   const pos = useSharedValue(active);
 
   useEffect(() => {
-    pos.value = withSpring(active, { damping: 18, stiffness: 200 });
+    pos.value = withSpring(active, SPRING_SETTLE);
   }, [active, pos]);
 
   const indicator = useAnimatedStyle(() => ({ transform: [{ translateX: PAD + pos.value * tabW }] }));
@@ -47,14 +51,14 @@ function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: 
   return (
     <View style={[styles.tabsWrap, { width, height: TAB_H + PAD * 2 }]}>
       {GLASS ? (
-        <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" colorScheme="light" />
+        <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="regular" colorScheme={isDark ? 'dark' : 'light'} />
       ) : (
-        <BlurView intensity={40} tint="light" style={StyleSheet.absoluteFill} />
+        <BlurView intensity={40} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
       )}
 
       <Animated.View style={[styles.indicator, { width: tabW, height: TAB_H, top: PAD }, indicator]}>
         {GLASS ? (
-          <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="clear" isInteractive colorScheme="light" />
+          <GlassView style={StyleSheet.absoluteFill} glassEffectStyle="clear" isInteractive colorScheme={isDark ? 'dark' : 'light'} />
         ) : (
           <View style={[StyleSheet.absoluteFill, styles.indicatorSolid]} />
         )}
@@ -76,6 +80,9 @@ function GlassTabs({ active, onChange, width }: { active: number; onChange: (i: 
 }
 
 export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; initialTab?: number }) {
+  const { isDark } = useAppAppearance();
+  const styles = useStyles();
+  const colors = useColors();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [active, setActive] = useState(initialTab);
@@ -102,13 +109,13 @@ export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; in
       </View>
 
       <View style={[styles.toggleArea, { paddingBottom: insets.bottom + spacing.md }]}>
-        <GlassTabs active={active} onChange={setActive} width={width - spacing.lg * 2} />
+        <GlassTabs active={active} onChange={setActive} width={width - spacing.lg * 2} isDark={isDark} />
       </View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors, elevation, isDark) => ({
   panel: { flex: 1, backgroundColor: colors.background },
   header: {
     flexDirection: 'row',
@@ -126,7 +133,13 @@ const styles = StyleSheet.create({
   tabsWrap: { borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.surfaceSubtle, justifyContent: 'center' },
   tabsRow: { flexDirection: 'row' },
   indicator: { position: 'absolute', left: 0, borderRadius: radius.pill, overflow: 'hidden' },
-  indicatorSolid: { backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: radius.pill },
+  // A fixed-alpha wash over the blur, not a semantic colour: near-opaque white
+  // reads as a raised pill on light, but on dark the same value would be a
+  // glaring slab, so dark gets a faint lift instead.
+  indicatorSolid: {
+    backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.95)',
+    borderRadius: radius.pill,
+  },
   tabLabel: { fontFamily: fontFamily.medium, fontSize: 11, color: colors.textSecondary },
   tabLabelActive: { color: colors.textPrimary, fontFamily: fontFamily.semibold },
-});
+}));

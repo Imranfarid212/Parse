@@ -23,7 +23,8 @@ import {
 import * as receiptStore from '@/lib/receipts/store';
 import { useRealtimeReceipts } from '@/lib/receipts/use-realtime-receipts';
 import { isCategory, type ReceiptFields } from '@/lib/receipts/types';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const SEARCH_DEBOUNCE_MS = 300;
 const UNDO_WINDOW_MS = 5_000;
@@ -38,6 +39,8 @@ const VIEW_OPTIONS: SegmentOption<ReceiptView>[] = [
 const formatTotal = (receipt: ManagedReceipt) => `${receipt.fields.currency} ${receipt.fields.total.toFixed(2)}`;
 
 export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => void } = {}) {
+  const styles = useStyles();
+  const colors = useColors();
   const auth = useAuth();
   const [text, setText] = useState('');
   const [debouncedText, setDebouncedText] = useState('');
@@ -260,6 +263,8 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
 type ReceiptItemProps = { receipt: ManagedReceipt; onEdit: (receipt: ManagedReceipt) => void; onDelete: (receipt: ManagedReceipt) => void };
 
 function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <Pressable style={styles.listRow} onPress={() => onEdit(receipt)}>
       <View style={styles.listIcon}><Ionicons name="receipt-outline" size={18} color={colors.textSecondary} /></View>
@@ -275,7 +280,7 @@ function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   root: { flex: 1 },
   headerRow: {
     flexDirection: 'row',
@@ -374,4 +379,4 @@ const styles = StyleSheet.create({
   },
   snackbarText: { ...typography.meta, fontSize: 14, color: colors.ctaText },
   undoText: { ...typography.button, fontSize: 14, color: colors.ctaText },
-});
+}));

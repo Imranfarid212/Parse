@@ -15,7 +15,7 @@
  * exact text, because "roughly this warning" is how compliance copy erodes.
  */
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 import {
@@ -34,9 +34,12 @@ import { Card, Divider } from '@/components/menu/primitives';
 import { useAuth } from '@/lib/auth/auth-context';
 import { MANAGE_SUBSCRIPTION_URLS } from '@/lib/billing/config';
 import { deleteAccount } from '@/lib/billing/delete-account';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 function ManageRow({ label, url }: { label: string; url: string }) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <Pressable style={styles.manageRow} onPress={() => void Linking.openURL(url)}>
       <Feather name="external-link" size={16} color={colors.textSecondary} />
@@ -46,6 +49,8 @@ function ManageRow({ label, url }: { label: string; url: string }) {
 }
 
 export function DeleteAccountScreen({ onCancel }: { onCancel: () => void }) {
+  const styles = useStyles();
+  const colors = useColors();
   const auth = useAuth();
   const [busy, setBusy] = useState(false);
 
@@ -114,7 +119,7 @@ export function DeleteAccountScreen({ onCancel }: { onCancel: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   content: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
@@ -156,4 +161,4 @@ const styles = StyleSheet.create({
 
   keepBtn: { alignItems: 'center', paddingVertical: spacing.sm + 4 },
   keepText: { ...typography.label, fontSize: 14, color: colors.textSecondary },
-});
+}));

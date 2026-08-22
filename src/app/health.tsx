@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import { checkSupabaseHealth, type SupabaseHealthResult } from '@/lib/foundations/supabaseHealth';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 type HealthState = { status: 'loading' } | { status: 'done'; result: SupabaseHealthResult };
 
 export default function HealthScreen() {
+  const styles = useStyles();
+  const colors = useColors();
+  const { isDark } = useAppAppearance();
   const router = useRouter();
   const [state, setState] = useState<HealthState>({ status: 'loading' });
 
@@ -27,7 +31,7 @@ export default function HealthScreen() {
   return (
     <View style={styles.screen} testID="b1-health-screen">
       <Stack.Screen options={{ headerShown: false }} />
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
 
       <View style={styles.header}>
         <Text style={styles.eyebrow}>B1 Foundations</Text>
@@ -70,6 +74,7 @@ export default function HealthScreen() {
 }
 
 function Meta({ label, value }: { label: string; value: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.meta}>
       <Text style={styles.metaLabel}>{label}</Text>
@@ -78,7 +83,7 @@ function Meta({ label, value }: { label: string; value: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   screen: {
     flex: 1,
     justifyContent: 'center',
@@ -130,4 +135,4 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   secondaryButtonText: { color: colors.textPrimary, fontFamily: fontFamily.semibold },
-});
+}));

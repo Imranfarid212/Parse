@@ -57,6 +57,7 @@ import * as store from '@/lib/receipts/store';
 import type { CaptureMode, DuplicateCandidate, ExtractionMode, LocalDuplicateCandidate, ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { fontFamily, radius, spacing } from '@/theme/tokens';
+import { useAppAppearance } from '@/theme/appearance';
 
 type Mode = 'default' | 'oneclick';
 /** MenuPanel's TABS order: Export, Search, Plan, Settings. */
@@ -174,6 +175,7 @@ function showNotReceiptAlert(
 }
 
 export default function CameraScreen() {
+  const { isDark } = useAppAppearance();
   const router = useRouter();
   const auth = useAuth();
   const entitlements = useEntitlements();
@@ -996,7 +998,7 @@ export default function CameraScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar style={menuOpen ? 'dark' : 'light'} />
+      <StatusBar style={menuOpen ? (isDark ? 'light' : 'dark') : 'light'} />
 
       <Animated.View style={[styles.strip, { width: width * 2 }, stripStyle]}>
         {/* ── Camera half ── */}

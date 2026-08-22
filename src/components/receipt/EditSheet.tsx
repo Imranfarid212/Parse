@@ -8,11 +8,12 @@
  * than quietly dropping data.
  */
 import React, { useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 import { CATEGORIES, type Category, type ReceiptFields, type ReceiptLineItem } from '@/lib/receipts/types';
-import { colors, fontFamily, radius, spacing } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing } from '@/theme/tokens';
 
 export function EditSheet({
   fields,
@@ -36,6 +37,8 @@ export function EditSheet({
   error?: string | null;
   categoryOptions?: readonly Category[];
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   const [totalText, setTotalText] = useState(fields.total.toFixed(2));
   const scrollRef = useRef<ScrollView>(null);
 
@@ -148,6 +151,8 @@ function positiveNumber(value: string, fallback: number) {
 }
 
 function EditableItemRow({ item, onChange, onRemove }: { item: ReceiptLineItem; onChange: (patch: Partial<ReceiptLineItem>) => void; onRemove: () => void }) {
+  const styles = useStyles();
+  const colors = useColors();
   const [qtyText, setQtyText] = useState(String(item.qty));
   const [amountText, setAmountText] = useState(item.amount.toFixed(2));
   const commitQty = () => {
@@ -210,6 +215,7 @@ function updateItem(
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  const styles = useStyles();
   return (
     <View style={{ marginBottom: spacing.md }}>
       <Text style={styles.label}>{label}</Text>
@@ -218,7 +224,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   sheet: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: radius.lg,
@@ -279,4 +285,4 @@ const styles = StyleSheet.create({
   },
   doneText: { fontFamily: fontFamily.semibold, fontSize: 15, color: colors.ctaText },
   error: { marginTop: spacing.sm, fontFamily: fontFamily.regular, fontSize: 13, color: '#B42318', textAlign: 'right' },
-});
+}));

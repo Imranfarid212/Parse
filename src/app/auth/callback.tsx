@@ -2,10 +2,11 @@ import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
-import { colors } from '@/theme/tokens';
+import { useColors } from '@/theme/appearance';
 
 /** Lets the native Supabase callback land without Expo Router showing 404. */
 export default function AuthCallbackScreen() {
+  const colors = useColors();
   const router = useRouter();
 
   useEffect(() => {
