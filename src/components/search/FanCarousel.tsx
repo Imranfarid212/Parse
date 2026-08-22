@@ -9,7 +9,8 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { ReceiptCard, type ReceiptCardDetails } from '@/components/ui/ReceiptCard';
-import { colors, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { radius, spacing, typography } from '@/theme/tokens';
 
 export type FanItem = { id: string; total: string; details: ReceiptCardDetails };
 
@@ -40,6 +41,7 @@ function FanCard({ item, slot, activeSlot, left, active, onPress }: {
   active: boolean;
   onPress: () => void;
 }) {
+  const styles = useStyles();
   const initial = slotConfig(slot, activeSlot);
   const x = useSharedValue(initial.x);
   const y = useSharedValue(initial.y);
@@ -88,6 +90,8 @@ export function FanCarousel({ items, onOpenItem, onDeleteItem }: {
   onOpenItem?: (id: string) => void;
   onDeleteItem?: (id: string) => void;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   const { width } = useWindowDimensions();
   const [activeIndex, setActiveIndex] = useState(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
@@ -200,7 +204,7 @@ export function FanCarousel({ items, onOpenItem, onDeleteItem }: {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   root: { alignItems: 'center' },
   stage: { alignSelf: 'stretch' },
   card: { position: 'absolute' },
@@ -242,4 +246,4 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.dangerBorder,
   },
-});
+}));

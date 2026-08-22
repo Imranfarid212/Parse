@@ -26,14 +26,14 @@ module.exports = defineConfig([
     // and will never follow the theme toggle. Use `makeStyles` from
     // theme/appearance instead, which rebuilds per theme.
     //
-    // 'warn' while the migration is in progress: each remaining hit is a file
-    // still pinned to light. Flip to 'error' once the count reaches zero and
-    // the deprecated exports in theme/tokens.ts are deleted.
+    // The migration is complete and theme/tokens no longer exports `colors`
+    // or `elevation`, so this is an error: it catches a new file reaching for
+    // a frozen palette before it can ship pinned to light.
     files: ['src/**/*.{ts,tsx}'],
     ignores: ['src/theme/**'],
     rules: {
       'no-restricted-syntax': [
-        'warn',
+        'error',
         {
           selector:
             "CallExpression[callee.object.name='StyleSheet'][callee.property.name='create'] MemberExpression[object.name=/^(colors|elevation)$/]",

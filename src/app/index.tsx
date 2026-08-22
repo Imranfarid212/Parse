@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, Text, View } from 'react-native';
 import { type Href, useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
@@ -13,12 +13,15 @@ import Animated, {
 import { AnimatedGridBackground } from '@/components/ui/AnimatedGridBackground';
 import { CreateAccountCard } from '@/components/CreateAccountCard';
 import { useAuth } from '@/lib/auth/auth-context';
-import { colors, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { spacing, typography } from '@/theme/tokens';
 
 const HEADLINE_MAIN = 'Scan one receipt.';
 const HEADLINE_SUB = 'See the magic';
 
 export default function LandingScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const auth = useAuth();
@@ -133,14 +136,14 @@ export default function LandingScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   loadingGate: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
-  takeoverTitle: { fontFamily: typography.display.fontFamily, fontSize: 28, color: '#000000', textAlign: 'center', paddingHorizontal: spacing.lg },
-  takeoverBody: { fontFamily: typography.subtitle.fontFamily, fontSize: 16, color: '#555555', textAlign: 'center', marginTop: spacing.sm, marginBottom: spacing.lg, paddingHorizontal: spacing.xl },
-  takeoverPrimary: { marginTop: spacing.md, minWidth: 240, minHeight: 48, paddingHorizontal: spacing.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: '#111111', borderRadius: 6 },
-  takeoverPrimaryText: { fontFamily: typography.button.fontFamily, fontSize: 16, color: '#FFFFFF' },
+  takeoverTitle: { fontFamily: typography.display.fontFamily, fontSize: 28, color: colors.textPrimary, textAlign: 'center', paddingHorizontal: spacing.lg },
+  takeoverBody: { fontFamily: typography.subtitle.fontFamily, fontSize: 16, color: colors.textSecondary, textAlign: 'center', marginTop: spacing.sm, marginBottom: spacing.lg, paddingHorizontal: spacing.xl },
+  takeoverPrimary: { marginTop: spacing.md, minWidth: 240, minHeight: 48, paddingHorizontal: spacing.lg, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ctaBackground, borderRadius: 6 },
+  takeoverPrimaryText: { fontFamily: typography.button.fontFamily, fontSize: 16, color: colors.ctaText },
   takeoverSecondary: { marginTop: spacing.sm, minWidth: 240, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-  takeoverSecondaryText: { fontFamily: typography.button.fontFamily, fontSize: 15, color: '#555555' },
+  takeoverSecondaryText: { fontFamily: typography.button.fontFamily, fontSize: 15, color: colors.textSecondary },
   takeoverPressed: { opacity: 0.7 },
   screen: { width: '100%', height: '100%', paddingHorizontal: 4 },
   heroText: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md },
@@ -148,13 +151,13 @@ const styles = StyleSheet.create({
     fontFamily: typography.display.fontFamily, // InstrumentSans_700Bold — heaviest sans weight loaded
     fontSize: typography.display.fontSize - 5,
     letterSpacing: -0.5,
-    color: '#000000',
+    color: colors.textPrimary,
     textAlign: 'center',
   },
   headlineSub: {
     fontFamily: 'InstrumentSans_600SemiBold_Italic',
     fontSize: typography.display.fontSize - 13,
     letterSpacing: -0.5,
-    color: '#555555',
+    color: colors.textSecondary,
   },
-});
+}));

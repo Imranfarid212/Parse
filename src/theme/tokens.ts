@@ -141,16 +141,6 @@ export const darkElevation: ElevationTokens = {
   raised: [{ offsetX: 0, offsetY: 1, blurRadius: 3, color: 'rgba(0,0,0,0.50)' }],
 };
 
-/**
- * @deprecated Light-mode values, for files not yet migrated to `useStyles`.
- * Anything reading these is pinned to light and will not follow the toggle —
- * see the `no-restricted-syntax` guard in eslint.config.js. Delete once the
- * last consumer is converted.
- */
-export const colors = lightColors;
-/** @deprecated See `colors`. Use the second argument of `makeStyles`. */
-export const elevation = lightElevation;
-
 export const spacing = {
   xs: 4,
   sm: 8,

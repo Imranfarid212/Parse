@@ -12,7 +12,8 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { StatusBar } from 'expo-status-bar';
 import { Feather } from '@expo/vector-icons';
 
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+// Static design reference, deliberately pinned to the light palette.
+import { lightColors as colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 type Category = {
   id: number;

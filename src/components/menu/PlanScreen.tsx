@@ -18,7 +18,7 @@
  * promo offering does not exist.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 import {
@@ -43,7 +43,8 @@ import { useEntitlements } from '@/lib/billing/entitlement-store';
 import { describeBillingDiagnosis, purchasePackage } from '@/lib/billing/purchases';
 import { priceKey, usePlanOfferings } from '@/lib/billing/use-plan-offerings';
 import { getReferralSummary, redeemReferral, shareReferral } from '@/lib/referrals/client';
-import { colors, elevation, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 type Billing = Term;
 
@@ -87,6 +88,7 @@ function BillingCard({
   promo: boolean;
   onPress: () => void;
 }) {
+  const styles = useStyles();
   const showing = promo ? promoPrice : listPrice;
   // The struck-through price is only shown when there is a real, different price
   // to strike. Striking an identical number would imply a saving the store is
@@ -111,6 +113,8 @@ function BillingCard({
 }
 
 export function PlanScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const [plan, setPlan] = useState<Tier>('pro');
   const [promo, setPromo] = useState(false);
   const [billing, setBilling] = useState<Billing>('month');
@@ -434,7 +438,7 @@ export function PlanScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors, elevation) => ({
   content: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
@@ -572,4 +576,4 @@ const styles = StyleSheet.create({
   diagnostic: { ...typography.eyebrow, fontFamily: fontFamily.regular, color: colors.warning, textAlign: 'center' },
   restore: { alignItems: 'center', paddingVertical: spacing.sm },
   restoreText: { ...typography.label, color: colors.textSecondary },
-});
+}));

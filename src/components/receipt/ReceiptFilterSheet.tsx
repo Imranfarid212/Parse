@@ -17,7 +17,8 @@ import { DateTimePicker } from '@expo/ui/community/datetime-picker';
 
 import type { SearchQuery } from '@/../packages/contracts/src';
 import { searchQuerySchema } from '@/../packages/contracts/src';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 export type ReceiptFilters = Omit<SearchQuery, 'text' | 'view'>;
 
@@ -105,6 +106,8 @@ export function ReceiptFilterSheet({
   onApply: (filters: ReceiptFilters) => void;
   applyLabel?: string;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   const [draft, setDraft] = useState<ReceiptFilters>(value);
   const [minimum, setMinimum] = useState(value.amount_min?.toString() ?? '');
   const [maximum, setMaximum] = useState(value.amount_max?.toString() ?? '');
@@ -254,6 +257,7 @@ export function ReceiptFilterSheet({
 }
 
 function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  const styles = useStyles();
   return <View style={{ gap: spacing.sm }}><Text style={styles.filterLabel}>{label}</Text>{children}</View>;
 }
 
@@ -264,6 +268,8 @@ function DateFilterButton({ label, value, active, onPress, onClear }: {
   onPress: () => void;
   onClear: () => void;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <View style={[styles.dateFilterRow, active && styles.dateFilterRowActive]}>
       <Pressable
@@ -294,7 +300,7 @@ function DateFilterButton({ label, value, active, onPress, onClear }: {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   filterRoot: { flex: 1, backgroundColor: colors.background },
   filterHeader: { minHeight: 58, paddingHorizontal: spacing.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   filterTitle: { ...typography.row, fontSize: 17, color: colors.textPrimary },
@@ -323,4 +329,4 @@ const styles = StyleSheet.create({
   errorText: { ...typography.meta, color: colors.danger, textAlign: 'center' },
   applyButton: { height: 54, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ctaBackground },
   applyText: { ...typography.button, color: colors.ctaText },
-});
+}));

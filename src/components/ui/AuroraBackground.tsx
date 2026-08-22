@@ -27,9 +27,9 @@ import {
   withTiming,
 } from 'react-native-reanimated';
 
-import { aurora, colors, palette } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { aurora, palette } from '@/theme/tokens';
 
-const CLEAR = `${palette.canvas}00`; // transparent canvas — the gap between bands
 
 type LayerProps = {
   x: number;
@@ -46,8 +46,12 @@ type LayerProps = {
 };
 
 function StreakLayer({ x, y, w, h, period, rotate, blur, opacity, bandColors, drift, center }: LayerProps) {
+  const colors = useColors();
+  // The gap between bands is the canvas at zero alpha, so it has to track the
+  // theme: a transparent *white* over a dark canvas interpolates to a haze.
+  const clear = `${colors.background}00`;
   // Colored bands separated by transparent gaps; repeats across the whole rect.
-  const stops = [CLEAR, ...bandColors, CLEAR];
+  const stops = [clear, ...bandColors, clear];
   const n = stops.length - 1;
   const positions = stops.map((_, i) => i / n);
   return (
@@ -70,6 +74,9 @@ function StreakLayer({ x, y, w, h, period, rotate, blur, opacity, bandColors, dr
 }
 
 export function AuroraBackground({ children }: { children?: ReactNode }) {
+  const styles = useStyles();
+  const colors = useColors();
+  const clear = `${colors.background}00`;
   const { width, height } = useWindowDimensions();
   const center = { x: width / 2, y: height / 2 };
 
@@ -113,7 +120,7 @@ export function AuroraBackground({ children }: { children?: ReactNode }) {
           <LinearGradient
             start={vec(0, 0)}
             end={vec(0, height)}
-            colors={[CLEAR, CLEAR, palette.canvas]}
+            colors={[clear, clear, colors.background]}
             positions={[0, 0.62, 0.98]}
           />
         </Rect>
@@ -124,7 +131,7 @@ export function AuroraBackground({ children }: { children?: ReactNode }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.background },
   content: {
     position: 'absolute',
@@ -135,4 +142,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-});
+}));

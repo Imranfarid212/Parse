@@ -1,13 +1,15 @@
 import React, { useEffect } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 import { type Href, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import { OnboardingOverlay } from '@/components/OnboardingOverlay';
 import { useAuth } from '@/lib/auth/auth-context';
-import { colors } from '@/theme/tokens';
+import { makeStyles, useAppAppearance } from '@/theme/appearance';
 
 export default function WelcomeScreen() {
+  const styles = useStyles();
+  const { isDark } = useAppAppearance();
   const router = useRouter();
   const auth = useAuth();
 
@@ -17,7 +19,7 @@ export default function WelcomeScreen() {
 
   return (
     <View style={styles.screen}>
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
       <OnboardingOverlay
         onClose={() => {
           void auth.signOut();
@@ -29,6 +31,6 @@ export default function WelcomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   screen: { flex: 1, backgroundColor: colors.background },
-});
+}));
