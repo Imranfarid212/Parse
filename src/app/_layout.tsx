@@ -18,8 +18,7 @@ import { EntitlementProvider } from '@/lib/billing/entitlement-store';
 import { purgeAbandonedCaptures, retryPending } from '@/lib/receipts/capture';
 import { syncFromServer } from '@/lib/receipts/server-sync';
 import { countProviderDelayed } from '@/lib/receipts/store';
-import { colors } from '@/theme/tokens';
-import { AppearanceProvider, useAppAppearance } from '@/theme/appearance';
+import { AppearanceProvider, useAppAppearance, useColors } from '@/theme/appearance';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -82,6 +81,7 @@ export default function RootLayout() {
 
 function RootLayoutContent() {
   const { isDark } = useAppAppearance();
+  const colors = useColors();
   const [fontsLoaded] = useFonts({
     InstrumentSans_400Regular,
     InstrumentSans_500Medium,

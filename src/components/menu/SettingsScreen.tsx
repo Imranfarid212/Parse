@@ -11,10 +11,11 @@ import { Feather } from '@expo/vector-icons';
 import { DeleteAccountScreen } from '@/components/menu/DeleteAccountScreen';
 import { Card, Divider, Eyebrow, Row, Toggle } from '@/components/menu/primitives';
 import { useAuth } from '@/lib/auth/auth-context';
-import { useAppAppearance } from '@/theme/appearance';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const styles = useStyles();
   return (
     <View style={styles.section}>
       <Eyebrow style={{ marginLeft: spacing.sm }}>{title}</Eyebrow>
@@ -25,6 +26,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function SettingsScreen() {
   const auth = useAuth();
+  const styles = useStyles();
+  const colors = useColors();
   const { isDark, setMode } = useAppAppearance();
   const [push, setPush] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -125,7 +128,7 @@ export function SettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   content: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
@@ -156,4 +159,4 @@ const styles = StyleSheet.create({
   },
   editText: { ...typography.eyebrow, color: colors.textPrimary },
   version: { ...typography.eyebrow, color: colors.textFaint, textAlign: 'center', marginTop: spacing.xs },
-});
+}));

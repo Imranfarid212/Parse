@@ -3,7 +3,7 @@
  * both track (clean-fintech direction). Keep names/values in sync with the
  * Figma Variables of the same names.
  */
-import { DynamicColorIOS, Platform, PlatformColor, type TextStyle } from 'react-native';
+import { type TextStyle } from 'react-native';
 
 /** Raw palette. Aurora hues mirror the landing-screen background streaks. */
 export const palette = {
@@ -42,7 +42,7 @@ export const palette = {
 
 /** Dark counterparts for the semantic palette. Light mode deliberately keeps
  * the exact existing values above. */
-const darkPalette = {
+export const darkPalette = {
   ink: '#F4F4F5', inkSoft: '#B6B8C0', inkFaint: '#787B85', buttonDark: '#F4F4F5',
   forest: '#34D399', forestSurface: '#123D32', hairline: '#2A2C32', hairlineStrong: '#373941',
   canvas: '#111215', canvasSubtle: '#1B1C21', surface: '#191A1F', white: '#17181C',
@@ -51,48 +51,105 @@ const darkPalette = {
   info: '#8AB4FF', infoSurface: '#1C3457',
 } as const;
 
-function adaptiveColor(light: string, dark: string, resource: string): string {
-  if (Platform.OS === 'ios') return DynamicColorIOS({ light, dark }) as unknown as string;
-  if (Platform.OS === 'android') return PlatformColor(`@color/parse_${resource}`) as unknown as string;
-  return light;
-}
-
-/** Semantic colors — reference these in components, not the raw palette. */
-export const colors = {
-  background: adaptiveColor(palette.canvas, darkPalette.canvas, 'background'),
-  surface: adaptiveColor(palette.surface, darkPalette.surface, 'surface'),
+/**
+ * Semantic colors — reference these in components, not the raw palette.
+ *
+ * These are plain hex strings, deliberately. They are read by three separate
+ * renderers — RN style props, Reanimated worklets and Skia — and only the first
+ * of those accepts DynamicColorIOS/PlatformColor objects, so a native dynamic
+ * colour would silently become `null` in a worklet and throw in Skia. Themes
+ * are therefore swapped in JS and delivered through `@/theme/appearance`.
+ */
+export const lightColors = {
+  background: palette.canvas,
+  surface: palette.surface,
   /** Recessed fill *inside* a surface. Never a page background. */
-  surfaceSubtle: adaptiveColor(palette.canvasSubtle, darkPalette.canvasSubtle, 'surface_subtle'),
-  textPrimary: adaptiveColor(palette.ink, darkPalette.ink, 'text_primary'),
-  textSecondary: adaptiveColor(palette.inkSoft, darkPalette.inkSoft, 'text_secondary'),
-  textFaint: adaptiveColor(palette.inkFaint, darkPalette.inkFaint, 'text_faint'),
-  border: adaptiveColor(palette.hairline, darkPalette.hairline, 'border'),
-  borderStrong: adaptiveColor(palette.hairlineStrong, darkPalette.hairlineStrong, 'border_strong'),
+  surfaceSubtle: palette.canvasSubtle,
+  textPrimary: palette.ink,
+  textSecondary: palette.inkSoft,
+  textFaint: palette.inkFaint,
+  border: palette.hairline,
+  borderStrong: palette.hairlineStrong,
   /** Deep-green accent for "done"/progress marks. Also the single selection
    *  colour across the app: a chosen chip, plan, or filter is forest. */
-  accent: adaptiveColor(palette.forest, darkPalette.forest, 'accent'),
-  accentSurface: adaptiveColor(palette.forestSurface, darkPalette.forestSurface, 'accent_surface'),
+  accent: palette.forest,
+  accentSurface: palette.forestSurface,
   /** Dark pill used for the one primary action on a screen. Actions are dark,
    *  selections are forest — the two are never swapped. */
-  ctaBackground: adaptiveColor(palette.buttonDark, darkPalette.buttonDark, 'cta_background'),
-  ctaText: adaptiveColor(palette.white, darkPalette.white, 'cta_text'),
-  danger: adaptiveColor(palette.danger, darkPalette.danger, 'danger'),
-  dangerSurface: adaptiveColor(palette.dangerSurface, darkPalette.dangerSurface, 'danger_surface'),
-  dangerBorder: adaptiveColor(palette.dangerBorder, darkPalette.dangerBorder, 'danger_border'),
-  warning: adaptiveColor(palette.warning, darkPalette.warning, 'warning'),
-  warningSurface: adaptiveColor(palette.warningSurface, darkPalette.warningSurface, 'warning_surface'),
-  warningBorder: adaptiveColor(palette.warningBorder, darkPalette.warningBorder, 'warning_border'),
-  info: adaptiveColor(palette.info, darkPalette.info, 'info'),
-  infoSurface: adaptiveColor(palette.infoSurface, darkPalette.infoSurface, 'info_surface'),
+  ctaBackground: palette.buttonDark,
+  ctaText: palette.white,
+  danger: palette.danger,
+  dangerSurface: palette.dangerSurface,
+  dangerBorder: palette.dangerBorder,
+  warning: palette.warning,
+  warningSurface: palette.warningSurface,
+  warningBorder: palette.warningBorder,
+  info: palette.info,
+  infoSurface: palette.infoSurface,
 } as const;
 
+/** Every semantic colour, as a plain string. */
+export type ColorTokens = Record<keyof typeof lightColors, string>;
+
+/**
+ * The dark set. `satisfies` is what keeps the two in lockstep: a token added to
+ * `lightColors` without a counterpart here is a compile error, not a screen
+ * that renders the wrong colour in one mode.
+ */
+export const darkColors = {
+  background: darkPalette.canvas,
+  surface: darkPalette.surface,
+  surfaceSubtle: darkPalette.canvasSubtle,
+  textPrimary: darkPalette.ink,
+  textSecondary: darkPalette.inkSoft,
+  textFaint: darkPalette.inkFaint,
+  border: darkPalette.hairline,
+  borderStrong: darkPalette.hairlineStrong,
+  accent: darkPalette.forest,
+  accentSurface: darkPalette.forestSurface,
+  ctaBackground: darkPalette.buttonDark,
+  ctaText: darkPalette.white,
+  danger: darkPalette.danger,
+  dangerSurface: darkPalette.dangerSurface,
+  dangerBorder: darkPalette.dangerBorder,
+  warning: darkPalette.warning,
+  warningSurface: darkPalette.warningSurface,
+  warningBorder: darkPalette.warningBorder,
+  info: darkPalette.info,
+  infoSurface: darkPalette.infoSurface,
+} satisfies ColorTokens;
+
+type Shadow = { offsetX: number; offsetY: number; blurRadius: number; color: string };
+export type ElevationTokens = { card: Shadow[]; raised: Shadow[] };
+
 /** The two shadows in the system. Anything deeper reads as a different app. */
-export const elevation = {
+export const lightElevation: ElevationTokens = {
   /** Resting white card on the canvas. */
   card: [{ offsetX: 0, offsetY: 8, blurRadius: 30, color: 'rgba(12,13,16,0.04)' }],
   /** A control that sits above a card — segmented indicators, knobs. */
   raised: [{ offsetX: 0, offsetY: 1, blurRadius: 3, color: 'rgba(12,13,16,0.10)' }],
-} as const;
+};
+
+/**
+ * Dark shadows are much heavier than their light counterparts and still read as
+ * less. A 4%-black shadow is simply invisible on a #111215 canvas, which would
+ * leave every card flat — on dark it is `colors.border` that does most of the
+ * separating and the shadow only deepens it.
+ */
+export const darkElevation: ElevationTokens = {
+  card: [{ offsetX: 0, offsetY: 8, blurRadius: 24, color: 'rgba(0,0,0,0.40)' }],
+  raised: [{ offsetX: 0, offsetY: 1, blurRadius: 3, color: 'rgba(0,0,0,0.50)' }],
+};
+
+/**
+ * @deprecated Light-mode values, for files not yet migrated to `useStyles`.
+ * Anything reading these is pinned to light and will not follow the toggle —
+ * see the `no-restricted-syntax` guard in eslint.config.js. Delete once the
+ * last consumer is converted.
+ */
+export const colors = lightColors;
+/** @deprecated See `colors`. Use the second argument of `makeStyles`. */
+export const elevation = lightElevation;
 
 export const spacing = {
   xs: 4,

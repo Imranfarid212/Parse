@@ -67,8 +67,7 @@
       "expo-web-browser",
       "expo-apple-authentication",
       "expo-secure-store",
-      "expo-localization",
-      "./plugins/with-dark-theme-colors"
+      "expo-localization"
     ],
     "experiments": {
       "typedRoutes": true,
