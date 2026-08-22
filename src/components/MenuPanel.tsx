@@ -17,8 +17,8 @@ import { ExportScreen } from '@/components/menu/ExportScreen';
 import { PlanScreen } from '@/components/menu/PlanScreen';
 import { SettingsScreen } from '@/components/menu/SettingsScreen';
 import { SearchView } from '@/components/search/SearchView';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
-import { useAppAppearance } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
 
 const GLASS = isLiquidGlassAvailable();
 const PAD = 5;
@@ -36,6 +36,8 @@ const TABS: { label: string; icon: IconName }[] = [
 const HEADER_TITLE: Record<string, string> = { Plan: 'Subscription' };
 
 function GlassTabs({ active, onChange, width, isDark }: { active: number; onChange: (i: number) => void; width: number; isDark: boolean }) {
+  const styles = useStyles();
+  const colors = useColors();
   const tabW = (width - PAD * 2) / TABS.length;
   const pos = useSharedValue(active);
 
@@ -78,6 +80,8 @@ function GlassTabs({ active, onChange, width, isDark }: { active: number; onChan
 
 export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; initialTab?: number }) {
   const { isDark } = useAppAppearance();
+  const styles = useStyles();
+  const colors = useColors();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [active, setActive] = useState(initialTab);
@@ -110,7 +114,7 @@ export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; in
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors, elevation, isDark) => ({
   panel: { flex: 1, backgroundColor: colors.background },
   header: {
     flexDirection: 'row',
@@ -128,7 +132,13 @@ const styles = StyleSheet.create({
   tabsWrap: { borderRadius: radius.pill, overflow: 'hidden', backgroundColor: colors.surfaceSubtle, justifyContent: 'center' },
   tabsRow: { flexDirection: 'row' },
   indicator: { position: 'absolute', left: 0, borderRadius: radius.pill, overflow: 'hidden' },
-  indicatorSolid: { backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: radius.pill },
+  // A fixed-alpha wash over the blur, not a semantic colour: near-opaque white
+  // reads as a raised pill on light, but on dark the same value would be a
+  // glaring slab, so dark gets a faint lift instead.
+  indicatorSolid: {
+    backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.95)',
+    borderRadius: radius.pill,
+  },
   tabLabel: { fontFamily: fontFamily.medium, fontSize: 11, color: colors.textSecondary },
   tabLabelActive: { color: colors.textPrimary, fontFamily: fontFamily.semibold },
-});
+}));

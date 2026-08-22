@@ -154,14 +154,16 @@ type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
  *
  * The factory takes `colors` and `elevation` as arguments with exactly the
  * names the old module-scope imports had, so converting a file is a wrap — the
- * style bodies themselves do not change.
+ * style bodies themselves do not change. A third `isDark` argument covers the
+ * cases a token cannot: translucent overlays like `rgba(255,255,255,0.95)`,
+ * which are a fixed alpha over a blur rather than a semantic colour.
  *
  * One StyleSheet is built per theme and cached, so switching back and forth
  * does not reallocate and style identity stays stable across renders, which is
  * what keeps `React.memo` and RN's prop diffing working as they did before.
  */
 export function makeStyles<T extends NamedStyles<T>>(
-  factory: (colors: ColorTokens, elevation: ElevationTokens) => T,
+  factory: (colors: ColorTokens, elevation: ElevationTokens, isDark: boolean) => T,
 ): () => T {
   const cache = new WeakMap<Theme, T>();
 
@@ -169,7 +171,7 @@ export function makeStyles<T extends NamedStyles<T>>(
     const theme = useTheme();
     let styles = cache.get(theme);
     if (!styles) {
-      styles = StyleSheet.create(factory(theme.colors, theme.elevation));
+      styles = StyleSheet.create(factory(theme.colors, theme.elevation, theme.isDark));
       cache.set(theme, styles);
     }
     return styles;

@@ -5,7 +5,7 @@
  * "Settings" title + close).
  */
 import React, { useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 import { DeleteAccountScreen } from '@/components/menu/DeleteAccountScreen';
