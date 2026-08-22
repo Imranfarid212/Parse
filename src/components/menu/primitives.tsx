@@ -351,7 +351,13 @@ const useStyles = makeStyles((colors, elevation) => ({
     left: SEG_PAD,
     borderRadius: radius.sm + 4,
     borderCurve: 'continuous',
-    backgroundColor: colors.surface,
+    // In light, `surfaceRaised` is white and `raisedBorder` transparent, so
+    // this is the same white pill it always was, separated by its shadow. In
+    // dark the shadow is invisible against the track, so the fill lifts and
+    // the border becomes the thing that actually marks which segment is on.
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.raisedBorder,
     boxShadow: elevation.raised,
   },
   segBtn: {

@@ -23,7 +23,7 @@ import { useDerivedValue, type SharedValue } from 'react-native-reanimated';
 import { FolderBack } from '@/components/receipt/folder/FolderBack';
 import { FolderFront, Frost } from '@/components/receipt/folder/FolderFront';
 import { FolderSheet } from '@/components/receipt/folder/FolderSheet';
-import { SPREAD, VIEW_W, folderHeight } from '@/components/receipt/folder/geometry';
+import { COLORS, SPREAD, VIEW_W, folderHeight } from '@/components/receipt/folder/geometry';
 import { makeStyles } from '@/theme/appearance';
 import { fontFamily } from '@/theme/tokens';
 
@@ -105,13 +105,13 @@ export function RecentsFolder({
   );
 }
 
-const useStyles = makeStyles((colors) => ({
+const useStyles = makeStyles(() => ({
   label: {
     position: 'absolute',
     left: 0,
     right: 0,
     textAlign: 'center',
     fontFamily: fontFamily.semibold,
-    color: colors.ctaText,
+    color: COLORS.label,
   },
 }));

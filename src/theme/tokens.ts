@@ -65,6 +65,16 @@ export const lightColors = {
   surface: palette.surface,
   /** Recessed fill *inside* a surface. Never a page background. */
   surfaceSubtle: palette.canvasSubtle,
+  /**
+   * A control sitting *above* a recessed track — the selected pill of a
+   * segmented control, a knob. In light this is plain white and the separation
+   * comes from `elevation.raised`; that shadow does nothing on a dark canvas,
+   * so dark has to carry the same job with a lighter fill and a visible edge.
+   */
+  surfaceRaised: palette.surface,
+  /** Edge of a `surfaceRaised` control. Transparent in light, where the shadow
+   *  already defines the boundary. */
+  raisedBorder: 'transparent',
   textPrimary: palette.ink,
   textSecondary: palette.inkSoft,
   textFaint: palette.inkFaint,
@@ -100,6 +110,11 @@ export const darkColors = {
   background: darkPalette.canvas,
   surface: darkPalette.surface,
   surfaceSubtle: darkPalette.canvasSubtle,
+  // 1.57:1 against the track — enough to read as a raised block — with a
+  // 3.41:1 border doing the real work of marking the boundary. Fill alone
+  // cannot reach 3:1 between two colours this dark.
+  surfaceRaised: '#3A3D45',
+  raisedBorder: '#6B7078',
   textPrimary: darkPalette.ink,
   textSecondary: darkPalette.inkSoft,
   textFaint: darkPalette.inkFaint,
