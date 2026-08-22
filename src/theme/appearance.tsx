@@ -20,7 +20,6 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import {
   Appearance,
   StyleSheet,
-  useColorScheme,
   type ImageStyle,
   type TextStyle,
   type ViewStyle,
@@ -37,7 +36,9 @@ import {
   type ElevationTokens,
 } from '@/theme/tokens';
 
-export type ThemeMode = 'system' | 'light' | 'dark';
+/** Settings exposes this as a two-state switch, so the model is two-state too —
+ *  there is deliberately no 'system' option to keep the toggle honest. */
+export type ThemeMode = 'light' | 'dark';
 
 export type Theme = {
   colors: ColorTokens;
@@ -53,16 +54,14 @@ const darkTheme: Theme = { colors: darkColors, elevation: darkElevation, isDark:
 const THEME_MODE_KEY = 'parse.theme-mode';
 
 /**
- * What a user with no stored preference gets. Deliberately 'light' rather than
- * 'system': the app shipped light-only, and following the OS here would flip
- * existing dark-phone users to a dark app they never asked for. Change this one
- * constant to 'system' if that becomes the wanted behaviour — everything else
- * already supports it.
+ * What a user with no stored preference gets. The app shipped light-only, so
+ * light is what an existing user's first launch after this change must look
+ * like — the OS setting deliberately does not get a vote.
  */
 const DEFAULT_MODE: ThemeMode = 'light';
 
 function isThemeMode(value: unknown): value is ThemeMode {
-  return value === 'system' || value === 'light' || value === 'dark';
+  return value === 'light' || value === 'dark';
 }
 
 /**
@@ -94,15 +93,15 @@ const AppearanceContext = createContext<AppearanceContextValue | null>(null);
 
 export function AppearanceProvider({ children }: { children: React.ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(readStoredMode);
-  const systemScheme = useColorScheme();
 
-  const isDark = mode === 'system' ? systemScheme === 'dark' : mode === 'dark';
+  const isDark = mode === 'dark';
   const theme = isDark ? darkTheme : lightTheme;
 
   useEffect(() => {
-    // 'unspecified' hands control back to the OS, which is what makes
-    // useColorScheme() above report the real system value in 'system' mode.
-    Appearance.setColorScheme(mode === 'system' ? 'unspecified' : mode);
+    // Side effect only — nothing here reads colours back from it. This is what
+    // keeps Alert, the keyboard, native pickers and the DayNight window
+    // background in step with the toggle.
+    Appearance.setColorScheme(mode);
   }, [mode]);
 
   useEffect(() => {
