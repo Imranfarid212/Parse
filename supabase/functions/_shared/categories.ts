@@ -13,6 +13,8 @@
  * a change here means redeploying every function that imports it.
  */
 
+import { categoriesVersion } from './contracts/categories.ts';
+
 export const MISCELLANEOUS = 'Miscellaneous';
 export const MISCELLANEOUS_ID = 10;
 
@@ -45,7 +47,19 @@ export type UserCategories = { names: string[]; idByName: Map<string, number>; f
 type QueryClient = { from: (table: string) => any };
 
 const CATEGORY_CACHE_MS = 5 * 60 * 1000;
-const categoryCache = new Map<string, { value: UserCategories; fetchedAt: number }>();
+const categoryCache = new Map<string, { value: UserCategories; fetchedAt: number; version: string }>();
+
+/**
+ * Whether a client's fingerprint proves this cache entry is out of date.
+ *
+ * Only ever used to INVALIDATE, never to trust: a mismatch sends us back to the
+ * database, which then produces both the names and the id mapping. A client
+ * cannot use this to install a category list of its own choosing — the worst it
+ * can do with a forged value is force one extra read of its own row.
+ */
+function isStale(entry: { version: string } | undefined, clientVersion: string | null | undefined): boolean {
+  return Boolean(entry) && typeof clientVersion === 'string' && clientVersion !== entry!.version;
+}
 
 export const SEEDED_USER_CATEGORIES: UserCategories = {
   names: SEEDED_CATEGORIES.map((category) => category.name),
@@ -59,21 +73,33 @@ const shortError = (error: unknown) => (error instanceof Error ? error.message :
  * The user's own category picks, cached per isolate so the hot path usually pays
  * nothing. The camera's warm-up call primes this before the shutter is pressed.
  * A failed read falls back to the seeded list rather than failing the caller.
+ *
+ * @param clientVersion  The caller's `categoriesVersion(...)`, when there is a
+ *   caller to ask. Editing the category list writes `user_categories` directly,
+ *   which this isolate cannot observe — so without it a change stayed invisible
+ *   for up to CATEGORY_CACHE_MS, and the model was offered the old list. Worse
+ *   than a stale prompt: `resolveCategoryId` read the same stale map, so a
+ *   category the user had just removed still resolved to its id and receipts
+ *   were filed into it. Omit for the durable job path, which has no client and
+ *   correctly falls back to the timer.
  */
 export async function getUserCategories(
   admin: QueryClient,
   userId: string,
   timing?: Record<string, unknown>,
   label = 'categories',
+  clientVersion?: string | null,
 ): Promise<UserCategories> {
   const cached = categoryCache.get(userId);
-  if (cached && Date.now() - cached.fetchedAt < CATEGORY_CACHE_MS) {
+  const stale = isStale(cached, clientVersion);
+  if (cached && !stale && Date.now() - cached.fetchedAt < CATEGORY_CACHE_MS) {
     if (timing) {
       timing.categories_ms = 0;
       timing.categories_cached = 1;
     }
     return cached.value;
   }
+  if (timing && stale) timing.categories_invalidated = 1;
 
   const startedAt = performance.now();
   try {
@@ -94,7 +120,13 @@ export async function getUserCategories(
       idByName,
       fallbackId: idByName.get(MISCELLANEOUS) ?? MISCELLANEOUS_ID,
     };
-    categoryCache.set(userId, { value, fetchedAt: Date.now() });
+    // Versioned from what the DATABASE returned, never from what the client
+    // claimed — so a wrong hint costs one read and then self-corrects.
+    categoryCache.set(userId, {
+      value,
+      fetchedAt: Date.now(),
+      version: categoriesVersion(rows.map((row) => row.id)),
+    });
     if (timing) {
       timing.categories_ms = Math.round(performance.now() - startedAt);
       timing.categories_cached = 0;

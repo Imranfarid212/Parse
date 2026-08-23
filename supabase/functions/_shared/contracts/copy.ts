@@ -71,3 +71,68 @@ export const COPY_RESTORE_PURCHASES_DONE = 'Your purchases have been restored.';
  */
 export const COPY_PURCHASE_PENDING_ENTITLEMENT =
   'Purchase complete. Your new plan is being activated — this usually takes a few seconds.';
+
+/* ------------------------------------------------------------------ *
+ * Billing — managing an existing subscription
+ *
+ * Deliberately says nothing about a card. With IAP the store is the merchant of
+ * record and never exposes the payment instrument to the app, so any copy that
+ * implied Parse holds or shows card details would be false. Every string below
+ * either states billing STATE or points at the store.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Header title for the manage screen, and the Settings row that opens it.
+ *
+ * "Billing" rather than "Subscription" for two reasons: the Plan tab already
+ * headers itself "Subscription" and two screens under one word is a maze, and
+ * this is also where a user with no subscription lands to find that out.
+ */
+export const COPY_BILLING_TITLE = 'Billing';
+
+export const COPY_BILLING_ROW_LABEL = 'Billing';
+
+export const COPY_BILLING_NO_SUBSCRIPTION =
+  'You are on the free plan. Choose a plan to unlock unlimited scans.';
+
+export const COPY_BILLING_MANAGE_CTA = 'Manage subscription';
+
+/**
+ * Shown under the CTA so leaving the app is never a surprise.
+ *
+ * Which one is used follows the store that BILLS the subscription, falling back
+ * to the store on this device — NOT the device alone. Someone who subscribed on
+ * an iPhone and opened the app on an Android tablet is sent to Apple, and
+ * "opens Google Play" would then be a lie about where the button goes.
+ */
+export const COPY_BILLING_MANAGE_NOTE_IOS =
+  'Opens the App Store, where you can change your plan, update your payment method, or cancel.';
+
+export const COPY_BILLING_MANAGE_NOTE_ANDROID =
+  'Opens Google Play, where you can change your plan, update your payment method, or cancel.';
+
+/** Family Sharing: the member cannot manage what they did not buy. */
+export const COPY_BILLING_FAMILY_SHARED =
+  'You have access through Family Sharing. The family organiser manages this subscription.';
+
+export const COPY_BILLING_BILLING_ISSUE_TITLE = 'Payment problem';
+
+export const COPY_BILLING_GRACE_BODY =
+  'The store could not take payment. Update your payment method to keep your plan.';
+
+export const COPY_BILLING_BILLING_ISSUE_BODY =
+  'The store could not take payment and your plan has stopped. Update your payment method to restore it.';
+
+export const COPY_BILLING_PAUSED_BODY = 'Your subscription is paused.';
+
+export const COPY_BILLING_REFUND_CTA = 'Request a refund';
+
+/** Apple decides refunds, not us. The copy must not imply otherwise. */
+export const COPY_BILLING_REFUND_SUBMITTED =
+  'Apple has received your refund request and will email you their decision.';
+
+export const COPY_BILLING_REFUND_FAILED =
+  'That refund request could not be started. You can request one from the App Store instead.';
+
+export const COPY_BILLING_MANAGE_FAILED =
+  'Could not open the store. Check your connection and try again.';

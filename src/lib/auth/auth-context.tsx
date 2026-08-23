@@ -14,6 +14,7 @@ import { clearCachedAuth, getCachedAuth, setCachedAuth } from '@/lib/auth/sessio
 import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
 import type { Profile } from '@/lib/auth/types';
 import { withNetworkRetry } from '@/lib/network/retry';
+import { setCategoriesVersion } from '@/lib/receipts/categories-version';
 import { syncFromServer } from '@/lib/receipts/server-sync';
 import { clearReferralCache } from '@/lib/referrals/client';
 import { ensureSignupIntegrity } from '@/lib/referrals/integrity';
@@ -70,6 +71,25 @@ type AuthContextValue = {
   signInWithGoogle: () => Promise<void>;
   signInWithApple: () => Promise<void>;
   completeOnboarding: (categoryIds: number[], country: string, defaultCurrency: string) => Promise<void>;
+  /**
+   * Re-picks the filing categories after onboarding, from Settings.
+   *
+   * Deliberately the same `complete_onboarding` RPC rather than a direct write
+   * to `user_categories`, even though RLS would allow one. The rules that make
+   * a selection valid — at least one non-system category, Miscellaneous always
+   * present as the fallback — live in that function, and a client that wrote
+   * the table itself would be free to break both.
+   */
+  updateCategories: (categoryIds: number[]) => Promise<void>;
+  /**
+   * Sets the fallback currency used when a receipt does not state one.
+   *
+   * A direct `profiles` update rather than an RPC, unlike categories: there is
+   * no cross-table invariant to hold, the column carries its own
+   * `^[A-Z]{3}$` check, and RLS scopes the row to its owner — so the database
+   * enforces exactly what an RPC would have.
+   */
+  updateDefaultCurrency: (code: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -141,6 +161,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<number[]>([]);
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('checking');
   const bootstrapLocale = useMemo(() => getBootstrapLocale(), []);
+
+  /**
+   * Republish the selection fingerprint on every change, from wherever it came
+   * — a fresh profile read, the offline snapshot, a save in Settings, or
+   * sign-out. One effect rather than a call beside each `setSelectedCategoryIds`
+   * so a future writer cannot forget, which is precisely the class of bug this
+   * fingerprint exists to fix.
+   */
+  useEffect(() => {
+    setCategoriesVersion(selectedCategoryIds);
+  }, [selectedCategoryIds]);
 
   const profileRef = useRef<Profile | null>(null);
   const sessionRef = useRef<Session | null>(null);
@@ -656,6 +687,73 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [refreshProfile],
   );
 
+  /**
+   * Country and currency are read back from the current profile and passed
+   * through unchanged: `complete_onboarding` writes all three columns in one
+   * statement, so omitting them here would blank the user's locale as a side
+   * effect of editing a category list.
+   */
+  const updateCategories = useCallback(
+    async (categoryIds: number[]) => {
+      const current = profileRef.current;
+      await withNetworkRetry(
+        async () => {
+          const { error } = await supabase.rpc('complete_onboarding', {
+            selected_category_ids: categoryIds,
+            selected_country: current?.country ?? undefined,
+            selected_default_currency: current?.default_currency ?? 'USD',
+          });
+          if (error) throw error;
+        },
+        { attempts: 3, label: 'auth.updateCategories' },
+      );
+      await refreshProfile();
+    },
+    [refreshProfile],
+  );
+
+  /**
+   * Writes the row and adopts the row the database hands back.
+   *
+   * Deliberately NOT followed by `refreshProfile()`: that re-claims the device
+   * and re-runs attestation, which is the right price for finishing onboarding
+   * and far too high for tapping a currency in a list. Taking the returned row
+   * as the new profile keeps this one round trip, and the value is the server's
+   * own — never the string this function was handed.
+   */
+  const updateDefaultCurrency = useCallback(async (code: string) => {
+    const normalized = code.trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(normalized)) throw new Error('Currency must be a three-letter code.');
+    const userId = sessionRef.current?.user.id ?? profileRef.current?.id;
+    if (!userId) throw new Error('You need to be signed in to change this.');
+
+    const updated = await withNetworkRetry(
+      async () => {
+        const { data, error } = await supabase
+          .from('profiles')
+          .update({ default_currency: normalized })
+          .eq('id', userId)
+          .select('id,country,default_currency,onboarding_complete')
+          .single();
+        if (error) throw error;
+        return data as Profile;
+      },
+      { attempts: 3, label: 'auth.updateDefaultCurrency' },
+    );
+
+    profileRef.current = updated;
+    setProfile(updated);
+
+    // The snapshot is what the next cold start reads; leaving it stale would
+    // show the old currency until the next successful profile refresh.
+    try {
+      const cached = await getCachedAuth();
+      if (cached?.userId === userId) await setCachedAuth({ ...cached, profile: updated });
+    } catch (error) {
+      if (__DEV__) console.warn('Writing the auth snapshot failed', error);
+    }
+  }, []);
+
   const signOut = useCallback(async () => {
     setBusy(true);
     try {
@@ -690,6 +788,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signInWithGoogle,
       signInWithApple,
       completeOnboarding,
+      updateCategories,
+      updateDefaultCurrency,
       signOut,
     }),
     [
@@ -708,6 +808,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signOut,
       status,
       takeOverDevice,
+      updateCategories,
+      updateDefaultCurrency,
       user,
       verifyOtp,
     ],

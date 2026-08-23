@@ -10,6 +10,7 @@ import { normalizeReceiptDate } from '@/lib/dates';
 import { getFoundationEnv } from '@/lib/foundations/env';
 import { supabase } from '@/lib/auth/supabase';
 import { getDeviceId } from '@/lib/auth/device';
+import { getCategoriesVersion } from '@/lib/receipts/categories-version';
 import * as FileSystem from 'expo-file-system/legacy';
 import { AppState } from 'react-native';
 import {
@@ -636,6 +637,10 @@ export const supabaseExtractClient: ExtractClient = {
               mode,
               extraction_mode: extractionMode,
               default_currency: defaultCurrency,
+              // Lets the server notice its cached copy of this user's
+              // categories is out of date. Omitted when unknown, which leaves
+              // the server on its own expiry timer.
+              ...(getCategoriesVersion() ? { categories_version: getCategoriesVersion() } : {}),
               extracted_text: localOcrText,
               duplicate_override: duplicateOverride === true,
               ...(duplicateOfReceiptId ? { duplicate_of: duplicateOfReceiptId } : {}),
@@ -995,7 +1000,14 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
           apikey: env.supabaseAnonKey,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ receipt_id: receiptId, fields }),
+        body: JSON.stringify({
+          receipt_id: receiptId,
+          fields,
+          // Without this, a category the user added moments ago is missing from
+          // the server's cached map and their deliberate choice is stored as
+          // Miscellaneous.
+          ...(getCategoriesVersion() ? { categories_version: getCategoriesVersion() } : {}),
+        }),
         signal: timeout.signal,
       });
     } finally {
