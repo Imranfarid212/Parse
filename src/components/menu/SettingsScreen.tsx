@@ -5,12 +5,14 @@
  * "Settings" title + close).
  */
 import React, { useState } from 'react';
-import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, ScrollView, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
+import { AboutScreen } from '@/components/menu/AboutScreen';
 import { DeleteAccountScreen } from '@/components/menu/DeleteAccountScreen';
 import { Card, Divider, Eyebrow, Row, Toggle } from '@/components/menu/primitives';
 import { useAuth } from '@/lib/auth/auth-context';
+import { buildSupportMailto } from '@/lib/support';
 import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
@@ -34,6 +36,8 @@ export function SettingsScreen() {
   // billing warning and both manage-subscription links to be READ before the
   // destructive action is reachable, which an alert cannot carry.
   const [deleting, setDeleting] = useState(false);
+  // Same interstitial pattern as deletion — see DeleteAccountScreen.
+  const [about, setAbout] = useState(false);
   const email = auth.user?.email ?? 'Signed in';
   const displayName = auth.user?.user_metadata?.full_name ?? email.split('@')[0] ?? 'Parse user';
 
@@ -48,6 +52,7 @@ export function SettingsScreen() {
   };
 
   if (deleting) return <DeleteAccountScreen onCancel={() => setDeleting(false)} />;
+  if (about) return <AboutScreen onBack={() => setAbout(false)} />;
 
   return (
     <ScrollView
@@ -87,12 +92,15 @@ export function SettingsScreen() {
         />
       </Section>
 
+      {/* No Help Center row: an article library is a maintenance commitment,
+          and a thin one costs more trust than it earns. Contact Support is
+          deliberately not called "Report a Bug" — people with a question that
+          isn't a bug don't tap a row that says bug, and those are exactly the
+          people worth hearing from. */}
       <Section title="Support">
-        <Row icon="help-circle" label="Help Center" onPress={() => {}} />
+        <Row icon="mail" label="Contact Support" onPress={() => void Linking.openURL(buildSupportMailto(auth.user?.id))} />
         <Divider />
-        <Row icon="alert-circle" label="Report a Bug" onPress={() => {}} />
-        <Divider />
-        <Row icon="info" label="About Us" onPress={() => {}} />
+        <Row icon="info" label="About Us" onPress={() => setAbout(true)} />
       </Section>
 
       <Section title="Account Actions">
