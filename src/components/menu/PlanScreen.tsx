@@ -18,8 +18,9 @@
  * promo offering does not exist.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import {
   COPY_PURCHASE_PENDING_ENTITLEMENT,
@@ -39,11 +40,13 @@ import {
 } from '@/../packages/contracts/src/referrals';
 import { MONTHLY_SCAN_CAP, type Term, type Tier } from '@/../packages/contracts/src/products';
 import { Card, Eyebrow, PrimaryButton, Segmented, Toggle } from '@/components/menu/primitives';
+import { useAuth } from '@/lib/auth/auth-context';
 import { useEntitlements } from '@/lib/billing/entitlement-store';
 import { describeBillingDiagnosis, purchasePackage } from '@/lib/billing/purchases';
 import { priceKey, usePlanOfferings } from '@/lib/billing/use-plan-offerings';
-import { getReferralSummary, redeemReferral, shareReferral } from '@/lib/referrals/client';
-import { colors, elevation, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { getReferralSummary, peekReferralSummary, redeemReferral, shareReferral } from '@/lib/referrals/client';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 type Billing = Term;
 
@@ -87,6 +90,7 @@ function BillingCard({
   promo: boolean;
   onPress: () => void;
 }) {
+  const styles = useStyles();
   const showing = promo ? promoPrice : listPrice;
   // The struck-through price is only shown when there is a real, different price
   // to strike. Striking an identical number would imply a saving the store is
@@ -111,6 +115,8 @@ function BillingCard({
 }
 
 export function PlanScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const [plan, setPlan] = useState<Tier>('pro');
   const [promo, setPromo] = useState(false);
   const [billing, setBilling] = useState<Billing>('month');
@@ -118,19 +124,39 @@ export function PlanScreen() {
   const [shareBusy, setShareBusy] = useState(false);
   const [redeemBusy, setRedeemBusy] = useState(false);
   const [referralCode, setReferralCode] = useState('');
-  const [referral, setReferral] = useState<ReferralSummary | null>(null);
+  const auth = useAuth();
+  const userId = auth.user?.id ?? null;
+  // Seed from the cache so a revisit paints the real code and progress on the
+  // first frame. A cold load still starts null and shows the placeholder.
+  const [referral, setReferral] = useState<ReferralSummary | null>(() => peekReferralSummary(userId));
   const referralRef = useRef<ReferralSummary | null>(referral);
   const [referralError, setReferralError] = useState<string | null>(null);
-  const [referralLoading, setReferralLoading] = useState(true);
+  const [referralLoading, setReferralLoading] = useState(() => peekReferralSummary(userId) === null);
 
   const prices = usePlanOfferings();
   const entitlements = useEntitlements();
 
+  // The reward bar fills to its value instead of snapping there. It animates on
+  // the real number arriving and on every subsequent change, so a reward earned
+  // while the screen is open reads as progress rather than a jump.
+  const rewardPct = Math.min(
+    100,
+    ((referral?.rewarded ?? 0) / (referral?.max_rewards ?? USER_REFERRAL_MAX_REWARDS)) * 100,
+  );
+  const progress = useSharedValue(0);
+  useEffect(() => {
+    progress.value = withTiming(rewardPct, { duration: 650 });
+  }, [rewardPct, progress]);
+  const progressStyle = useAnimatedStyle(() => ({ width: `${progress.value}%` }));
+
   const loadReferral = useCallback(async () => {
-    setReferralLoading(true);
+    // Stale-while-revalidate: with a summary already on screen the refresh runs
+    // silently, so re-opening Plan never flashes back to a placeholder. Only a
+    // genuine cold load gets the loading state.
+    if (!referralRef.current) setReferralLoading(true);
     try {
       setReferralError(null);
-      const summary = await getReferralSummary();
+      const summary = await getReferralSummary(userId);
       referralRef.current = summary;
       setReferral(summary);
     } catch (error) {
@@ -144,7 +170,7 @@ export function PlanScreen() {
     } finally {
       setReferralLoading(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => { void loadReferral(); }, [loadReferral]);
 
@@ -276,13 +302,12 @@ export function PlanScreen() {
             </View>
             <Text selectable style={styles.ownCode}>{referral?.code ?? '------'}</Text>
           </View>
-          <View style={styles.progressTrack}>
-            <View
-              style={[
-                styles.progressFill,
-                { width: `${Math.min(100, ((referral?.rewarded ?? 0) / (referral?.max_rewards ?? USER_REFERRAL_MAX_REWARDS)) * 100)}%` },
-              ]}
-            />
+          <View
+            accessibilityRole="progressbar"
+            accessibilityValue={{ min: 0, max: referral?.max_rewards ?? USER_REFERRAL_MAX_REWARDS, now: referral?.rewarded ?? 0 }}
+            style={styles.progressTrack}
+          >
+            <Animated.View style={[styles.progressFill, progressStyle]} />
           </View>
           <View style={styles.referralMeta}>
             <Text style={styles.progressText}>{referral?.rewarded ?? 0}/{referral?.max_rewards ?? USER_REFERRAL_MAX_REWARDS} rewarded</Text>
@@ -300,8 +325,17 @@ export function PlanScreen() {
           </View>
         </Card>
 
-        {!referral?.referred ? (
-          <View style={styles.codeRow}>
+        {/*
+          Until the summary arrives, neither branch is known to be correct.
+          Rendering the code row by default meant an already-referred user
+          always saw "enter a code" first and then watched it get replaced a
+          network round-trip later. The placeholder holds the same 48pt slot so
+          nothing moves, and the resolved state fades in rather than hard-cutting.
+        */}
+        {referralLoading && !referral ? (
+          <View style={styles.codePlaceholder} />
+        ) : !referral?.referred ? (
+          <Animated.View entering={FadeIn.duration(180)} style={styles.codeRow}>
             <TextInput
               value={referralCode}
               onChangeText={(value) => setReferralCode(normalizeReferralCode(value).slice(0, 6))}
@@ -326,9 +360,10 @@ export function PlanScreen() {
             >
               <Text style={styles.applyText}>{redeemBusy ? 'Checking…' : 'Apply'}</Text>
             </Pressable>
-          </View>
+          </Animated.View>
         ) : (
-          <View
+          <Animated.View
+            entering={FadeIn.duration(180)}
             accessible
             accessibilityRole="text"
             accessibilityLabel={`Referral already applied. You received ${REFERRED_REWARD_SCANS} extra scans.`}
@@ -338,7 +373,7 @@ export function PlanScreen() {
             <Text style={styles.referralAppliedText}>
               Referral already applied · {REFERRED_REWARD_SCANS} extra scans received
             </Text>
-          </View>
+          </Animated.View>
         )}
         {referralError && <Text selectable style={styles.referralError}>{referralError}</Text>}
       </View>
@@ -434,7 +469,7 @@ export function PlanScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors, elevation) => ({
   content: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
@@ -469,6 +504,16 @@ const styles = StyleSheet.create({
   },
   shareText: { ...typography.label, color: colors.ctaText },
   codeRow: { flexDirection: 'row', alignItems: 'stretch', gap: spacing.sm },
+  // Same 48pt slot as both real branches, so resolving the summary never
+  // reflows the card. Deliberately quiet — it should read as "not ready yet",
+  // not as a third state competing for attention.
+  codePlaceholder: {
+    minHeight: 48,
+    borderRadius: radius.md,
+    borderCurve: 'continuous',
+    backgroundColor: colors.surfaceSubtle,
+    opacity: 0.6,
+  },
   codeInput: {
     flex: 1,
     minHeight: 48,
@@ -559,7 +604,9 @@ const styles = StyleSheet.create({
   },
   billPrice: {
     fontFamily: fontFamily.display,
-    fontSize: 20,
+    // 15% down from 20 — with the promo on, the struck list price sits beside
+    // this one in the same fixed-width card and the pair overflowed the border.
+    fontSize: 17,
     letterSpacing: -0.4,
     color: colors.textPrimary,
     fontVariant: ['tabular-nums'],
@@ -572,4 +619,4 @@ const styles = StyleSheet.create({
   diagnostic: { ...typography.eyebrow, fontFamily: fontFamily.regular, color: colors.warning, textAlign: 'center' },
   restore: { alignItems: 'center', paddingVertical: spacing.sm },
   restoreText: { ...typography.label, color: colors.textSecondary },
-});
+}));

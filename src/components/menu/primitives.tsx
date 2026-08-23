@@ -25,38 +25,44 @@ import {
 import { Feather } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useDerivedValue, withTiming } from 'react-native-reanimated';
 
-import { colors, elevation, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { radius, spacing, typography } from '@/theme/tokens';
 
 type FeatherName = React.ComponentProps<typeof Feather>['name'];
 
 /** Uppercase section marker. Matches the "SETUP" eyebrow on onboarding. */
 export function Eyebrow({ children, style }: { children: string; style?: TextStyle }) {
+  const styles = useStyles();
   return <Text style={[styles.eyebrow, style]}>{children}</Text>;
 }
 
-/** White rounded card with a hairline border + soft shadow; rows stack inside. */
+/** Rounded card with a hairline border + soft shadow; rows stack inside. */
 export function Card({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
+  const styles = useStyles();
   return <View style={[styles.card, style]}>{children}</View>;
 }
 
 /** Hairline divider, inset past the icon chip so it aligns with the label. */
 export function Divider({ inset = 60 }: { inset?: number }) {
+  const colors = useColors();
   return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginLeft: inset }} />;
 }
 
 /** Round icon chip that leads a row. */
 export function IconChip({
   icon,
-  color = colors.textSecondary,
-  bg = colors.surfaceSubtle,
+  color,
+  bg,
 }: {
   icon: FeatherName;
   color?: string;
   bg?: string;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
-    <View style={[styles.iconChip, { backgroundColor: bg }]}>
-      <Feather name={icon} size={16} color={color} />
+    <View style={[styles.iconChip, { backgroundColor: bg ?? colors.surfaceSubtle }]}>
+      <Feather name={icon} size={16} color={color ?? colors.textSecondary} />
     </View>
   );
 }
@@ -70,7 +76,7 @@ export function Row({
   iconColor,
   iconBg,
   label,
-  labelColor = colors.textPrimary,
+  labelColor,
   value,
   right,
   onPress,
@@ -84,11 +90,14 @@ export function Row({
   right?: React.ReactNode;
   onPress?: () => void;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
+
   const body = (
     <View style={styles.row}>
       <View style={styles.rowLeft}>
         <IconChip icon={icon} color={iconColor} bg={iconBg} />
-        <Text style={[styles.rowLabel, { color: labelColor }]}>{label}</Text>
+        <Text style={[styles.rowLabel, { color: labelColor ?? colors.textPrimary }]}>{label}</Text>
       </View>
       <View style={styles.rowRight}>
         {value ? <Text style={styles.rowValue}>{value}</Text> : null}
@@ -114,7 +123,7 @@ export function Row({
 export function Toggle({
   value,
   onValueChange,
-  activeColor = colors.accent,
+  activeColor,
   label,
 }: {
   value: boolean;
@@ -122,10 +131,17 @@ export function Toggle({
   activeColor?: string;
   label?: string;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   const p = useDerivedValue(() => withTiming(value ? 1 : 0, { duration: 200 }));
 
+  // Both branches must be plain strings: Reanimated's normalizeColor returns
+  // null for anything that is not a string or a number, which is what left this
+  // track with no background at all while the tokens were native colour objects.
+  const onColor = activeColor ?? colors.accent;
+  const offColor = colors.borderStrong;
   const track = useAnimatedStyle(() => ({
-    backgroundColor: p.value > 0.5 ? activeColor : colors.borderStrong,
+    backgroundColor: p.value > 0.5 ? onColor : offColor,
   }));
   const knob = useAnimatedStyle(() => ({ transform: [{ translateX: p.value * 20 }] }));
 
@@ -164,6 +180,8 @@ export function PrimaryButton({
   onPress?: () => void;
   style?: ViewStyle;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <Pressable
       onPress={onPress}
@@ -202,6 +220,8 @@ export function Segmented<T extends string>({
   onChange: (next: T) => void;
   compact?: boolean;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   const [trackW, setTrackW] = React.useState(0);
   const index = Math.max(0, options.findIndex((option) => option.key === value));
   const segW = trackW > 0 ? (trackW - SEG_PAD * 2) / options.length : 0;
@@ -249,6 +269,8 @@ export function Chip({
   selected: boolean;
   onPress: () => void;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <Pressable
       onPress={onPress}
@@ -263,7 +285,7 @@ export function Chip({
 
 const SEG_PAD = 4;
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors, elevation) => ({
   eyebrow: {
     ...typography.eyebrow,
     color: colors.textFaint,
@@ -329,7 +351,13 @@ const styles = StyleSheet.create({
     left: SEG_PAD,
     borderRadius: radius.sm + 4,
     borderCurve: 'continuous',
-    backgroundColor: colors.surface,
+    // In light, `surfaceRaised` is white and `raisedBorder` transparent, so
+    // this is the same white pill it always was, separated by its shadow. In
+    // dark the shadow is invisible against the track, so the fill lifts and
+    // the border becomes the thing that actually marks which segment is on.
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.raisedBorder,
     boxShadow: elevation.raised,
   },
   segBtn: {
@@ -347,4 +375,4 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: colors.accent },
   chipOff: { backgroundColor: colors.surfaceSubtle, borderWidth: 1, borderColor: colors.border },
   chipText: { ...typography.label },
-});
+}));

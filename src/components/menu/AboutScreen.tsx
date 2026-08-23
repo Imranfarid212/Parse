@@ -21,13 +21,14 @@
  * the privacy policy and the App Store privacy labels — Apple checks that.
  */
 import React from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 
 import { Card, Divider, Eyebrow } from '@/components/menu/primitives';
 import { SUPPORT_EMAIL } from '@/lib/support';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const ABOUT = {
   /** One line, no mission statement. Says who, immediately. */
@@ -48,6 +49,8 @@ const ABOUT = {
 } as const;
 
 function Person({ name, title }: { name: string; title: string }) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <View style={styles.person}>
       <View style={styles.avatar}>
@@ -65,6 +68,8 @@ function Person({ name, title }: { name: string; title: string }) {
 }
 
 export function AboutScreen({ onBack }: { onBack: () => void }) {
+  const styles = useStyles();
+  const colors = useColors();
   const version = Constants.expoConfig?.version ?? null;
 
   return (
@@ -122,7 +127,7 @@ export function AboutScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   content: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
@@ -174,4 +179,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   backText: { ...typography.button, color: colors.textPrimary },
-});
+}));

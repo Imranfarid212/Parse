@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { type Href, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,7 +7,8 @@ import { Feather } from '@expo/vector-icons';
 
 import { AnimatedGridBackground } from '@/components/ui/AnimatedGridBackground';
 import { useAuth } from '@/lib/auth/auth-context';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const OTP_LENGTH = 6;
 
@@ -28,6 +29,9 @@ function getOtpErrorMessage(error: unknown) {
 }
 
 export default function OtpScreen() {
+  const styles = useStyles();
+  const colors = useColors();
+  const { isDark } = useAppAppearance();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const auth = useAuth();
@@ -77,7 +81,7 @@ export default function OtpScreen() {
 
   return (
     <AnimatedGridBackground>
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={[styles.screen, { paddingTop: insets.top + spacing.lg, paddingBottom: insets.bottom + spacing.lg }]}
@@ -148,7 +152,7 @@ export default function OtpScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   screen: { flex: 1, paddingHorizontal: spacing.lg, justifyContent: 'center' },
   back: { position: 'absolute', left: spacing.lg, top: spacing.xl, zIndex: 1 },
   panel: {
@@ -185,4 +189,4 @@ const styles = StyleSheet.create({
   secondaryText: { color: colors.textSecondary, fontFamily: fontFamily.semibold },
   pressed: { opacity: 0.8, transform: [{ scale: 0.99 }] },
   busyBlocker: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 10 },
-});
+}));

@@ -16,15 +16,16 @@
  * receipt is drawn between the sheets and the front flap, so it lands inside.
  */
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { Canvas, Group, type Transforms3d } from '@shopify/react-native-skia';
 import { useDerivedValue, type SharedValue } from 'react-native-reanimated';
 
 import { FolderBack } from '@/components/receipt/folder/FolderBack';
 import { FolderFront, Frost } from '@/components/receipt/folder/FolderFront';
 import { FolderSheet } from '@/components/receipt/folder/FolderSheet';
-import { SPREAD, VIEW_W, folderHeight } from '@/components/receipt/folder/geometry';
-import { colors, fontFamily } from '@/theme/tokens';
+import { COLORS, SPREAD, VIEW_W, folderHeight } from '@/components/receipt/folder/geometry';
+import { makeStyles } from '@/theme/appearance';
+import { fontFamily } from '@/theme/tokens';
 
 export function RecentsFolder({
   width,
@@ -58,6 +59,7 @@ export function RecentsFolder({
   flapDrop?: number;
   layer?: 'all' | 'back' | 'front';
 }) {
+  const styles = useStyles();
   const height = folderHeight(width);
   const back = layer === 'all' || layer === 'back';
   const front = layer === 'all' || layer === 'front';
@@ -103,13 +105,13 @@ export function RecentsFolder({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles(() => ({
   label: {
     position: 'absolute',
     left: 0,
     right: 0,
     textAlign: 'center',
     fontFamily: fontFamily.semibold,
-    color: colors.ctaText,
+    color: COLORS.label,
   },
-});
+}));

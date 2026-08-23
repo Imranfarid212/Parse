@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Feather } from '@expo/vector-icons';
 
 import { useAuth } from '@/lib/auth/auth-context';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -16,6 +17,9 @@ function getErrorMessage(error: unknown) {
 }
 
 export default function CategoryOnboardingScreen() {
+  const styles = useStyles();
+  const colors = useColors();
+  const { isDark } = useAppAppearance();
   const router = useRouter();
   const auth = useAuth();
   const systemCategory = useMemo(() => auth.categories.find((category) => category.is_system), [auth.categories]);
@@ -84,7 +88,7 @@ export default function CategoryOnboardingScreen() {
       contentContainerStyle={styles.content}
       testID="category-onboarding-screen"
     >
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
       <Text style={styles.eyebrow}>SETUP</Text>
       <Text style={styles.title}>Choose your filing categories</Text>
       <Text style={styles.copy}>Miscellaneous is always kept as the fallback. Pick at least one more and arrange the rest.</Text>
@@ -144,7 +148,7 @@ export default function CategoryOnboardingScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingTop: spacing.xxl, gap: spacing.md, backgroundColor: colors.background },
   eyebrow: { color: colors.textFaint, fontFamily: fontFamily.semibold, fontSize: 12 },
@@ -181,4 +185,4 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...typography.button, color: colors.ctaText },
   pressed: { opacity: 0.82, transform: [{ scale: 0.99 }] },
-});
+}));

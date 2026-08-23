@@ -21,7 +21,7 @@ import { useIsFocused } from 'expo-router';
 import { Canvas, Fill, Group, Path, RadialGradient, Rect, vec } from '@shopify/react-native-skia';
 import { useDerivedValue, useSharedValue, type SharedValue } from 'react-native-reanimated';
 
-import { colors, palette } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
 
 const GRID = 40; // cell size (px)
 const NUM_SQUARES = 20; // was 36 — unnecessarily dense; drop to 12–16 if still warm
@@ -65,6 +65,8 @@ export function AnimatedGridBackground({
   children?: ReactNode;
   excludeBand?: { top: number; bottom: number } | null;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   const { width, height } = useWindowDimensions();
 
   // Pad beyond the screen, SNAPPED to whole grid cells so the lines and the
@@ -182,7 +184,7 @@ export function AnimatedGridBackground({
         </Group>
       </Canvas>
     ),
-    [width, height, gridPath],
+    [width, height, gridPath, colors.background],
   );
 
   return (
@@ -202,7 +204,7 @@ export function AnimatedGridBackground({
           <RadialGradient
             c={vec(width / 2, height * 0.45)}
             r={Math.max(width, height) * 0.95}
-            colors={[`${palette.canvas}00`, `${palette.canvas}00`, `${palette.canvas}33`]}
+            colors={[`${colors.background}00`, `${colors.background}00`, `${colors.background}33`]}
             positions={[0, 0.25, 1]}
           />
         </Rect>
@@ -213,7 +215,7 @@ export function AnimatedGridBackground({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.background },
   content: {
     position: 'absolute',
@@ -224,4 +226,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-});
+}));

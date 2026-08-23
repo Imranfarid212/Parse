@@ -23,7 +23,8 @@ import {
 import * as receiptStore from '@/lib/receipts/store';
 import { useRealtimeReceipts } from '@/lib/receipts/use-realtime-receipts';
 import { isCategory, type ReceiptFields } from '@/lib/receipts/types';
-import { colors, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const SEARCH_DEBOUNCE_MS = 300;
 const UNDO_WINDOW_MS = 5_000;
@@ -38,6 +39,8 @@ const VIEW_OPTIONS: SegmentOption<ReceiptView>[] = [
 const formatTotal = (receipt: ManagedReceipt) => `${receipt.fields.currency} ${receipt.fields.total.toFixed(2)}`;
 
 export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => void } = {}) {
+  const styles = useStyles();
+  const colors = useColors();
   const auth = useAuth();
   const [text, setText] = useState('');
   const [debouncedText, setDebouncedText] = useState('');
@@ -180,7 +183,7 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
           value={text}
           onChangeText={setText}
           placeholder="Merchant, note, or line item description"
-          placeholderTextColor={colors.textSecondary}
+          placeholderTextColor={colors.textFaint}
           style={styles.searchInput}
           returnKeyType="search"
         />
@@ -260,6 +263,8 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
 type ReceiptItemProps = { receipt: ManagedReceipt; onEdit: (receipt: ManagedReceipt) => void; onDelete: (receipt: ManagedReceipt) => void };
 
 function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
+  const styles = useStyles();
+  const colors = useColors();
   return (
     <Pressable style={styles.listRow} onPress={() => onEdit(receipt)}>
       <View style={styles.listIcon}><Ionicons name="receipt-outline" size={18} color={colors.textSecondary} /></View>
@@ -275,7 +280,7 @@ function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   root: { flex: 1 },
   headerRow: {
     flexDirection: 'row',
@@ -312,7 +317,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  searchInput: { flex: 1, ...typography.row, color: colors.textPrimary, padding: 0 },
+  // Matches the app's canonical text-entry input (EditSheet's `input`): regular
+  // weight at 15, not the semibold `typography.row` used for list rows. A
+  // semibold placeholder read as heavy against every other field in the app.
+  // includeFontPadding is Android-only and strips the extra leading it adds
+  // around TextInput glyphs; the bar centres its own content already.
+  searchInput: {
+    flex: 1,
+    fontFamily: fontFamily.regular,
+    fontSize: 15,
+    // Deliberate exception: the only body-level style in the app carrying
+    // tracking — every other body token leaves it unset. Kept because the
+    // search field reads better slightly tighter. If it ever needs undoing,
+    // revert to unset, NOT to 0 — on iOS any explicit value overrides the
+    // font's own kerning pairs.
+    letterSpacing: -0.2,
+    color: colors.textPrimary,
+    padding: 0,
+    includeFontPadding: false,
+  },
   body: { flex: 1, marginTop: spacing.sm },
   fanWrap: { flex: 1, paddingTop: 30 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.xl },
@@ -356,4 +379,4 @@ const styles = StyleSheet.create({
   },
   snackbarText: { ...typography.meta, fontSize: 14, color: colors.ctaText },
   undoText: { ...typography.button, fontSize: 14, color: colors.ctaText },
-});
+}));

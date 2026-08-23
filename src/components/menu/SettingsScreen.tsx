@@ -5,7 +5,7 @@
  * "Settings" title + close).
  */
 import React, { useState } from 'react';
-import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, ScrollView, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 
 import { AboutScreen } from '@/components/menu/AboutScreen';
@@ -13,9 +13,11 @@ import { DeleteAccountScreen } from '@/components/menu/DeleteAccountScreen';
 import { Card, Divider, Eyebrow, Row, Toggle } from '@/components/menu/primitives';
 import { useAuth } from '@/lib/auth/auth-context';
 import { buildSupportMailto } from '@/lib/support';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const styles = useStyles();
   return (
     <View style={styles.section}>
       <Eyebrow style={{ marginLeft: spacing.sm }}>{title}</Eyebrow>
@@ -26,8 +28,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function SettingsScreen() {
   const auth = useAuth();
-  const [darkMode, setDarkMode] = useState(false);
-  const [push, setPush] = useState(false);
+  const styles = useStyles();
+  const colors = useColors();
+  const { isDark, setMode } = useAppAppearance();
   const [signingOut, setSigningOut] = useState(false);
   // Deletion is an interstitial, not a dialog: Blueprint §13.2 requires the
   // billing warning and both manage-subscription links to be READ before the
@@ -75,9 +78,7 @@ export function SettingsScreen() {
         <Divider />
         <Row icon="tag" label="Categories" value={`${auth.selectedCategoryIds.length} active`} onPress={() => {}} />
         <Divider />
-        <Row icon="moon" label="Dark Mode" right={<Toggle label="Dark Mode" value={darkMode} onValueChange={setDarkMode} />} />
-        <Divider />
-        <Row icon="bell" label="Push Notifications" right={<Toggle label="Push Notifications" value={push} onValueChange={setPush} />} />
+        <Row icon="moon" label="Dark Mode" right={<Toggle label="Dark Mode" value={isDark} onValueChange={(value) => setMode(value ? 'dark' : 'light')} />} />
       </Section>
 
       <Section title="Finance">
@@ -132,7 +133,7 @@ export function SettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   content: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
@@ -163,4 +164,4 @@ const styles = StyleSheet.create({
   },
   editText: { ...typography.eyebrow, color: colors.textPrimary },
   version: { ...typography.eyebrow, color: colors.textFaint, textAlign: 'center', marginTop: spacing.xs },
-});
+}));

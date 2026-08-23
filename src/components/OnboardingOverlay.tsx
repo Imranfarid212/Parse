@@ -21,7 +21,8 @@ import { Feather } from '@expo/vector-icons';
 
 import { CategoryChecklist } from '@/components/ui/CategoryChecklist';
 import { ReceiptCard } from '@/components/ui/ReceiptCard';
-import { colors, fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const NUM = 3;
 const SWIPE_THRESHOLD = 70;
@@ -43,6 +44,7 @@ function SwipeCard({
   onSwiped: () => void;
   children?: (s: number) => React.ReactNode;
 }) {
+  const styles = useStyles();
   const tx = useSharedValue(0);
   const ty = useSharedValue(0);
   const gone = useSharedValue(0);
@@ -94,6 +96,8 @@ export function OnboardingOverlay({
   onClose: () => void;
   onComplete: () => void;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // Card aspect ratio: 340 wide × 529 tall (97 header + 335.6 rows + 88.4 footer
@@ -170,7 +174,7 @@ export function OnboardingOverlay({
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors) => ({
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   close: {
     position: 'absolute',
@@ -195,4 +199,4 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   ctaLabel: { ...typography.button, color: colors.ctaText },
-});
+}));

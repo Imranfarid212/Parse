@@ -15,6 +15,7 @@ import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
 import type { Profile } from '@/lib/auth/types';
 import { withNetworkRetry } from '@/lib/network/retry';
 import { syncFromServer } from '@/lib/receipts/server-sync';
+import { clearReferralCache } from '@/lib/referrals/client';
 import { ensureSignupIntegrity } from '@/lib/referrals/integrity';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -171,6 +172,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setProfile(null);
     setSelectedCategoryIds([]);
     setDeviceStatus('checking');
+    // Referral codes are per-account, so the cached summary has to go with the
+    // session. This is the single place local auth state is dropped, so it
+    // covers an expired session as well as an explicit sign-out.
+    clearReferralCache();
     applyStatus('signed_out');
     try {
       await clearCachedAuth();

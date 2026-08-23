@@ -13,7 +13,7 @@
  * mean two different things.
  */
 import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, Share, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import Animated, { FadeInDown } from 'react-native-reanimated';
@@ -46,7 +46,8 @@ import {
   useExportJobs,
   type ExportFormat,
 } from '@/lib/receipts/exports';
-import { colors, elevation, radius, spacing, typography } from '@/theme/tokens';
+import { makeStyles, useColors } from '@/theme/appearance';
+import { radius, spacing, typography, type ColorTokens } from '@/theme/tokens';
 
 type Preset = 'this' | 'last' | 'quarter' | 'all';
 
@@ -86,13 +87,17 @@ const ARTIFACT_LABEL: Record<ExportArtifact['kind'], string> = {
   images: 'Receipt scans',
 };
 
-/** The two export formats, as segments. See the header note on why there is no CSV. */
-const FORMAT_OPTIONS: SegmentOption<ExportFormat>[] = [
+/** The two export formats, as segments. See the header note on why there is no CSV.
+ *  A function of the theme rather than a constant: the segment accents are
+ *  themed, and a module-level array would freeze them at the light values. */
+const formatOptions = (colors: ColorTokens): SegmentOption<ExportFormat>[] => [
   { key: 'pdf', label: 'PDF Report', icon: 'file-text', activeColor: colors.danger },
   { key: 'xlsx', label: 'Excel Sheet', icon: 'grid', activeColor: colors.accent },
 ];
 
 export function ExportScreen() {
+  const styles = useStyles();
+  const colors = useColors();
   const auth = useAuth();
   const [preset, setPreset] = useState<Preset>('this');
   const [filters, setFilters] = useState<ReceiptFilters>(() => rangeFor('this'));
@@ -207,7 +212,7 @@ export function ExportScreen() {
           </View>
 
           <Eyebrow style={{ marginLeft: spacing.xs, marginBottom: spacing.sm }}>Format</Eyebrow>
-          <Segmented value={format} options={FORMAT_OPTIONS} onChange={setFormat} />
+          <Segmented value={format} options={formatOptions(colors)} onChange={setFormat} />
 
           <View style={styles.scansRow}>
             <View style={{ flex: 1 }}>
@@ -279,6 +284,8 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
   onRetry: () => void;
   onRepeat: () => void;
 }) {
+  const styles = useStyles();
+  const colors = useColors();
   const state = exportState(job);
   const describe = `${job.format === 'xlsx' ? 'Excel sheet' : 'PDF report'}${job.include_images ? ' · with receipt scans' : ''}`;
   // What was exported, in the user's own terms. Without this a past export is
@@ -379,7 +386,7 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((colors, elevation) => ({
   content: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: spacing.xl },
   subtitle: { ...typography.subtitle, color: colors.textSecondary, marginBottom: spacing.lg },
 
@@ -482,4 +489,4 @@ const styles = StyleSheet.create({
   resultIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   resultName: { ...typography.row, color: colors.textPrimary },
   resultMeta: { ...typography.meta, fontSize: 12, color: colors.textSecondary, marginTop: 2 },
-});
+}));

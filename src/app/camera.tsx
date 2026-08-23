@@ -57,6 +57,7 @@ import * as store from '@/lib/receipts/store';
 import type { CaptureMode, DuplicateCandidate, ExtractionMode, LocalDuplicateCandidate, ReceiptFields } from '@/lib/receipts/types';
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { fontFamily, radius, spacing } from '@/theme/tokens';
+import { useAppAppearance } from '@/theme/appearance';
 
 type Mode = 'default' | 'oneclick';
 /** MenuPanel's TABS order: Export, Search, Plan, Settings. */
@@ -124,8 +125,9 @@ const FOLDER_W = 82;
 
 const toCaptureMode = (mode: Mode): CaptureMode => (mode === 'oneclick' ? 'one_click' : 'default');
 
-/** Single tap toggles Default ↔ One click — styled to match the Menu button
- *  it sits beneath, rather than the segmented pill this used to be. */
+/** Single tap toggles Default ↔ One click. Bottom-right of the controls row,
+ *  mirroring the gallery button on the left; it keeps the Menu button's card
+ *  styling (and its 56pt width, which is what balances the row). */
 function ModeButton({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
   const next = mode === 'default' ? 'oneclick' : 'default';
   return (
@@ -173,6 +175,7 @@ function showNotReceiptAlert(
 }
 
 export default function CameraScreen() {
+  const { isDark } = useAppAppearance();
   const router = useRouter();
   const auth = useAuth();
   const entitlements = useEntitlements();
@@ -995,7 +998,7 @@ export default function CameraScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar style={menuOpen ? 'dark' : 'light'} />
+      <StatusBar style={menuOpen ? (isDark ? 'light' : 'dark') : 'light'} />
 
       <Animated.View style={[styles.strip, { width: width * 2 }, stripStyle]}>
         {/* ── Camera half ── */}
@@ -1048,8 +1051,6 @@ export default function CameraScreen() {
               <Ionicons name="menu" size={22} color="#fff" />
               <Text style={styles.menuLabel}>Menu</Text>
             </Pressable>
-
-            <ModeButton mode={mode} onChange={setMode} />
           </View>
 
           {/* The static framing hint yields while the live outline is on the
@@ -1077,7 +1078,7 @@ export default function CameraScreen() {
 
               <ExtractionModeToggle mode={extractionMode} onChange={setExtractionMode} />
 
-              <View style={styles.sideBtn} />
+              <ModeButton mode={mode} onChange={setMode} />
             </View>
           </View>
 
