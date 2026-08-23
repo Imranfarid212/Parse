@@ -1107,6 +1107,13 @@ Deno.serve(async (req) => {
     const duplicateMatchStrength =
       duplicateMatchStrengthRaw === 'weak' || duplicateMatchStrengthRaw === 'strong' ? duplicateMatchStrengthRaw : null;
     let defaultCurrency = isCurrency(body?.default_currency) ? String(body.default_currency) : null;
+    // A fingerprint, not a category list: it can only invalidate this isolate's
+    // cache, never populate it. Absent on older app builds, which keeps the
+    // previous time-based behaviour rather than breaking them.
+    const clientCategoriesVersion =
+      typeof body?.categories_version === 'string' && body.categories_version.length <= 128
+        ? body.categories_version
+        : null;
     if (!isUuid(captureId)) {
       return json(400, {
         code: 'VALIDATION_FAILED',
@@ -1164,7 +1171,14 @@ Deno.serve(async (req) => {
 
     // The category read was started before the body was parsed, so this has
     // usually resolved already and costs nothing here.
-    const categories = await categoriesPromise;
+    await categoriesPromise;
+    // Re-ask, now that the body has told us which selection the app is holding.
+    // Normally a cache hit costing nothing; it only goes back to the database
+    // when the app's fingerprint disagrees with what this isolate cached —
+    // which is exactly the window after the user edited their categories, when
+    // the eager read above would otherwise have served the old list to the
+    // model AND to resolveCategoryId below.
+    const categories = await getUserCategories(admin, userId, timing, 'categories', clientCategoriesVersion);
     const ackedAt = new Date().toISOString();
 
     // Reserve the row and call the model at the same time: the client only ever

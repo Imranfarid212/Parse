@@ -15,8 +15,10 @@
  * decide whether a scan is allowed. Trusting the client for that is how apps get
  * their entitlements forged.
  */
+import { Linking, Platform } from 'react-native';
 import Purchases, {
   LOG_LEVEL,
+  REFUND_REQUEST_STATUS,
   type CustomerInfo,
   type PurchasesOffering,
   type PurchasesPackage,
@@ -28,7 +30,12 @@ import {
   type Offering,
   type Tier,
 } from '@/../packages/contracts/src/products';
-import { billingAvailable, revenueCatApiKey, usingTestStore } from '@/lib/billing/config';
+import {
+  billingAvailable,
+  MANAGE_SUBSCRIPTION_URLS,
+  revenueCatApiKey,
+  usingTestStore,
+} from '@/lib/billing/config';
 
 let configured = false;
 let configuring: Promise<boolean> | null = null;
@@ -239,6 +246,147 @@ export async function getCustomerInfo(): Promise<CustomerInfo | null> {
     return await Purchases.getCustomerInfo();
   } catch {
     return null;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Managing an existing subscription
+ *
+ * Everything money-touching — changing the payment method, upgrading,
+ * cancelling, refunding — happens on Apple's or Google's own authenticated
+ * screen, never in this app. There is no in-app path to a card by design: with
+ * IAP the store is the merchant of record and the card is never exposed to us,
+ * which is what keeps the whole feature outside PCI DSS scope. What follows is
+ * routing to the right store screen, and nothing else.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Hosts allowed to be opened as a subscription-management destination.
+ *
+ * `managementURL` arrives in a network response. It is TLS-protected and comes
+ * from RevenueCat, so the realistic risk is low — but an unvalidated URL handed
+ * to `Linking.openURL` is a phishing primitive with unusually good odds: the
+ * user tapped "manage subscription" in their own app, so they are primed to
+ * trust whatever page loads and to type a store password into it. Validating
+ * costs nothing and removes the class of bug entirely.
+ */
+const MANAGEMENT_HOSTS = /(^|\.)(apple\.com|google\.com)$/;
+
+/**
+ * Returns the URL only if it is https and points at a store host, else null.
+ *
+ * Fails closed: a URL that cannot be parsed is rejected rather than passed
+ * through. `new URL` is used rather than a regex on purpose — it resolves
+ * userinfo tricks like `https://apps.apple.com@evil.example/` to the real host,
+ * which hand-rolled string matching reliably gets wrong.
+ */
+export function safeManagementURL(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return null;
+    return MANAGEMENT_HOSTS.test(parsed.hostname) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Where this device's own store keeps its subscription settings. */
+function platformManageURL(): string {
+  return Platform.OS === 'ios' ? MANAGE_SUBSCRIPTION_URLS.apple : MANAGE_SUBSCRIPTION_URLS.google;
+}
+
+export type ManageOutcome = 'opened' | 'failed';
+
+/**
+ * Opens the store's manage-subscription screen.
+ *
+ * Three routes, in descending order of how good they feel:
+ *
+ *   1. `showManageSubscriptions()` presents Apple's sheet as a MODAL OVER the
+ *      app on iOS 13+. This matters commercially: the alternative bounces the
+ *      user into the App Store app, and a meaningful share of them never come
+ *      back to finish what they opened. On Android it forwards to the Play
+ *      subscriptions page, so the user does leave — Play has no in-app sheet.
+ *   2. The validated `managementURL` RevenueCat computed for this subscriber.
+ *   3. This platform's generic subscriptions page, which always exists.
+ *
+ * @param crossStoreURL  Set when the subscription is billed by the OTHER
+ *   store — subscribed on an iPhone, opened on an Android tablet. The native
+ *   sheet can only ever show the current device's store, so it is skipped
+ *   entirely and the correct store's page is opened instead. Getting this wrong
+ *   sends the user to a screen where their subscription simply is not listed.
+ */
+export async function openManageSubscriptions(crossStoreURL?: string | null): Promise<ManageOutcome> {
+  if (crossStoreURL) {
+    const url = safeManagementURL(crossStoreURL);
+    if (url) {
+      try {
+        await Linking.openURL(url);
+        return 'opened';
+      } catch (error) {
+        if (__DEV__) console.warn('[billing] cross-store manage link failed', error);
+        return 'failed';
+      }
+    }
+  }
+
+  if (await ensureConfigured()) {
+    try {
+      await Purchases.showManageSubscriptions();
+      return 'opened';
+    } catch (error) {
+      // Thrown on iOS < 13, on some Android configurations, and whenever the
+      // native module is absent. Every one of those is a fallback, not a
+      // failure to report.
+      if (__DEV__) console.warn('[billing] showManageSubscriptions unavailable', error);
+    }
+
+    const fromSdk = safeManagementURL((await getCustomerInfo())?.managementURL);
+    if (fromSdk) {
+      try {
+        await Linking.openURL(fromSdk);
+        return 'opened';
+      } catch {
+        // Fall through to the generic page.
+      }
+    }
+  }
+
+  try {
+    await Linking.openURL(platformManageURL());
+    return 'opened';
+  } catch (error) {
+    if (__DEV__) console.warn('[billing] no manage route available', error);
+    return 'failed';
+  }
+}
+
+export type RefundOutcome = 'submitted' | 'cancelled' | 'unsupported' | 'failed';
+
+/**
+ * Presents Apple's in-app refund sheet for the active entitlement.
+ *
+ * iOS 15+ only — `beginRefundRequestForActiveEntitlement` throws
+ * `UnsupportedPlatformException` on Android and older iOS, so the platform
+ * check here is load-bearing, not defensive tidiness.
+ *
+ * Worth having because the alternative is a support email. Apple decides the
+ * outcome, not us, and `submitted` means exactly that: Apple received the
+ * request. It is never a confirmation that money moved.
+ */
+export async function requestRefund(): Promise<RefundOutcome> {
+  if (Platform.OS !== 'ios') return 'unsupported';
+  if (!(await ensureConfigured())) return 'unsupported';
+  try {
+    const status = await Purchases.beginRefundRequestForActiveEntitlement();
+    if (status === REFUND_REQUEST_STATUS.USER_CANCELLED) return 'cancelled';
+    return status === REFUND_REQUEST_STATUS.SUCCESS ? 'submitted' : 'failed';
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/unsupported|not available|iOS 15/i.test(message)) return 'unsupported';
+    if (__DEV__) console.warn('[billing] refund request failed', message);
+    return 'failed';
   }
 }
 

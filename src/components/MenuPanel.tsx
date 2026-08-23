@@ -5,7 +5,7 @@
  * via expo-glass-effect's GlassView (UIGlassEffect / Liquid Glass), with an
  * expo-blur fallback on platforms without it.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,7 +15,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-na
 
 import { ExportScreen } from '@/components/menu/ExportScreen';
 import { PlanScreen } from '@/components/menu/PlanScreen';
-import { SettingsScreen } from '@/components/menu/SettingsScreen';
+import { SettingsScreen, type SettingsSubScreen } from '@/components/menu/SettingsScreen';
 import { SearchView } from '@/components/search/SearchView';
 import { SPRING_SETTLE } from '@/theme/motion';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
@@ -86,12 +86,40 @@ export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; in
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [active, setActive] = useState(initialTab);
+  /**
+   * Set while a tab is showing something other than itself (Settings ->
+   * Billing / About Us / Delete Account). The header is owned here, so a
+   * sub-screen has to report itself up for the title and the X to be right.
+   */
+  const [subScreen, setSubScreen] = useState<SettingsSubScreen | null>(null);
+  // Stable identity: SettingsScreen reports through an effect, and a callback
+  // that changed every render would make that effect loop.
+  const handleSubScreen = useCallback((next: SettingsSubScreen | null) => setSubScreen(next), []);
+
+  const changeTab = useCallback((index: number) => {
+    setSubScreen(null);
+    setActive(index);
+  }, []);
+
+  // A sub-screen names the header. Otherwise the tab does.
+  const title = subScreen?.title ?? HEADER_TITLE[TABS[active].label] ?? TABS[active].label;
 
   return (
     <View style={[styles.panel, { paddingTop: insets.top + spacing.sm }]}>
       <View style={styles.header}>
-        <Text style={styles.title}>{HEADER_TITLE[TABS[active].label] ?? TABS[active].label}</Text>
-        <Pressable onPress={onClose} hitSlop={12} style={styles.headerBtn}>
+        <Text style={styles.title}>{title}</Text>
+        {/* One level at a time. Deep in a sub-screen the X pops back to the tab
+            that launched it; from a tab it closes the menu. Dropping the user
+            straight out to the camera from two levels in loses their place for
+            no reason — and it is the same control either way, so it never
+            leaves them without an exit. */}
+        <Pressable
+          onPress={subScreen ? subScreen.onBack : onClose}
+          hitSlop={12}
+          style={styles.headerBtn}
+          accessibilityRole="button"
+          accessibilityLabel={subScreen ? `Back to ${TABS[active].label}` : 'Close menu'}
+        >
           <Ionicons name="close" size={24} color={colors.textPrimary} />
         </Pressable>
       </View>
@@ -100,16 +128,16 @@ export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; in
         {active === 0 ? (
           <ExportScreen />
         ) : active === 1 ? (
-          <SearchView onOpenPlan={() => setActive(2)} />
+          <SearchView onOpenPlan={() => changeTab(2)} />
         ) : active === 2 ? (
           <PlanScreen />
         ) : (
-          <SettingsScreen />
+          <SettingsScreen onSubScreen={handleSubScreen} />
         )}
       </View>
 
       <View style={[styles.toggleArea, { paddingBottom: insets.bottom + spacing.md }]}>
-        <GlassTabs active={active} onChange={setActive} width={width - spacing.lg * 2} isDark={isDark} />
+        <GlassTabs active={active} onChange={changeTab} width={width - spacing.lg * 2} isDark={isDark} />
       </View>
     </View>
   );

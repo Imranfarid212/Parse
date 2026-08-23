@@ -38,6 +38,7 @@ async function buildFieldPatch(
   admin: { from: (table: string) => any },
   userId: string,
   fields: Record<string, unknown> | null,
+  clientCategoriesVersion: string | null,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = { status: 'confirmed', confirmed_via: 'user' };
   if (!fields || typeof fields !== 'object') return patch;
@@ -53,8 +54,11 @@ async function buildFieldPatch(
   patch.notes = normalizeText(fields.handwritten_notes).slice(0, 2000);
 
   // A category the account does not actually have must never be stored, whoever
-  // sent it — the same rule extraction applies to the model's answer.
-  const categories = await getUserCategories(admin, userId, undefined, 'receipt-confirm');
+  // sent it — the same rule extraction applies to the model's answer. The
+  // fingerprint keeps that rule from misfiring the other way: a category the
+  // user added moments ago is not in this isolate's cached map, so without it
+  // the user's own deliberate choice silently resolved to Miscellaneous.
+  const categories = await getUserCategories(admin, userId, undefined, 'receipt-confirm', clientCategoriesVersion);
   patch.category_id = resolveCategoryId(categories, fields.category);
 
   return patch;
@@ -99,7 +103,11 @@ Deno.serve(async (req) => {
     const receiptId = String(body?.receipt_id ?? '');
     if (!isUuid(receiptId)) return json(400, { code: 'VALIDATION_FAILED', message: 'receipt_id must be a UUID' });
 
-    const patch = await buildFieldPatch(admin, userData.user.id, body?.fields ?? null);
+    const clientCategoriesVersion =
+      typeof body?.categories_version === 'string' && body.categories_version.length <= 128
+        ? body.categories_version
+        : null;
+    const patch = await buildFieldPatch(admin, userData.user.id, body?.fields ?? null, clientCategoriesVersion);
     const items = normalizeItems(body?.fields?.items);
 
     const { data: receipt, error } = await admin.rpc('confirm_receipt_with_items', {
