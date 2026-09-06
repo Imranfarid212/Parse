@@ -43,6 +43,7 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
       image_uri  TEXT NOT NULL,
       capture_mode TEXT NOT NULL DEFAULT 'default',
       extraction_mode TEXT NOT NULL DEFAULT 'balanced',
+      default_currency TEXT,
       status     TEXT NOT NULL,
       fields     TEXT,
       local_ocr_text TEXT,
@@ -113,6 +114,7 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   `);
   await ensureColumn(db, 'capture_mode', "ALTER TABLE receipts ADD COLUMN capture_mode TEXT NOT NULL DEFAULT 'default'");
   await ensureColumn(db, 'extraction_mode', "ALTER TABLE receipts ADD COLUMN extraction_mode TEXT NOT NULL DEFAULT 'balanced'");
+  await ensureColumn(db, 'default_currency', 'ALTER TABLE receipts ADD COLUMN default_currency TEXT');
   await ensureColumn(db, 'local_ocr_text', 'ALTER TABLE receipts ADD COLUMN local_ocr_text TEXT');
   await ensureColumn(db, 'dedupe_key', 'ALTER TABLE receipts ADD COLUMN dedupe_key TEXT');
   await ensureColumn(db, 'ocr_fingerprint', 'ALTER TABLE receipts ADD COLUMN ocr_fingerprint TEXT');
@@ -245,6 +247,7 @@ type Persisted = {
   image_uri: string;
   capture_mode: CaptureMode;
   extraction_mode: ExtractionMode;
+  default_currency: string | null;
   status: ReceiptStatus;
   fields: string | null;
   local_ocr_text: string | null;
@@ -285,6 +288,7 @@ const hydrate = (r: Persisted): ReceiptRow => ({
   imageUri: r.image_uri,
   captureMode: r.capture_mode,
   extractionMode: r.extraction_mode,
+  defaultCurrency: r.default_currency ?? null,
   status: r.status,
   fields: r.fields
     ? (() => {
@@ -414,6 +418,7 @@ export async function insertCaptured(
   imageUri: string,
   captureMode: CaptureMode,
   extractionMode: ExtractionMode,
+  defaultCurrency: string | null,
   captureId = newCaptureId(),
 ): Promise<ReceiptRow> {
   const db = await getDb();
@@ -423,6 +428,7 @@ export async function insertCaptured(
     imageUri,
     captureMode,
     extractionMode,
+    defaultCurrency,
     status: 'local_captured',
     fields: null,
     localOcrText: null,
@@ -444,12 +450,13 @@ export async function insertCaptured(
     updatedAt: now,
   };
   await db.runAsync(
-    'INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, status, fields, local_ocr_text, dedupe_key, ocr_fingerprint, duplicate_of, duplicate_match_strength, image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, default_currency, status, fields, local_ocr_text, dedupe_key, ocr_fingerprint, duplicate_of, duplicate_match_strength, image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [
       row.id,
       row.imageUri,
       row.captureMode,
       row.extractionMode,
+      row.defaultCurrency,
       row.status,
       null,
       null,

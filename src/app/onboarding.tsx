@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Feather } from '@expo/vector-icons';
 
 import { useAuth } from '@/lib/auth/auth-context';
+import { isKnownCurrency } from '@/lib/currencies';
 import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
@@ -62,9 +63,25 @@ export default function CategoryOnboardingScreen() {
       return;
     }
 
+    // `complete_onboarding` only checks the shape (`^[A-Z]{3}$`), so a
+    // well-formed typo like "ZZZ" saves cleanly and then reads as "Current
+    // currency" on the settings screen for as long as the account exists.
+    // Checking against the same list the settings picker offers is the only
+    // thing between a slip of the thumb and a currency that does not exist.
+    const normalizedCurrency = currency.trim().toUpperCase();
+    if (!isKnownCurrency(normalizedCurrency)) {
+      Alert.alert(
+        'Check the currency',
+        normalizedCurrency
+          ? `“${normalizedCurrency}” isn’t a currency code we recognise. Try a three-letter code such as USD, EUR or INR.`
+          : 'Enter a three-letter currency code, such as USD, EUR or INR.',
+      );
+      return;
+    }
+
     try {
       setBusy(true);
-      await auth.completeOnboarding(selectedIds, country, currency.toUpperCase());
+      await auth.completeOnboarding(selectedIds, country, normalizedCurrency);
       router.replace('/camera');
     } catch (error) {
       console.warn('Onboarding not saved', error);
