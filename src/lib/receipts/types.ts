@@ -138,6 +138,21 @@ export type ReceiptRow = {
   imageUri: string;
   captureMode: CaptureMode;
   extractionMode: ExtractionMode;
+  /**
+   * The user's default currency as it stood when the shutter fired.
+   *
+   * Persisted with the row rather than looked up at dispatch time, because the
+   * retry queue drains long after capture — offline, or on a cold start before
+   * the profile has loaded — and `extract-balanced` reads no profile of its
+   * own, so an absent value there means every undetected receipt files as USD.
+   *
+   * Capture time is also the *correct* moment to read it: a receipt scanned in
+   * India last month should not be relabelled because the user changed their
+   * default yesterday.
+   *
+   * Null on rows captured before this column existed.
+   */
+  defaultCurrency: string | null;
   status: ReceiptStatus;
   fields: ReceiptFields | null;
   localOcrText: string | null;

@@ -10,6 +10,7 @@ import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { detectAndCorrect, recognizeText } from '@/../modules/document-scan';
+import { getCachedAuth } from '@/lib/auth/session-cache';
 import {
   captureMetricsClient,
   confirmReceiptClient,
@@ -510,7 +511,13 @@ export async function processCapture(
   // The row exists before the network is touched, so a crash/kill mid-request
   // still leaves the scan recoverable.
   const localRowStartedAt = Date.now();
-  const row = await store.insertCaptured(rowImageUri, captureMode, extractionMode, captureId);
+  const row = await store.insertCaptured(
+    rowImageUri,
+    captureMode,
+    extractionMode,
+    options?.defaultCurrency ?? null,
+    captureId,
+  );
   if (duplicateOfLocalRowId) {
     await store.setDuplicateRelation(row.id, duplicateOfLocalRowId, duplicateMatchStrength);
   }
@@ -1100,9 +1107,29 @@ async function applyDeferredDispatch(row: ReceiptRow, deferred: Promise<ExtractA
   }
 }
 
+/**
+ * The signed-in user's default currency from the offline auth snapshot.
+ *
+ * The drain runs without React context and often without a network, so the
+ * cached profile is the only place this is readable here. Never authority —
+ * just a better answer than letting the server assume USD.
+ */
+async function cachedDefaultCurrency(): Promise<string | null> {
+  try {
+    const cached = await getCachedAuth();
+    return cached?.profile?.default_currency ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function dispatchPending(): Promise<number> {
   const pending = await store.listPendingExtract();
   let recovered = 0;
+
+  // Read once per drain, and only when some row actually needs it: rows
+  // captured before `default_currency` existed carry nothing of their own.
+  const fallbackCurrency = pending.some((row) => !row.defaultCurrency) ? await cachedDefaultCurrency() : null;
 
   for (const row of pending) {
     try {
@@ -1111,6 +1138,10 @@ async function dispatchPending(): Promise<number> {
         imageUri: row.imageUri,
         mode: row.captureMode,
         extractionMode: row.localOcrText ? row.extractionMode : 'precise',
+        // Without this the balanced path has no currency at all —
+        // `extract-balanced` reads no profile, so it would file every receipt
+        // that does not state its own currency as USD.
+        defaultCurrency: row.defaultCurrency ?? fallbackCurrency ?? undefined,
         localOcrText: row.localOcrText,
         capturedAt: new Date(row.createdAt).toISOString(),
       });
