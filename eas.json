@@ -13,6 +13,14 @@
       },
       "ios": {
         "simulator": false
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://wfboznibkhsfxteejxco.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndmYm96bmlia2hzZnh0ZWVqeGNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MTI1NjksImV4cCI6MjEwMDA4ODU2OX0.sGEvDZ_Wp8YQfcGN-ezWc8VJTZWBNkyfMvO0-EhIPYI",
+        "EXPO_PUBLIC_RC_TEST_KEY": "test_OjoQGCbzuBcddVqnwmxTwbFPzLJ",
+        "EXPO_PUBLIC_ENV": "staging",
+        "EXPO_PUBLIC_MOCK_BACKEND": "0",
+        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://wfboznibkhsfxteejxco.supabase.co/functions/v1/app-attest-enroll"
       }
     },
     "preview": {
@@ -20,11 +28,31 @@
       "channel": "preview",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://wfboznibkhsfxteejxco.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndmYm96bmlia2hzZnh0ZWVqeGNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MTI1NjksImV4cCI6MjEwMDA4ODU2OX0.sGEvDZ_Wp8YQfcGN-ezWc8VJTZWBNkyfMvO0-EhIPYI",
+        "EXPO_PUBLIC_RC_TEST_KEY": "test_OjoQGCbzuBcddVqnwmxTwbFPzLJ",
+        "EXPO_PUBLIC_ENV": "staging",
+        "EXPO_PUBLIC_MOCK_BACKEND": "0",
+        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://wfboznibkhsfxteejxco.supabase.co/functions/v1/app-attest-enroll"
       }
     },
     "production": {
       "channel": "production",
       "autoIncrement": true
+    },
+    "testflight": {
+      "extends": "production",
+      "channel": "testflight",
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://wfboznibkhsfxteejxco.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndmYm96bmlia2hzZnh0ZWVqeGNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MTI1NjksImV4cCI6MjEwMDA4ODU2OX0.sGEvDZ_Wp8YQfcGN-ezWc8VJTZWBNkyfMvO0-EhIPYI",
+        "EXPO_PUBLIC_RC_TEST_KEY": "test_OjoQGCbzuBcddVqnwmxTwbFPzLJ",
+        "EXPO_PUBLIC_ENV": "staging",
+        "EXPO_PUBLIC_MOCK_BACKEND": "0",
+        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://wfboznibkhsfxteejxco.supabase.co/functions/v1/app-attest-enroll"
+      }
     }
   },
   "submit": {
