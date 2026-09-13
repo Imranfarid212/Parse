@@ -55,6 +55,9 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {},
+    "testflight": {
+      "extends": "production"
+    }
   }
 }
