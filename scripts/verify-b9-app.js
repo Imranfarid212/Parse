@@ -37,7 +37,16 @@ includes(integrity, 'attestKeyAsync', 'iOS enrolls an App Attest key');
 includes(integrity, 'generateAssertionAsync', 'iOS signs each referral action');
 includes(integrity, 'SecureStore', 'the App Attest key id survives restarts');
 includes(integrity, 'ensureSignupIntegrity', 'signup exposes a platform-integrity enrollment gate');
-includes(auth, 'await ensureSignupIntegrity(currentSession.user.id)', 'authenticated app admission requires integrity enrollment');
+// Enrollment is deliberately no longer awaited as a precondition for sign-in.
+// It depends on Apple's attestation service, and one transient failure locked a
+// TestFlight tester out of the app entirely with "Sign in failed". The reward
+// gate this used to stand in for is enforced server-side regardless:
+// redeem_referral computes `v_blocked := not p_attestation_valid or ...` inside
+// the granting transaction, so an unattested installation cannot be paid.
+// Admission and reward eligibility are now separate properties; this asserts
+// only that sign-in still enrols, without gating on the result.
+includes(auth, 'void ensureSignupIntegrity(currentSession.user.id)', 'sign-in enrols platform integrity without gating admission on it');
+if (/await\s+ensureSignupIntegrity/.test(auth)) fail('enrollment must not block sign-in; an attestation outage would lock every user out');
 
 includes(camera, 'shouldShowReferralPrompt', 'the first Camera landing points users to manual redemption');
 includes(copy, 'TOAST_REFERRAL_PROMPT', 'manual redemption prompt copy lives in contracts');

@@ -60,7 +60,12 @@ export default function LandingScreen() {
       setBusy(true);
       await action();
     } catch (error) {
-      Alert.alert('Sign in failed', error instanceof Error ? error.message : 'Please try again.');
+      // Native module errors carry the only useful identifier on `code`; their
+      // message can be a generic placeholder. Showing it lets a tester report
+      // something actionable without a log round-trip.
+      const code = typeof (error as { code?: unknown } | null)?.code === 'string' ? (error as { code: string }).code : null;
+      const message = error instanceof Error ? error.message : 'Please try again.';
+      Alert.alert('Sign in failed', code ? `${message}\n\n(${code})` : message);
     } finally {
       setBusy(false);
     }
