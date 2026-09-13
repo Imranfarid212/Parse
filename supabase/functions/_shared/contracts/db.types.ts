@@ -82,6 +82,53 @@ export type Database = {
           },
         ]
       }
+      app_attest_failures: {
+        Row: {
+          app_version: string | null
+          created_at: string
+          device_id: string
+          error_code: string | null
+          error_message: string | null
+          id: string
+          key_id: string | null
+          platform: string
+          stage: string
+          user_id: string
+        }
+        Insert: {
+          app_version?: string | null
+          created_at?: string
+          device_id: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          key_id?: string | null
+          platform: string
+          stage: string
+          user_id: string
+        }
+        Update: {
+          app_version?: string | null
+          created_at?: string
+          device_id?: string
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          key_id?: string | null
+          platform?: string
+          stage?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_attest_failures_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       app_attest_keys: {
         Row: {
           active: boolean
@@ -1896,6 +1943,7 @@ export type Database = {
       }
       health_check: { Args: never; Returns: number }
       prune_app_attest_challenges: { Args: never; Returns: number }
+      prune_app_attest_failures: { Args: never; Returns: number }
       purge_expired_exports: {
         Args: { p_before?: string; p_dry_run?: boolean; p_limit?: number }
         Returns: {

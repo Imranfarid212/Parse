@@ -15,6 +15,13 @@ const json = (status: number, body: unknown) =>
 const keyIdIsValid = (value: unknown): value is string =>
   typeof value === 'string' && value.length >= 32 && value.length <= 256 && /^[A-Za-z0-9+/_=-]+$/.test(value);
 
+/** Bounded to the column width so a chatty client cannot widen a row. */
+const stringOrNull = (value: unknown, maxLength: number) => {
+  if (value == null) return null;
+  const text = String(value).trim();
+  return text ? text.slice(0, maxLength) : null;
+};
+
 const challengeContext = (body: Record<string, unknown>) => {
   if (body.purpose === 'enroll') return { purpose: 'enroll' as const, context: {} };
   if (body.purpose !== 'referral_redeem') throw new Error('Invalid verification purpose.');
@@ -47,12 +54,18 @@ Deno.serve(async (req) => {
 
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return json(400, { code: 'VALIDATION_FAILED', message: 'A JSON body is required.' }); }
-  if (body.user_id !== userId || !isDeviceId(body.device_id) || !keyIdIsValid(body.key_id)) {
+  // Every action but a failure report is about one specific key. A report can
+  // come from Android, which has no App Attest key at all, or from a failure in
+  // generateKeyAsync itself — so there the identifier is optional, and checked
+  // only when it is supplied.
+  const keyIdOptional = body.action === 'report_failure';
+  const keyIdAcceptable = (keyIdOptional && body.key_id == null) || keyIdIsValid(body.key_id);
+  if (body.user_id !== userId || !isDeviceId(body.device_id) || !keyIdAcceptable) {
     return json(400, { code: 'VALIDATION_FAILED', message: 'Device verification request is invalid.' });
   }
 
   const deviceId = body.device_id as string;
-  const keyId = body.key_id as string;
+  const keyId = keyIdIsValid(body.key_id) ? body.key_id : null;
   const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
   if (!(await isActiveDevice(admin, userId, deviceId))) {
     return json(409, { code: 'DEVICE_INACTIVE', message: 'This device is not active.' });
@@ -93,6 +106,42 @@ Deno.serve(async (req) => {
     }
     void admin.rpc('prune_app_attest_challenges');
     return json(200, { challenge, expires_in: ttlSeconds });
+  }
+
+  // A failed attestKeyAsync/generateAssertionAsync never reaches the server on
+  // its own: the call fails device-to-Apple, and the client is left holding the
+  // only copy of the reason. Recording the code here is what keeps an incident
+  // attributable after the fact. Authentication, device validation and key
+  // format are already enforced above, so this only has to store the report.
+  if (body.action === 'report_failure') {
+    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const { count } = await admin
+      .from('app_attest_failures')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('device_id', deviceId)
+      .gte('created_at', since);
+
+    // Dropped silently past the cap. Diagnostics must never become a way to
+    // fill the table, and must never hand the caller a second failure to deal
+    // with on top of the one it is reporting.
+    if ((count ?? 0) < 30) {
+      const { error: reportError } = await admin.from('app_attest_failures').insert({
+        user_id: userId,
+        device_id: deviceId,
+        key_id: keyId,
+        stage: body.stage === 'assert' ? 'assert' : 'attest',
+        error_code: stringOrNull(body.error_code, 128),
+        error_message: stringOrNull(body.error_message, 500),
+        platform: body.platform === 'android' ? 'android' : 'ios',
+        app_version: stringOrNull(body.app_version, 64),
+      });
+      if (reportError) {
+        console.error('[app-attest-enroll] failure report insert failed', { code: reportError.code });
+      }
+    }
+    void admin.rpc('prune_app_attest_failures');
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   if (body.action !== 'attest' || typeof body.challenge !== 'string' || typeof body.attestation !== 'string') {

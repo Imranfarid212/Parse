@@ -276,11 +276,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     if (claim?.out_status !== 'active') throw new Error('Could not verify this device.');
 
-    // B9 admits a signed-in installation only after platform attestation. The
+    // B9 admits a signed-in installation through platform attestation. The
     // device claim must happen first because enrollment is bound server-side to
-    // the one active installation. Referral release later requires its own
-    // fresh assertion, so this cannot be replayed to obtain scans.
-    await ensureSignupIntegrity(currentSession.user.id);
+    // the one active installation.
+    //
+    // Deliberately not awaited. Enrollment depends on Apple's attestation
+    // service, which fails intermittently, and while it gated this function a
+    // single transient failure locked a TestFlight tester out of the app with
+    // "Sign in failed" and no way past it. Nothing here authorizes a reward:
+    // referral release requires its own fresh assertion via
+    // `createReferralAttestation`, so an installation that never enrols still
+    // cannot claim one — the anti-fraud gate lives there, not at sign-in.
+    // A failure retries on the next refresh, because enrollment re-runs
+    // whenever no key identifier is stored.
+    void ensureSignupIntegrity(currentSession.user.id).catch((error: unknown) => {
+      if (__DEV__) console.warn('[auth] device attestation enrollment failed', error);
+    });
 
     applySignedIn(currentSession);
     setDeviceStatus('active');
