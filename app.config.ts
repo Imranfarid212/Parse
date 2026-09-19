@@ -29,10 +29,19 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         '@react-native-firebase/app',
         '@react-native-firebase/crashlytics',
         '@react-native-firebase/analytics',
-        // React Native Firebase requires dynamic frameworks on RN 0.75+, and
-        // explicitly warns against combining its default SPM mode with static
-        // ones. This is the only reason expo-build-properties is here.
-        ['expo-build-properties', { ios: { useFrameworks: 'dynamic' } }],
+        // Deliberately NO expo-build-properties useFrameworks entry.
+        //
+        // React Native Firebase's docs call for dynamic frameworks, but that
+        // applies to the Firebase CocoaPods SDK. Here the SDK resolves through
+        // Swift Package Manager -- Podfile.lock carries only the three RNFB
+        // wrapper pods -- so the requirement does not apply, and setting it
+        // broke the build outright: this project uses Expo's precompiled React
+        // Native modules, which do not produce a React.framework, so dynamic
+        // linkage fails with "ld: framework 'React' not found".
+        //
+        // The remaining option RNFirebase offers is to take Firebase from
+        // CocoaPods instead of SPM, which is what this plugin does.
+        './plugins/with-rnfirebase-disable-spm',
       ]
     : [];
 

@@ -66,7 +66,6 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
     CREATE INDEX IF NOT EXISTS idx_receipts_status  ON receipts (status);
     CREATE INDEX IF NOT EXISTS idx_receipts_retry   ON receipts (status, next_retry_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_receipts_created ON receipts (created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_receipts_user ON receipts (user_id);
     CREATE TABLE IF NOT EXISTS receipt_metric_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       payload TEXT NOT NULL,
@@ -147,6 +146,17 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   // Where the image lives on the server. A row restored from the server has no
   // local file, so this is the only way back to its photo.
   await ensureColumn(db, 'remote_image_path', 'ALTER TABLE receipts ADD COLUMN remote_image_path TEXT');
+
+  // Indexed only now, and deliberately not in the schema block above.
+  //
+  // `user_id` is not in CREATE TABLE -- it is added by ALTER TABLE, twenty lines
+  // down from where the schema is declared. Creating an index on it up there
+  // named a column that did not exist yet, which failed the ENTIRE execAsync
+  // statement, so every migration after it was skipped and the column was never
+  // added at all. Every query then raised `no such column: user_id` forever,
+  // on a fresh install as much as an upgrade, and each one was an unhandled
+  // rejection that nothing surfaced.
+  await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_user ON receipts (user_id);');
   await ensureTableColumn(db, 'sync_state', 'last_attempt_at', 'ALTER TABLE sync_state ADD COLUMN last_attempt_at INTEGER');
   await ensureTableColumn(db, 'sync_state', 'last_success_at', 'ALTER TABLE sync_state ADD COLUMN last_success_at INTEGER');
   await ensureTableColumn(db, 'sync_state', 'last_error', 'ALTER TABLE sync_state ADD COLUMN last_error TEXT');
