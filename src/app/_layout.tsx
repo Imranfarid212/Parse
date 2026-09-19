@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
-import { Stack } from 'expo-router';
+import { Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -13,11 +13,13 @@ import {
   InstrumentSans_700Bold,
   InstrumentSans_600SemiBold_Italic,
 } from '@expo-google-fonts/instrument-sans';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AuthProvider, useAuth } from '@/lib/auth/auth-context';
 import { EntitlementProvider } from '@/lib/billing/entitlement-store';
 import { purgeAbandonedCaptures, retryPending } from '@/lib/receipts/capture';
 import { syncFromServer } from '@/lib/receipts/server-sync';
 import { countProviderDelayed } from '@/lib/receipts/store';
+import { initMonitoring, logSafeError, trackAnonymousBreadcrumb, trackAnonymousEvent } from '@/lib/monitoring';
 import { AppearanceProvider, useAppAppearance, useColors } from '@/theme/appearance';
 
 SplashScreen.preventAutoHideAsync();
@@ -31,6 +33,25 @@ SplashScreen.preventAutoHideAsync();
  */
 const RETRY_TICK_MS = 20_000;
 const PROVIDER_DELAY_POLL_MS = 2_500;
+
+/**
+ * Leaves a breadcrumb on every screen change.
+ *
+ * The route path only — never a param. Paths here are static route names, but
+ * a future `/receipt/[id]` would put a receipt id on the Crashlytics timeline,
+ * so the value is sanitised on the way out like everything else.
+ */
+function NavigationBreadcrumbs() {
+  const pathname = usePathname();
+
+  useEffect(() => {
+    if (!pathname) return;
+    trackAnonymousBreadcrumb(`nav ${pathname}`);
+    trackAnonymousEvent('screen_change', { path: pathname });
+  }, [pathname]);
+
+  return null;
+}
 
 /** Pulls server-owned B5 jobs while they are visible to the signed-in user. */
 function ProviderDelayPoller() {
@@ -54,7 +75,7 @@ function ProviderDelayPoller() {
       try {
         await syncFromServer(auth.user.id, auth.categories);
       } catch (error) {
-        if (__DEV__) console.warn('[b5] pending receipt sync failed', error);
+        logSafeError(error, 'layout.providerDelaySync');
       } finally {
         inFlight.current = false;
       }
@@ -93,6 +114,13 @@ function RootLayoutContent() {
   useEffect(() => {
     if (fontsLoaded) SplashScreen.hideAsync();
   }, [fontsLoaded]);
+
+  // Before anything else can fail. Deliberately not awaited: the installation id
+  // resolves in milliseconds and every reporting entry point tolerates being
+  // called before it lands, so blocking first paint on it would buy nothing.
+  useEffect(() => {
+    void initMonitoring().catch((error: unknown) => logSafeError(error, 'monitoring.init'));
+  }, []);
 
   // A queued capture writes itself a retry time and used to have nothing to
   // honour it: the drain ran on the camera screen mounting, on the network
@@ -134,11 +162,15 @@ function RootLayoutContent() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
+        {/* Outside the providers: a throw inside AuthProvider's own render is
+            exactly the case a boundary nested below it could not catch. */}
+        <ErrorBoundary>
         <AuthProvider>
           {/* Inside AuthProvider: entitlements are per-account and the store
               re-identifies to RevenueCat whenever the signed-in user changes. */}
           <EntitlementProvider>
             <ProviderDelayPoller />
+            <NavigationBreadcrumbs />
             <Stack
               screenOptions={{
                 headerShown: false,
@@ -147,6 +179,7 @@ function RootLayoutContent() {
             />
           </EntitlementProvider>
         </AuthProvider>
+        </ErrorBoundary>
         <StatusBar style={isDark ? 'light' : 'dark'} />
       </SafeAreaProvider>
     </GestureHandlerRootView>

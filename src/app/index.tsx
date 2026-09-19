@@ -13,6 +13,7 @@ import Animated, {
 import { AnimatedGridBackground } from '@/components/ui/AnimatedGridBackground';
 import { CreateAccountCard } from '@/components/CreateAccountCard';
 import { useAuth } from '@/lib/auth/auth-context';
+import { useStateInvariant } from '@/lib/monitoring/flows';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { spacing, typography } from '@/theme/tokens';
 
@@ -41,6 +42,19 @@ export default function LandingScreen() {
     }, [auth.authenticated, auth.deviceStatus, auth.loading, auth.profile, router]),
   );
 
+  /**
+   * States this screen can hold that are legitimate for a moment and broken for
+   * a minute. None of them raises anything on its own, which is exactly why they
+   * are declared here rather than left to be noticed in a support email.
+   *
+   * The second is the reported failure's signature verbatim: a valid session
+   * whose profile row never arrived leaves every routing guard below false, so
+   * this screen — the sign-in screen — renders behind a signed-in user.
+   */
+  useStateInvariant('landing.loadingGate', auth.loading || (auth.authenticated && auth.deviceStatus === 'checking'), 20_000);
+  useStateInvariant('landing.signedInNoProfile', auth.authenticated && !auth.profile, 12_000);
+  useStateInvariant('landing.deviceUnavailable', auth.deviceStatus === 'unavailable', 30_000);
+
   // Opacity-only entrance (no transform) so the text bounds we measure stay accurate.
   const heroStyle = useAnimatedStyle(() => ({ opacity: enter.value }));
 
@@ -60,7 +74,12 @@ export default function LandingScreen() {
       setBusy(true);
       await action();
     } catch (error) {
-      Alert.alert('Sign in failed', error instanceof Error ? error.message : 'Please try again.');
+      // Native module errors carry the only useful identifier on `code`; their
+      // message can be a generic placeholder. Showing it lets a tester report
+      // something actionable without a log round-trip.
+      const code = typeof (error as { code?: unknown } | null)?.code === 'string' ? (error as { code: string }).code : null;
+      const message = error instanceof Error ? error.message : 'Please try again.';
+      Alert.alert('Sign in failed', code ? `${message}\n\n(${code})` : message);
     } finally {
       setBusy(false);
     }

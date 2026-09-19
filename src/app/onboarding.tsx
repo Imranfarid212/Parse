@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { isKnownCurrency } from '@/lib/currencies';
 import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -84,7 +85,7 @@ export default function CategoryOnboardingScreen() {
       await auth.completeOnboarding(selectedIds, country, normalizedCurrency);
       router.replace('/camera');
     } catch (error) {
-      console.warn('Onboarding not saved', error);
+      logSafeError(error, 'onboarding.save');
       Alert.alert('Onboarding not saved', getErrorMessage(error));
     } finally {
       setBusy(false);
