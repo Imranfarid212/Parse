@@ -19,6 +19,7 @@ import { syncFromServer } from '@/lib/receipts/server-sync';
 import { clearReferralCache } from '@/lib/referrals/client';
 import { ensureSignupIntegrity } from '@/lib/referrals/integrity';
 import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
+import { beginFlow, type Flow } from '@/lib/monitoring/flows';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -168,6 +169,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * the two, and the second case is a bug while the first is not.
    */
   const oauthCallbackAtRef = useRef(0);
+  /**
+   * The sign-in attempt currently expected to reach a signed-in, profiled user.
+   * Held here rather than inside `signInWithGoogle` because the attempt can be
+   * completed by the deep-link handler instead — the two race for the same
+   * callback — so whichever path finishes it resolves the same watchdog.
+   *
+   * Generous deadline: the provider's consent screen is presented inside the
+   * app, so the user reading it counts as foreground time.
+   */
+  const signInFlowRef = useRef<Flow | null>(null);
+
+  const settleSignInFlow = useCallback((outcome: 'succeed' | string) => {
+    const flow = signInFlowRef.current;
+    if (!flow) return;
+    signInFlowRef.current = null;
+    if (outcome === 'succeed') flow.succeed();
+    else flow.fail(outcome);
+  }, []);
   const bootstrapLocale = useMemo(() => getBootstrapLocale(), []);
 
   /**
@@ -322,6 +341,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSelectedCategoryIds(nextSelectedCategoryIds);
     lastRefreshedAtRef.current = Date.now();
 
+    // The expected ending, whichever path got here.
+    if (nextState.profileRow) settleSignInFlow('succeed');
+
     // The snapshot is what the next cold start reads. A failed write costs the
     // next offline launch, so it must never cost this sign-in.
     try {
@@ -351,7 +373,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
     return nextState.profileRow;
-  }, [applySignedIn, applySignedOut]);
+  }, [applySignedIn, applySignedOut, settleSignInFlow]);
 
   const takeOverDevice = useCallback(async () => {
     const deviceId = await getDeviceId();
@@ -629,21 +651,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const verifyOtp = useCallback(
     async (email: string, token: string) => {
-      await withNetworkRetry(
-        async () => {
-          const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
-          if (error) throw error;
-        },
-        { attempts: 2, label: 'auth.verifyOtp' },
-      );
+      trackAnonymousBreadcrumb('auth.otp.verify');
+      signInFlowRef.current = beginFlow('auth.signIn.otp', { timeoutMs: 90_000 });
+      try {
+        await withNetworkRetry(
+          async () => {
+            const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
+            if (error) throw error;
+          },
+          { attempts: 2, label: 'auth.verifyOtp' },
+        );
+      } catch (error) {
+        // A wrong or expired code surfaces its own message to the user.
+        settleSignInFlow('verify_failed');
+        throw error;
+      }
       return refreshProfile();
     },
-    [refreshProfile],
+    [refreshProfile, settleSignInFlow],
   );
 
   const signInWithGoogle = useCallback(async () => {
     const redirectTo = getRedirectUrl();
     trackAnonymousBreadcrumb('auth.google.start');
+    signInFlowRef.current = beginFlow('auth.signIn.google', { timeoutMs: 180_000 });
     setBusy(true);
     try {
       const { data, error } = await supabase.auth.signInWithOAuth({
@@ -692,14 +723,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             new Error(`Google sign-in ended without a session (browser=${result.type}, callbackSeen=${callbackSeen})`),
             callbackSeen ? 'auth.google.redirectIntercepted' : 'auth.google.abandoned',
           );
+          // Already reported above; the watchdog must not say it twice.
+          settleSignInFlow(callbackSeen ? 'redirect_intercepted' : 'abandoned');
         }
       }
+    } catch (error) {
+      // A thrown sign-in surfaces an alert, so it is a handled ending.
+      settleSignInFlow('threw');
+      throw error;
     } finally {
       setBusy(false);
     }
-  }, [refreshProfile]);
+  }, [refreshProfile, settleSignInFlow]);
 
   const signInWithApple = useCallback(async () => {
+    trackAnonymousBreadcrumb('auth.apple.start');
+    signInFlowRef.current = beginFlow('auth.signIn.apple', { timeoutMs: 180_000 });
     setBusy(true);
     try {
       const credential = await AppleAuthentication.signInAsync({
@@ -735,25 +774,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       await refreshProfile();
+    } catch (error) {
+      // Includes the user dismissing Apple's own sheet, which is a real ending.
+      settleSignInFlow('threw');
+      throw error;
     } finally {
       setBusy(false);
     }
-  }, [refreshProfile]);
+  }, [refreshProfile, settleSignInFlow]);
 
   const completeOnboarding = useCallback(
     async (categoryIds: number[], country: string, defaultCurrency: string) => {
-      await withNetworkRetry(
-        async () => {
-          const { error } = await supabase.rpc('complete_onboarding', {
-            selected_category_ids: categoryIds,
-            selected_country: country,
-            selected_default_currency: defaultCurrency,
-          });
-          if (error) throw error;
-        },
-        { attempts: 3, label: 'auth.completeOnboarding' },
-      );
-      await refreshProfile();
+      const flow = beginFlow('onboarding.complete', { timeoutMs: 60_000 });
+      try {
+        await withNetworkRetry(
+          async () => {
+            const { error } = await supabase.rpc('complete_onboarding', {
+              selected_category_ids: categoryIds,
+              selected_country: country,
+              selected_default_currency: defaultCurrency,
+            });
+            if (error) throw error;
+          },
+          { attempts: 3, label: 'auth.completeOnboarding' },
+        );
+        await refreshProfile();
+        flow.succeed();
+      } catch (error) {
+        flow.fail('threw');
+        throw error;
+      }
     },
     [refreshProfile],
   );

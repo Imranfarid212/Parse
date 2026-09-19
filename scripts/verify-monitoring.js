@@ -116,6 +116,57 @@ check('rejection tracker is installed at init', () => {
   assert.ok(/logSafeError\(rejection, 'global.unhandledRejection'\)/.test(index), 'rejections are not reported');
 });
 
+console.log('\nflow watchdogs:');
+const flows = fs.readFileSync(path.join(root, 'src/lib/monitoring/flows.ts'), 'utf8');
+
+check('deadlines count foreground time only', () => {
+  // A wall-clock deadline reports every user who switches apps mid-flow, which
+  // is ordinary behaviour -- the signal would drown in it.
+  assert.ok(/AppState\.addEventListener\('change'/.test(flows), 'no AppState listener');
+  assert.ok(/suspendedMs \+= Date\.now\(\) - suspendedAt/.test(flows), 'suspended time is not deducted');
+  assert.ok(/if \(remaining > 0\)/.test(flows), 'deadline does not reschedule after a suspension');
+});
+
+check('reports are bounded per flow name', () => {
+  assert.ok(/MAX_REPORTS_PER_FLOW/.test(flows), 'no per-flow cap');
+  assert.ok(/seen >= MAX_REPORTS_PER_FLOW/.test(flows), 'cap is not enforced');
+});
+
+check('only a timeout reports; a handled ending does not', () => {
+  // fail() means the caller already surfaced it. Reporting again turns one
+  // incident into two records of it.
+  // Anchor on the implementation, not the `Flow` type declaration above it --
+  // matching the type slices in the whole deadline handler and its legitimate report.
+  const failStart = flows.indexOf('fail: (reason: string) => {');
+  assert.ok(failStart > 0, 'could not locate the fail() implementation');
+  const failBody = flows.slice(failStart, flows.indexOf('cancel: dispose'));
+  assert.ok(!/logSafeError/.test(failBody), 'fail() reports, so handled endings would double-report');
+  assert.ok(/logSafeError\([\s\S]{0,200}flow\.stalled/.test(flows), 'timeout does not report');
+});
+
+// Every started flow must have a declared ending, or it silently never resolves
+// -- the exact failure mode this mechanism exists to detect.
+const srcFiles = [];
+(function walk(dir) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walk(full);
+    else if (/\.tsx?$/.test(entry.name)) srcFiles.push(full);
+  }
+})(path.join(root, 'src'));
+
+for (const file of srcFiles) {
+  const text = fs.readFileSync(file, 'utf8');
+  if (!/\bbeginFlow\(/.test(text) || file.endsWith('flows.ts')) continue;
+  const rel = path.relative(root, file);
+  check(`${rel} settles every flow it starts`, () => {
+    assert.ok(
+      /\.succeed\(\)|\.fail\(|settleSignInFlow\(|useStateInvariant/.test(text),
+      'starts a flow but declares no ending, so it can only ever time out',
+    );
+  });
+}
+
 console.log('\nfirebase.json privacy flags:');
 const firebase = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json'), 'utf8'))['react-native'];
 check('RNFirebase does not record raw JS errors alongside ours', () => {
