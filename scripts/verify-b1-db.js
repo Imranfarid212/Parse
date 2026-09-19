@@ -81,7 +81,24 @@ for (const [label, actual, expected] of checks) {
   }
 }
 
-const generated = run('supabase', ['gen', 'types', 'typescript', '--local']);
+/**
+ * `--schema public` is load-bearing, not tidiness.
+ *
+ * Generating every schema pulled in `storage`, whose internal tables are
+ * created by the Supabase platform image rather than by anything in
+ * supabase/migrations. When that image gained `iceberg_namespaces` and
+ * `iceberg_tables`, 94 lines appeared in the generated output that no commit
+ * here could have produced, and whole-file equality could never hold again --
+ * which is exactly the drift that kept this gate red for months. Scoping to
+ * `public` makes this check depend only on migrations this repo owns, and has
+ * the side effect of dropping the `__InternalSupabase` block, whose
+ * PostgrestVersion is read from the running stack and varies by CLI version.
+ *
+ * The app only ever uses `Database['public']`: the single consumer is a
+ * `import type { Database }` in src/lib/auth/supabase.ts, and nothing anywhere
+ * references the storage schema's types.
+ */
+const generated = run('supabase', ['gen', 'types', 'typescript', '--local', '--schema', 'public']);
 const current = fs.readFileSync(path.join(root, 'packages/contracts/src/db.types.ts'), 'utf8');
 
 /** How many differing lines to print before truncating. */
