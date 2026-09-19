@@ -408,6 +408,18 @@ export async function processCapture(
   let duplicateOfLocalRowId: string | null = null;
   let duplicateOfReceiptId: string | null = null;
   let duplicateMatchStrength: 'weak' | 'strong' | null = null;
+  /**
+   * What the local OCR heuristic read as the total, kept so it can be compared
+   * against what the model returns.
+   *
+   * A user reported seeing one amount and a different one after saving, and
+   * nothing recorded enough to tell which stage was wrong. The draft value is
+   * never displayed and never persisted -- the card shows a placeholder until
+   * the model answers -- so reconstructing it afterwards was impossible.
+   * `parseDraftTotal` falls back to the largest number on the receipt when it
+   * recognises no total label, so a wide divergence here is a real signal.
+   */
+  let draftTotal: number | null = null;
 
   if (extractionMode === 'balanced') {
     const ocrResizeStartedAt = Date.now();
@@ -450,6 +462,7 @@ export async function processCapture(
       if (decision !== 'continue') return { kind: 'preflight_rejected' };
     }
     const draft = localOcrText ? draftFromOcr(localOcrText, options?.defaultCurrency ?? 'USD') : null;
+    if (draft) draftTotal = draft.total;
     if (draft) {
       logLatency('local_draft_ready', { captureId, merchant: draft.store, total: draft.total });
       options?.onDraft?.(draft, { captureId, elapsedMs: Date.now() - captureStartedAt });
@@ -552,6 +565,20 @@ export async function processCapture(
    * the newest match first, the row would match itself and mask the real
    * duplicate behind it. Sequencing avoids that; an id check would not.
    */
+  /**
+   * Records what the local read and what the model returned, so a later report
+   * of "it showed the wrong amount first" can be checked rather than guessed at.
+   * Amounts only -- no merchant, no line items -- and only when they disagree by
+   * more than rounding, so an agreeing pair costs nothing on the timeline.
+   */
+  const compareDraftToExtracted = (extracted: ReceiptFields) => {
+    if (draftTotal === null) return;
+    if (Math.abs(draftTotal - extracted.total) <= 0.01) return;
+    trackAnonymousBreadcrumb(
+      `capture.totalDiverged ${extractionMode} draft=${draftTotal.toFixed(2)} final=${extracted.total.toFixed(2)}`,
+    );
+  };
+
   const recordDuplicateIfAny = async (extracted: ReceiptFields) => {
     if (duplicateOfLocalRowId) return;
     const candidate = await store.findLocalDuplicateCandidate(extracted, {
@@ -569,6 +596,7 @@ export async function processCapture(
     await store.setStatus(row.id, 'local_ocr_processing');
     await store.setLocalOcr(row.id, localOcrText, localOcrText ? 'local_ocr_done' : 'image_upload_pending');
     const draft = localOcrText ? draftFromOcr(localOcrText, options?.defaultCurrency ?? 'USD') : null;
+    if (draft) draftTotal = draft.total;
     if (draft) {
       await store.setDedupeSignals(
         row.id,
@@ -671,7 +699,9 @@ export async function processCapture(
           const receiptId = lateAck.receiptId;
           const lateMetrics = { ...metrics, backend_extract_ms: Date.now() - extractStartedAt };
           await store.markDispatched(row.id, lateAck.receiptId, fields);
-          await recordDuplicateIfAny(fields);
+          compareDraftToExtracted(fields);
+          compareDraftToExtracted(fields);
+    await recordDuplicateIfAny(fields);
           await store.setDedupeSignals(
             row.id,
             store.buildDedupeKey(fields, options?.userId),

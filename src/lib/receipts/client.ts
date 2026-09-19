@@ -212,6 +212,22 @@ const BALANCED_VISIBLE_DEADLINE_MS = 3800;
 const BALANCED_HARD_DEADLINE_MS = 15_000;
 const BALANCED_WARMUP_TIMEOUT_MS = 5000;
 const PRECISE_VISIBLE_DEADLINE_MS = 4500;
+/**
+ * The hard bound Precise never had.
+ *
+ * Balanced caps every attempt against BALANCED_HARD_DEADLINE_MS. Precise only
+ * had a VISIBLE deadline: at 4.5s the UI moves on and the request is handed to
+ * the background as `deferred`, where applyDeferredDispatch awaits it. If the
+ * server or connection stalls without closing, that promise never settles, the
+ * await never returns, and the row sits in its pre-dispatch status forever --
+ * no result, no failure, nothing to retry.
+ *
+ * Generous rather than tight: unlike Balanced this uploads the image, so a slow
+ * connection is normal and must not be cut off. The server's own budget is
+ * EXTRACT_BUDGET_MS=5000 with 3500ms model timeouts, so a healthy round trip
+ * lands far inside this even allowing for the upload.
+ */
+const PRECISE_HARD_DEADLINE_MS = 30_000;
 const PRECISE_WARMUP_TIMEOUT_MS = 5000;
 /** Confirm is a small write; anything this slow is a stalled connection. */
 const CONFIRM_TIMEOUT_MS = 20_000;
@@ -789,7 +805,10 @@ export const supabaseExtractClient: ExtractClient = {
     }
     const completion = (async (): Promise<ExtractCompletedAck> => {
       if (forceB5OfflineTransport) throw new Error('The internet connection appears to be offline');
-      const response = await FileSystem.uploadAsync(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
+      // createUploadTask rather than uploadAsync: the latter takes no abort
+      // signal, so there was no way to stop a stalled upload. This one exposes
+      // cancelAsync(), which is what makes the deadline below enforceable.
+      const uploadTask = FileSystem.createUploadTask(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         httpMethod: 'POST',
         fieldName: 'image',
@@ -811,6 +830,32 @@ export const supabaseExtractClient: ExtractClient = {
           ...(forceB5ProviderFailure ? { 'x-rf-force-provider-failure': '1' } : {}),
         },
       });
+
+      let hardDeadlineHit = false;
+      const hardDeadline = setTimeout(() => {
+        hardDeadlineHit = true;
+        void uploadTask.cancelAsync().catch(() => {
+          // monitoring-ignore: cancelling an upload that has already finished is
+          // not a failure, and there is nothing to do about one that will not.
+        });
+      }, PRECISE_HARD_DEADLINE_MS);
+
+      let response;
+      try {
+        response = await uploadTask.uploadAsync();
+      } finally {
+        clearTimeout(hardDeadline);
+      }
+      // Cancelling resolves with no result rather than throwing, so an absent
+      // response is the deadline firing -- and it has to become an error, or the
+      // caller would read it as a successful empty extraction.
+      if (!response) {
+        throw new Error(
+          hardDeadlineHit
+            ? `Precise extraction exceeded ${PRECISE_HARD_DEADLINE_MS}ms`
+            : 'Precise extraction was cancelled',
+        );
+      }
 
       assertNotAborted(signal);
       let data: ExtractFunctionPayload | null = null;
