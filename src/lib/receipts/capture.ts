@@ -1136,6 +1136,41 @@ export async function retryPending(): Promise<number> {
 }
 
 /**
+ * Lands an extraction result for a row with no screen watching it.
+ *
+ * Both unattended paths -- a deferred dispatch and the queue drain -- previously
+ * called markDispatched and stopped there. That excluded every queued capture
+ * from duplicate matching in BOTH directions: never detected as a duplicate,
+ * and, because setDedupeSignals was never reached either, never findable as the
+ * original by a later scan. Anything that queued -- throttled, offline, a 5xx --
+ * silently left the system.
+ *
+ * The owner comes from the store rather than the row: `hydrate` does not expose
+ * user_id, and a row reaching here is by definition the current owner's, since
+ * every query that produced it already sits behind `owned()`.
+ *
+ * Detection runs before setDedupeSignals, as on the attended path: that call
+ * puts this row into the bucket being searched, and the newest match is returned
+ * first, so the row would otherwise match itself and mask the real duplicate.
+ */
+async function landExtractedFields(row: ReceiptRow, receiptId: string, fields: ReceiptFields): Promise<void> {
+  await store.markDispatched(row.id, receiptId, fields);
+
+  const userId = await store.getLocalOwner();
+  const candidate = await store.findLocalDuplicateCandidate(fields, { userId, ocrText: row.localOcrText });
+  if (candidate && candidate.matchedLocalRowId !== row.id) {
+    await store.setDuplicateRelation(row.id, candidate.matchedLocalRowId, candidate.matchStrength);
+    trackAnonymousBreadcrumb(`capture.duplicateDetected unattended ${candidate.matchStrength}`);
+  }
+
+  await store.setDedupeSignals(
+    row.id,
+    store.buildDedupeKey(fields, userId),
+    store.buildOcrFingerprint(row.localOcrText),
+  );
+}
+
+/**
  * Applies a queued row's result when it lands after the visible deadline. Same
  * terminal outcomes as the inline path — the only difference is that no screen
  * is watching, so there is nothing to tell the user.
@@ -1150,7 +1185,8 @@ async function applyDeferredDispatch(row: ReceiptRow, deferred: Promise<ExtractA
       await deleteLocalFile(row.imageUri);
       return;
     }
-    await store.markDispatched(row.id, ack.receiptId, toReceiptFields(ack.response));
+    await landExtractedFields(row, ack.receiptId, toReceiptFields(ack.response));
+
     if (row.extractionMode === 'balanced' && row.localOcrText) {
       await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
       void syncImageBackups();
@@ -1226,7 +1262,7 @@ async function dispatchPending(): Promise<number> {
         await deleteLocalFile(row.imageUri);
         continue;
       }
-      await store.markDispatched(row.id, ack.receiptId, toReceiptFields(ack.response));
+      await landExtractedFields(row, ack.receiptId, toReceiptFields(ack.response));
       if (row.extractionMode === 'balanced' && row.localOcrText) {
         await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
         void syncImageBackups();
