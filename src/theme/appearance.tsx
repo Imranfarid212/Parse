@@ -84,7 +84,7 @@ function readStoredMode(): ThemeMode {
     const stored = Storage.getItemSync(THEME_MODE_KEY);
     return isThemeMode(stored) ? stored : DEFAULT_MODE;
   } catch {
-    // A corrupt or unavailable store must not stop the app from rendering.
+    // monitoring-ignore: A corrupt or unavailable store must not stop the app from rendering.
     return DEFAULT_MODE;
   }
 }
@@ -128,7 +128,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     try {
       Storage.setItemSync(THEME_MODE_KEY, next);
     } catch {
-      // Persistence is best-effort; the in-memory switch has already happened.
+      // monitoring-ignore: Persistence is best-effort; the in-memory switch has already happened.
     }
   }, []);
 

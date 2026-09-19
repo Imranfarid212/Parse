@@ -181,6 +181,8 @@ function describeError(error: unknown): string {
   try {
     return JSON.stringify(error);
   } catch {
+    // monitoring-ignore: describeError is the error formatter; reporting from
+    // inside it would recurse.
     return 'unknown error';
   }
 }
@@ -1140,6 +1142,8 @@ async function cachedDefaultCurrency(): Promise<string | null> {
     const cached = await getCachedAuth();
     return cached?.profile?.default_currency ?? null;
   } catch {
+    // monitoring-ignore: A missing cached currency falls back to the server
+    // default, which is the normal first-launch path.
     return null;
   }
 }

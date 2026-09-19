@@ -110,6 +110,8 @@ function getCallbackParam(url: string, param: string) {
     const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ''));
     return hashParams.get(param);
   } catch {
+    // monitoring-ignore: A callback URL that will not parse carries no code or
+    // token either, and the caller treats null as "not present".
     return null;
   }
 }
@@ -131,6 +133,8 @@ async function readStoredSession(): Promise<{ session: Session | null; unreachab
     if (data.session) return { session: data.session, unreachable: false };
     return { session: null, unreachable: Boolean(error) };
   } catch {
+    // monitoring-ignore: The verdict is the returned value: unreachable=true keeps
+    // "we could not ask" distinct from "there is no session".
     return { session: null, unreachable: true };
   }
 }

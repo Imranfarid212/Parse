@@ -418,6 +418,8 @@ function parseFingerprint(value: string | null | undefined): string[] {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed.filter((token): token is string => typeof token === 'string') : [];
   } catch {
+    // monitoring-ignore: A row whose stored JSON will not parse is treated as
+    // empty; the column is a cache, not the source of truth.
     return [];
   }
 }
@@ -1303,6 +1305,8 @@ export async function listQueuedCaptureMetrics(limit = 20): Promise<QueuedCaptur
     try {
       return [{ id: row.id, payload: JSON.parse(row.payload) as CaptureMetricsPayload, attempts: row.attempts, nextRetryAt: row.next_retry_at }];
     } catch {
+      // monitoring-ignore: An unparseable metrics payload is dropped rather than
+      // retried forever; the receipt itself is unaffected.
       return [];
     }
   });

@@ -66,6 +66,8 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthResult> {
       mockBackend: env.mockBackend,
     };
   } catch (error) {
+    // monitoring-ignore: This IS the report: the failure is returned as { ok:
+    // false, reason } for the health screen to render.
     return {
       ok: false,
       reason: error instanceof Error ? error.message : 'Supabase REST round-trip failed.',

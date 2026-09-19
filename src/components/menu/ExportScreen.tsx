@@ -48,6 +48,7 @@ import {
 } from '@/lib/receipts/exports';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { radius, spacing, typography, type ColorTokens } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 type Preset = 'this' | 'last' | 'quarter' | 'all';
 
@@ -136,6 +137,7 @@ export function ExportScreen() {
       }
       await startExport({ filters, format, include_images: includeScans });
     } catch (cause) {
+      logSafeError(cause, 'export.start');
       Alert.alert('Export not started', cause instanceof Error ? cause.message : 'Try again in a moment.');
     } finally {
       setStarting(false);
@@ -147,6 +149,7 @@ export function ExportScreen() {
       const url = await createExportDownloadUrl(artifact);
       await WebBrowser.openBrowserAsync(url);
     } catch (cause) {
+      logSafeError(cause, 'export.download');
       Alert.alert('Download failed', cause instanceof Error ? cause.message : 'That file is no longer available.');
     }
   };
@@ -156,6 +159,7 @@ export function ExportScreen() {
       const url = await createExportDownloadUrl(artifact);
       await Share.share({ url, message: artifact.file_name });
     } catch (cause) {
+      logSafeError(cause, 'export.share');
       Alert.alert('Share failed', cause instanceof Error ? cause.message : 'That file is no longer available.');
     }
   };
@@ -164,6 +168,7 @@ export function ExportScreen() {
     try {
       await retryExportJob(job.id);
     } catch (cause) {
+      logSafeError(cause, 'export.retry');
       Alert.alert('Retry failed', cause instanceof Error ? cause.message : 'Try again in a moment.');
     }
   };
@@ -172,6 +177,7 @@ export function ExportScreen() {
     try {
       await repeatExport(job);
     } catch (cause) {
+      logSafeError(cause, 'export.repeat');
       Alert.alert('Export not started', cause instanceof Error ? cause.message : 'Try again in a moment.');
     }
   };

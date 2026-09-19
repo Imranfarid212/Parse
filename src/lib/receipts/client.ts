@@ -1021,7 +1021,7 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
     try {
       data = (await response.json()) as ConfirmReceiptErrorPayload;
     } catch {
-      // A non-JSON edge/gateway response should still leave the local row queued.
+      // monitoring-ignore: A non-JSON edge/gateway response should still leave the local row queued.
     }
     if (!response.ok) {
       const error = new Error(data?.message ?? data?.error ?? data?.code ?? `confirm failed (${response.status})`);

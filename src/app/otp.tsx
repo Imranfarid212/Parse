@@ -9,6 +9,7 @@ import { AnimatedGridBackground } from '@/components/ui/AnimatedGridBackground';
 import { useAuth } from '@/lib/auth/auth-context';
 import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 const OTP_LENGTH = 6;
 
@@ -54,6 +55,7 @@ export default function OtpScreen() {
       setCode('');
       setSent(true);
     } catch (error) {
+      logSafeError(error, 'otp.send');
       Alert.alert('Code not sent', getOtpErrorMessage(error));
     } finally {
       setBusy(false);
@@ -73,6 +75,7 @@ export default function OtpScreen() {
       const profile = await auth.verifyOtp(normalizeEmail(email), nextCode);
       router.replace((profile?.onboarding_complete ? '/camera' : '/welcome') as Href);
     } catch (error) {
+      logSafeError(error, 'otp.verify');
       Alert.alert('Code not accepted', getOtpErrorMessage(error));
     } finally {
       setBusy(false);

@@ -25,6 +25,7 @@ import { useRealtimeReceipts } from '@/lib/receipts/use-realtime-receipts';
 import { isCategory, type ReceiptFields } from '@/lib/receipts/types';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 const SEARCH_DEBOUNCE_MS = 300;
 const UNDO_WINDOW_MS = 5_000;
@@ -143,7 +144,7 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
       try {
         await pendingDelete;
       } catch {
-        // The delete rollback already restored the optimistic row.
+        // monitoring-ignore: The delete rollback already restored the optimistic row.
         return;
       }
     }
@@ -151,6 +152,7 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
       await restoreManagedReceipt(receipt);
       await reload();
     } catch (cause) {
+      logSafeError(cause, 'search.restoreReceipt');
       setReceipts((current) => current.filter((candidate) => candidate.id !== receipt.id));
       Alert.alert('Could not restore receipt', cause instanceof Error ? cause.message : 'Please try again.');
     }

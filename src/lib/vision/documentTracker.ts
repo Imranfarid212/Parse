@@ -29,6 +29,8 @@ export function getBoxedDocumentTracker(): BoxedHybridObject<DocumentTracker> | 
         ? NitroModules.box(NitroModules.createHybridObject<DocumentTracker>('DocumentTracker'))
         : null;
     } catch {
+      // monitoring-ignore: Native module availability probe. Absence is the answer,
+      // cached as null, and every caller degrades.
       cached = null;
     }
   }

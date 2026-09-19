@@ -176,20 +176,22 @@ check('the rule is an error, not a warning', () => {
   );
 });
 
-const SUPPRESSION_BASELINE = 48;
-check(`suppressed violations do not exceed the baseline (${SUPPRESSION_BASELINE})`, () => {
-  // A ratchet. The backlog predates the rule and may shrink freely; growing it
-  // means a new silent catch was baselined instead of examined, which is the
-  // one way this guard can be defeated without anyone noticing.
+const SUPPRESSION_BASELINE = 0;
+check('the backlog stays at zero', () => {
+  // The 48 inherited violations were worked through rather than baselined, so
+  // there is no suppressions file left. Its reappearance would mean a new silent
+  // catch was recorded instead of examined -- the one way this guard can be
+  // defeated without anyone noticing.
   const file = path.join(root, 'eslint-suppressions.json');
+  if (!fs.existsSync(file)) return;
   const suppressions = JSON.parse(fs.readFileSync(file, 'utf8'));
   const total = Object.values(suppressions)
     .map((rules) => rules['monitoring/no-silent-catch']?.count ?? 0)
     .reduce((a, b) => a + b, 0);
-  assert.ok(
-    total <= SUPPRESSION_BASELINE,
-    `${total} suppressed, baseline is ${SUPPRESSION_BASELINE}. Fix the new catch rather than baselining it; ` +
-      'lower SUPPRESSION_BASELINE here when you burn some down.',
+  assert.equal(
+    total,
+    SUPPRESSION_BASELINE,
+    `${total} suppressed. Fix the catch rather than baselining it.`,
   );
 });
 

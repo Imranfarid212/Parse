@@ -16,6 +16,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { useStateInvariant } from '@/lib/monitoring/flows';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { spacing, typography } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 const HEADLINE_MAIN = 'Scan one receipt.';
 const HEADLINE_SUB = 'See the magic';
@@ -74,6 +75,7 @@ export default function LandingScreen() {
       setBusy(true);
       await action();
     } catch (error) {
+      logSafeError(error, 'landing.authAction');
       // Native module errors carry the only useful identifier on `code`; their
       // message can be a generic placeholder. Showing it lets a tester report
       // something actionable without a log round-trip.
