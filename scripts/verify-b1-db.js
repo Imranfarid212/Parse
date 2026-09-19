@@ -84,8 +84,56 @@ for (const [label, actual, expected] of checks) {
 const generated = run('supabase', ['gen', 'types', 'typescript', '--local']);
 const current = fs.readFileSync(path.join(root, 'packages/contracts/src/db.types.ts'), 'utf8');
 
+/** How many differing lines to print before truncating. */
+const DRIFT_PREVIEW_LINES = 25;
+
+/**
+ * Say WHAT drifted, not just that something did.
+ *
+ * This check has been red on every pull-request branch for months and its
+ * message named no line, so each failure read exactly like the last one and
+ * told whoever saw it nothing they could act on. That is most of why it
+ * survived: `gate.yml` even documents the pattern -- "a check that is always
+ * the same check stops being read".
+ *
+ * Lines are aligned by index rather than by a real LCS diff, because the
+ * interesting case here is a value that changes in place -- `PostgrestVersion`,
+ * for instance, which the generator reads from the running stack rather than
+ * from the migrations, and which therefore differs between a developer's CLI
+ * and the one CI pins. A single inserted or deleted line misaligns everything
+ * after it, so the FIRST difference is the signal and the count is an upper
+ * bound, not a measurement.
+ */
+function describeDrift(current, generated) {
+  const currentLines = current.split('\n');
+  const generatedLines = generated.split('\n');
+  const show = (line) => (line === undefined ? '<no such line>' : JSON.stringify(line));
+
+  const preview = [];
+  let differing = 0;
+  for (let i = 0; i < Math.max(currentLines.length, generatedLines.length); i += 1) {
+    if (currentLines[i] === generatedLines[i]) continue;
+    differing += 1;
+    if (differing > DRIFT_PREVIEW_LINES) continue;
+    preview.push(`  line ${i + 1}`);
+    preview.push(`    checked in: ${show(currentLines[i])}`);
+    preview.push(`    generated : ${show(generatedLines[i])}`);
+  }
+
+  return [
+    `  checked in: ${currentLines.length} lines`,
+    `  generated : ${generatedLines.length} lines`,
+    `  lines differing by position: ${differing}`
+      + (differing > DRIFT_PREVIEW_LINES ? ` (showing the first ${DRIFT_PREVIEW_LINES})` : ''),
+    ...preview,
+  ].join('\n');
+}
+
 if (generated.trim() !== current.trim()) {
-  throw new Error('[b1:db] generated db.types.ts differs from packages/contracts/src/db.types.ts');
+  process.stderr.write(`[b1:db] db.types.ts drift:\n${describeDrift(current.trim(), generated.trim())}\n`);
+  throw new Error(
+    '[b1:db] generated db.types.ts differs from packages/contracts/src/db.types.ts - see the drift report above',
+  );
 }
 
 console.log('[b1:db] local database reset state and generated types verified');
