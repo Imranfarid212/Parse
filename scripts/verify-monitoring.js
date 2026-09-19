@@ -167,6 +167,32 @@ for (const file of srcFiles) {
   });
 }
 
+console.log('\nsilent-catch guard:');
+const eslintConfig = fs.readFileSync(path.join(root, 'eslint.config.js'), 'utf8');
+check('the rule is an error, not a warning', () => {
+  assert.ok(
+    /'monitoring\/no-silent-catch':\s*'error'/.test(eslintConfig),
+    'downgraded to a warning, where it guards nothing',
+  );
+});
+
+const SUPPRESSION_BASELINE = 48;
+check(`suppressed violations do not exceed the baseline (${SUPPRESSION_BASELINE})`, () => {
+  // A ratchet. The backlog predates the rule and may shrink freely; growing it
+  // means a new silent catch was baselined instead of examined, which is the
+  // one way this guard can be defeated without anyone noticing.
+  const file = path.join(root, 'eslint-suppressions.json');
+  const suppressions = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const total = Object.values(suppressions)
+    .map((rules) => rules['monitoring/no-silent-catch']?.count ?? 0)
+    .reduce((a, b) => a + b, 0);
+  assert.ok(
+    total <= SUPPRESSION_BASELINE,
+    `${total} suppressed, baseline is ${SUPPRESSION_BASELINE}. Fix the new catch rather than baselining it; ` +
+      'lower SUPPRESSION_BASELINE here when you burn some down.',
+  );
+});
+
 console.log('\nfirebase.json privacy flags:');
 const firebase = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json'), 'utf8'))['react-native'];
 check('RNFirebase does not record raw JS errors alongside ours', () => {

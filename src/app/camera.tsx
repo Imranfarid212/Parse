@@ -58,7 +58,7 @@ import type { CaptureMode, DuplicateCandidate, ExtractionMode, LocalDuplicateCan
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { fontFamily, radius, spacing } from '@/theme/tokens';
 import { useAppAppearance } from '@/theme/appearance';
-import { logSafeError } from '@/lib/monitoring';
+import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
 
 type Mode = 'default' | 'oneclick';
 /** MenuPanel's TABS order: Export, Search, Plan, Settings. */
@@ -606,7 +606,7 @@ export default function CameraScreen() {
         }
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
-            if (__DEV__) console.log('[camera] queued deferred outcome ready', { kind: finalOut.kind });
+            trackAnonymousBreadcrumb(`camera.deferredOutcome queued ${finalOut.kind}`);
             handleDefaultCaptureOutcome(finalOut, photoUri, startedAt, true);
           });
         }
@@ -662,7 +662,7 @@ export default function CameraScreen() {
         flashNotice(QUEUED_RETRY_TOAST);
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
-            if (__DEV__) console.log('[camera] one-click precise deferred outcome ready', { kind: finalOut.kind });
+            trackAnonymousBreadcrumb(`camera.deferredOutcome precise ${finalOut.kind}`);
             handleOneClickCaptureOutcome(finalOut, photoUri, startedAt, true);
           });
         }

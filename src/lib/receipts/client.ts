@@ -29,7 +29,7 @@ import {
   normalizeReceiptItems,
 } from '@/lib/receipts/types';
 
-import { logSafeError } from '@/lib/monitoring';
+import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
 
 
 export type ExtractInput = {
@@ -719,7 +719,7 @@ export const supabaseExtractClient: ExtractClient = {
             reject(terminalHttpError);
             return;
           }
-          if (__DEV__) console.warn('[extract] balanced text hedge fired', { delayMs: BALANCED_HEDGE_DELAY_MS });
+          trackAnonymousBreadcrumb(`extract.hedgeFired ${BALANCED_HEDGE_DELAY_MS}ms`);
           startBalancedAttempt(2).then(resolve, reject);
         }, BALANCED_HEDGE_DELAY_MS);
       });

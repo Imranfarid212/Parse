@@ -46,7 +46,7 @@ import {
   type ReceiptRow,
 } from '@/lib/receipts/types';
 
-import { logSafeError } from '@/lib/monitoring';
+import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
 
 
 /** B4 latency test: 640px long edge, lower JPEG quality. */
@@ -651,7 +651,7 @@ export async function processCapture(
             metrics: lateMetrics,
             attempts: lateAck.attempts,
           });
-          if (__DEV__) console.log('[capture] visible-deadline request completed in background', { captureId: row.id });
+          trackAnonymousBreadcrumb('capture.visibleDeadline completedInBackground');
           return {
             kind: 'extracted',
             row: {
@@ -781,7 +781,7 @@ export async function processCapture(
       return { kind: 'quota_exhausted', row };
     }
     logLatency('extract_failed_queued', { reason });
-    if (__DEV__) console.warn('[capture] extract queued', reason);
+    trackAnonymousBreadcrumb(`capture.extractQueued ${reason}`);
     await store.setStatus(row.id, 'llm_failed_retryable');
     // A throttle leaves the attempt count alone: it did not fail, it was not
     // served, and spending the budget on it is what killed these captures.
@@ -816,7 +816,7 @@ export async function clearForeignLocalReceipts(userId: string): Promise<number>
   const uris = await store.listForeignImageUris(userId);
   await Promise.all(uris.map((uri) => deleteLocalFile(uri).catch(() => {})));
   const removed = await store.deleteForeignReceipts(userId);
-  if (removed > 0 && __DEV__) console.warn(`[capture] purged ${removed} unowned local receipt(s)`);
+  if (removed > 0) trackAnonymousBreadcrumb(`capture.purgedUnowned ${removed}`);
   return removed;
 }
 
@@ -834,7 +834,7 @@ export async function clearLocalReceiptsForAccountSwitch(): Promise<void> {
   const uris = await store.listAllImageUris();
   await Promise.all(uris.map((uri) => deleteLocalFile(uri).catch(() => {})));
   await store.clearReceiptData();
-  if (__DEV__) console.warn(`[capture] cleared ${uris.length} local receipt image(s) for account switch`);
+  trackAnonymousBreadcrumb(`capture.accountSwitchCleared ${uris.length}`);
 }
 
 /**
@@ -851,7 +851,7 @@ export async function deleteLocalReceipt(captureId: string): Promise<void> {
 
 export async function syncConfirmed(): Promise<void> {
   const reclaimed = await store.reclaimStalledSyncs(STALLED_SYNC_MS);
-  if (reclaimed > 0 && __DEV__) console.warn(`[capture] reclaimed ${reclaimed} stalled sync row(s)`);
+  if (reclaimed > 0) trackAnonymousBreadcrumb(`capture.reclaimedStalled ${reclaimed}`);
 
   const rows = await store.listUnsynced();
 
@@ -1083,7 +1083,7 @@ export async function purgeAbandonedCaptures(ttlMs = ABANDONED_CAPTURE_TTL_MS): 
     await deleteLocalFile(row.imageUri);
     await store.remove(row.id);
   }
-  if (__DEV__ && rows.length > 0) console.log('[capture] purged abandoned captures', { count: rows.length });
+  if (rows.length > 0) trackAnonymousBreadcrumb(`capture.purgedAbandoned ${rows.length}`);
   return rows.length;
 }
 

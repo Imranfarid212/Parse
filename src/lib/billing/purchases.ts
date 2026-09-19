@@ -66,7 +66,7 @@ let diagnosisDetail: string | null = null;
 function setDiagnosis(next: BillingDiagnosis, detail?: unknown) {
   diagnosis = next;
   diagnosisDetail = detail == null ? null : detail instanceof Error ? detail.message : String(detail);
-  if (__DEV__ && next !== 'ok') console.warn(`[billing] ${next}`, diagnosisDetail ?? '');
+  if (next !== 'ok') logSafeError(new Error(`billing diagnosis: ${next} ${diagnosisDetail ?? ''}`), 'billing.diagnosis');
 }
 
 export function getBillingDiagnosis(): { code: BillingDiagnosis; detail: string | null } {

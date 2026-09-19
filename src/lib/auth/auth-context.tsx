@@ -366,7 +366,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void syncFromServer(currentSession.user.id, nextState.categoryRows)
       .then((counts) => {
         const changed = counts.added + counts.updated + counts.deleted;
-        if (changed > 0 && __DEV__) console.log('[sync] receipts', counts);
+        if (changed > 0) trackAnonymousBreadcrumb(`sync.receipts +${counts.added} ~${counts.updated} -${counts.deleted}`);
       })
       .catch((error: unknown) => {
         logSafeError(error, 'auth.syncFromServer');
