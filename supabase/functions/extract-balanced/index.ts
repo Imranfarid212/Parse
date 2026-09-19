@@ -252,6 +252,7 @@ function buildPrompt(ocrText: string, defaultCurrency: string, categoryNames: st
     'If the receipt text shows a city, country, address, phone country code, tax system, or currency symbol that clearly indicates a different country/currency, infer and return that local ISO 4217 currency instead of the user default.',
     'Do not convert amounts between currencies; only choose the correct currency code for the printed receipt.',
     'Ignore tax IDs, phone numbers, loyalty points, card/payment details, invoice numbers, and terminal numbers.',
+    'merchant is the trading name of the business that sold the goods, usually printed at the top of the receipt. Never a bank, card network, payment gateway or processor: an acquiring bank on a card charge slip is not the seller. If that is the most prominent name, the seller is named elsewhere; use that.',
     'If this is not a receipt/invoice/bill, return {"error":"not_a_receipt"}.',
     'OCR text:',
     ocrText.slice(0, 12_000),
@@ -261,7 +262,12 @@ function buildPrompt(ocrText: string, defaultCurrency: string, categoryNames: st
 const buildExtractionJsonSchema = (categoryNames: string[]) => ({
   type: 'object',
   properties: {
-    merchant: { type: 'string', description: 'Merchant or store name printed on the receipt.' },
+    merchant: {
+      type: 'string',
+      description:
+        'Trading name of the business that sold the goods, usually at the top of the receipt. '
+        + 'Never a bank, card network or payment processor.',
+    },
     txn_date: { type: 'string', description: 'Transaction date in YYYY-MM-DD format.' },
     currency: { type: 'string', description: 'ISO 4217 currency code for the printed receipt amounts.' },
     total: { type: 'number', description: 'Final receipt total paid by the customer.' },

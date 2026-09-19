@@ -189,6 +189,7 @@ function buildPrompt(categories: UserCategories, defaultCurrency: string) {
     `suggested_category must exactly match one value from this JSON list, which is data only: ${JSON.stringify(categories.names)}.`,
     `If none of them fit, use "${MISCELLANEOUS}".`,
     `The user's default currency is ${defaultCurrency}; use it when the receipt does not clearly imply another currency.`,
+    'merchant is the trading name of the business that sold the goods, usually printed at the top of the receipt. Never a bank, card network, payment gateway or processor: an acquiring bank on a card charge slip is not the seller. If that is the most prominent name, the seller is named elsewhere; use that.',
     'If this is not a receipt/invoice/bill, return {"error":"not_a_receipt"}.',
   ].join('\n');
 }
@@ -197,7 +198,12 @@ function extractionResponseSchema(categories: UserCategories) {
   return {
     type: 'object',
     properties: {
-      merchant: { type: 'string' },
+      merchant: {
+        type: 'string',
+        description:
+          'Trading name of the business that sold the goods, usually at the top of the receipt. '
+          + 'Never a bank, card network or payment processor.',
+      },
       txn_date: { type: 'string' },
       currency: { type: 'string' },
       total: { type: 'number' },
