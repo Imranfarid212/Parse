@@ -527,6 +527,41 @@ export async function processCapture(
   if (duplicateOfLocalRowId) {
     await store.setDuplicateRelation(row.id, duplicateOfLocalRowId, duplicateMatchStrength);
   }
+
+  /**
+   * Duplicate detection for every mode, not just Balanced.
+   *
+   * The pre-model check above lives inside `if (extractionMode === 'balanced')`
+   * because it needs an OCR draft, and Precise does no local OCR -- so Precise
+   * scans were never matched against anything. The same receipt scanned twice in
+   * Precise produced two rows, no prompt, no `duplicate_of`, and no badge.
+   *
+   * The extracted fields are better evidence than the OCR draft was: date,
+   * currency and total come from the model rather than a cheap read. The
+   * fingerprint is null for Precise, so similarity is 0 and the match falls to
+   * the merchant cross-check within the dedupe-key bucket -- narrower than
+   * Balanced's fuzzy tier, and correctly reported as `weak`.
+   *
+   * Recorded rather than prompted. Balanced's prompt earns its interruption by
+   * still being able to save the model call; by this point the call is paid for
+   * and the receipt extracted, so asking "keep this?" would offer to discard
+   * finished work. The relation is stored, search badges it, the user decides.
+   *
+   * MUST be called before `setDedupeSignals` for the same row: that call puts
+   * this row into the very bucket being searched, and since the search returns
+   * the newest match first, the row would match itself and mask the real
+   * duplicate behind it. Sequencing avoids that; an id check would not.
+   */
+  const recordDuplicateIfAny = async (extracted: ReceiptFields) => {
+    if (duplicateOfLocalRowId) return;
+    const candidate = await store.findLocalDuplicateCandidate(extracted, {
+      userId: options?.userId,
+      ocrText: localOcrText,
+    });
+    if (!candidate || candidate.matchedLocalRowId === row.id) return;
+    await store.setDuplicateRelation(row.id, candidate.matchedLocalRowId, candidate.matchStrength);
+    trackAnonymousBreadcrumb(`capture.duplicateDetected ${extractionMode} ${candidate.matchStrength}`);
+  };
   metrics.local_row_ms = Date.now() - localRowStartedAt;
   logLatency('local_row_inserted', { captureId: row.id });
 
@@ -636,6 +671,7 @@ export async function processCapture(
           const receiptId = lateAck.receiptId;
           const lateMetrics = { ...metrics, backend_extract_ms: Date.now() - extractStartedAt };
           await store.markDispatched(row.id, lateAck.receiptId, fields);
+          await recordDuplicateIfAny(fields);
           await store.setDedupeSignals(
             row.id,
             store.buildDedupeKey(fields, options?.userId),
@@ -708,11 +744,13 @@ export async function processCapture(
     metrics.total_to_response_ms = Date.now() - captureStartedAt;
     logLatency('extract_response_received', { receiptId: ack.receiptId, merchant: fields.store, total: fields.total });
     await store.markDispatched(row.id, ack.receiptId, fields);
+    await recordDuplicateIfAny(fields);
     await store.setDedupeSignals(
       row.id,
       store.buildDedupeKey(fields, options?.userId),
       store.buildOcrFingerprint(localOcrText),
     );
+
     if (extractionMode === 'balanced' && localOcrText) {
       await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
       logLatency('ui_ready_image_backup_queued', { receiptId: ack.receiptId });
