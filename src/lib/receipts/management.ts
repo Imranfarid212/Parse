@@ -27,6 +27,18 @@ export type ManagedReceipt = {
    */
   duplicateOf: string | null;
   duplicateMatchStrength: string | null;
+  /**
+   * Whether this receipt's image ever reached the server.
+   *
+   * Carried so Recents can say when a backup has permanently failed (B3 T3.5).
+   * The row survives and stays editable either way -- the extraction already
+   * landed -- but a receipt whose photo exists only on this device is a receipt
+   * the user loses with the device, and nothing on screen said so.
+   *
+   * Null on the server search path, which does not return the column; the badge
+   * is then absent rather than wrong, as with the duplicate badge above.
+   */
+  imageSyncStatus: string | null;
 };
 
 type RpcReceipt = {
@@ -73,6 +85,7 @@ function fromRpc(row: RpcReceipt): ManagedReceipt {
     // guessed, so the badge is simply absent on this path instead of wrong.
     duplicateOf: null,
     duplicateMatchStrength: null,
+    imageSyncStatus: null,
   };
 }
 
@@ -92,6 +105,7 @@ async function searchLocal(query: SearchQuery): Promise<ManagedReceipt[]> {
       revision: row.serverRevision,
       duplicateOf: row.duplicateOf,
       duplicateMatchStrength: row.duplicateMatchStrength,
+      imageSyncStatus: row.imageSyncStatus,
     }) satisfies ManagedReceipt);
 }
 

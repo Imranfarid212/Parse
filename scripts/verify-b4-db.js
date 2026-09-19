@@ -43,8 +43,7 @@ const RACE_WIDTH = 6;
 /** Must match v_burst_per_min in the can_scan migration. */
 const BURST_PER_MIN = 12;
 /** Must match v_plus_cap. */
-const PLUS_CAP = 500;
-const PRODUCT_PLUS = 'parse_pro_m';
+const PRODUCT_PRO = 'parse_pro_m';
 const PRODUCT_UNLIMITED = 'parse_max_m';
 
 // -------------------------------------------------------------- test plumbing
@@ -96,6 +95,23 @@ function makeDb(admin, pg) {
     async refund(userId, captureId) {
       const { error } = await admin.rpc('refund_scan', { p_user_id: userId, p_capture_id: captureId });
       if (error) throw new Error(`refund_scan: ${error.message}`);
+    },
+
+    /**
+     * The cap this product actually sells, read from the catalogue.
+     *
+     * 20260808000200_b8_can_scan_tiers.sql says it outright: "The cap is no
+     * longer the literal 500 in this body. It is products.monthly_scan_cap,
+     * joined through the subscription. A price or cap change is a catalogue
+     * row, not a migration." This test kept its own copy of the number anyway,
+     * so when the catalogue moved to 200 the assertion went red against
+     * behaviour that was correct. Reading the same row the function reads is
+     * the only version that cannot drift again.
+     */
+    async productCap(productId) {
+      const row = await one('select monthly_scan_cap from public.products where id = $1', [productId]);
+      if (!row) throw new Error(`no catalogue row for ${productId}`);
+      return row.monthly_scan_cap;
     },
 
     // --- setup and assertions, over SQL -------------------------------------
@@ -212,7 +228,7 @@ async function entitlementSuite(db, userId) {
     assertEqual(row.out_allowed, true, 'out_allowed');
     assertEqual(row.out_reason, 'free_balance', 'out_reason');
     assertEqual(row.out_remaining, 0, 'out_remaining already accounts for this scan');
-    assertEqual(row.out_paywall, 'plus', 'out_paywall');
+    assertEqual(row.out_paywall, 'pro', 'out_paywall');
     assertEqual(await db.countByReason(userId, 'scan_used', captureId), 1, 'scan_used rows for this capture');
     assertEqual(await db.balance(userId), 0, 'balance after the charge');
   });
@@ -243,7 +259,7 @@ async function entitlementSuite(db, userId) {
     assertEqual(row.out_allowed, false, 'out_allowed');
     assertEqual(row.out_reason, 'free_exhausted', 'out_reason');
     assertEqual(row.out_remaining, 0, 'out_remaining');
-    assertEqual(row.out_paywall, 'plus', 'out_paywall sells Plus');
+    assertEqual(row.out_paywall, 'pro', 'out_paywall sells Pro');
     assertEqual(await db.countByReason(userId, 'scan_used'), 0, 'no charge for a refused scan');
     // A refusal must not consume burst budget, or hammering would extend the lockout.
     assertEqual(await db.countAttempts(userId), 0, 'refused scans do not record an attempt');
@@ -289,23 +305,24 @@ async function entitlementSuite(db, userId) {
     assertEqual(row.out_reason, 'max_unlimited', 'out_reason');
   });
 
-  await test('Plus under the cap is allowed and counts down from the cap', async () => {
+  await test('Pro under the cap is allowed and counts down from the cap', async () => {
     await db.clearAttempts(userId);
     await db.setBalance(userId, 0);
-    await db.setSubscription(userId, PRODUCT_PLUS);
+    await db.setSubscription(userId, PRODUCT_PRO);
 
     const { row } = await db.canScan(userId, randomUUID());
     assertEqual(row.out_allowed, true, 'out_allowed');
     assertEqual(row.out_reason, 'pro_within_cap', 'out_reason');
-    assertEqual(row.out_remaining, PLUS_CAP - 1, 'out_remaining counts from the cap, not the ledger balance');
+    const proCap = await db.productCap(PRODUCT_PRO);
+    assertEqual(row.out_remaining, proCap - 1, 'out_remaining counts from the cap, not the ledger balance');
     assertEqual(row.out_paywall, 'max', 'a capped Pro user is sold Max');
   });
 
-  await test('Plus at the cap is refused', async () => {
+  await test('Pro at the cap is refused', async () => {
     await db.clearAttempts(userId);
     await db.setBalance(userId, 0);
-    await db.setSubscription(userId, PRODUCT_PLUS);
-    await db.seedUsedScans(userId, PLUS_CAP);
+    await db.setSubscription(userId, PRODUCT_PRO);
+    await db.seedUsedScans(userId, await db.productCap(PRODUCT_PRO));
 
     const { row } = await db.canScan(userId, randomUUID());
     assertEqual(row.out_allowed, false, 'out_allowed');

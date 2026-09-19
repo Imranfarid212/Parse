@@ -70,6 +70,17 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
     [debouncedText, filters, view],
   );
   const { receipts, setReceipts, loading, error, reload } = useRealtimeReceipts(query);
+
+  // Only while something is actually uploading, and stopped the moment nothing
+  // is: an unconditional interval would re-query the local mirror forever.
+  const backupInFlight = receipts.some(
+    (receipt) => receipt.imageSyncStatus !== null && IMAGE_BACKUP_IN_FLIGHT.includes(receipt.imageSyncStatus),
+  );
+  useEffect(() => {
+    if (!backupInFlight) return undefined;
+    const timer = setInterval(() => void reload(), IMAGE_BACKUP_POLL_MS);
+    return () => clearInterval(timer);
+  }, [backupInFlight, reload]);
   const fanItems = useMemo<FanItem[]>(
     () => receipts.map((receipt) => ({
       id: receipt.id,
@@ -271,9 +282,49 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
  * restored here, because "similar" is a judgement about what belongs in a total
  * and now has an export count reading the same rows.
  */
+/**
+ * The image-backup states that are still moving.
+ *
+ * A backup finishing is the one change to a row that no realtime event
+ * announces: it is local work, and the postgres_changes subscription only fires
+ * when the server row changes. Without a poll the badge below stays on screen
+ * until the user leaves Recents and comes back, which reads as a stuck upload
+ * rather than a finished one. B3 T3.5 asks for the list to refresh while a
+ * backup is running.
+ */
+const IMAGE_BACKUP_IN_FLIGHT = ['pending_upload', 'uploading'];
+const IMAGE_BACKUP_POLL_MS = 2500;
+
 const duplicateBadgeLabel = (receipt: ManagedReceipt): string | null => {
   if (!receipt.duplicateOf) return null;
   return receipt.duplicateMatchStrength === 'strong' ? 'Duplicate' : 'Similar';
+};
+
+/**
+ * The two states a row can be in that the user can neither see nor infer.
+ *
+ * `status` is 'processing' for a `provider_delayed` capture: the server owns
+ * the extraction and has not finished, so the totals on this row are still
+ * placeholders. It was mapped in management.ts and then read by nobody, which
+ * meant an unfinished receipt rendered identically to a settled one.
+ *
+ * `upload_failed_final` means the image backup gave up for good. The receipt
+ * itself is safe -- the extraction landed and the row is editable -- but the
+ * photo exists only on this device, so it goes with the device. B3 T3.5 asks
+ * for exactly this to be visible; it had stopped being.
+ *
+ * Deliberately one badge, not two: they are mutually exclusive in practice, and
+ * a row carrying three badges stops being readable.
+ */
+const statusBadgeLabel = (receipt: ManagedReceipt): string | null => {
+  if (receipt.status === 'processing') return 'Processing';
+  if (receipt.imageSyncStatus === 'upload_failed_final') return 'Photo not backed up';
+  // The local file is gone -- cleared cache, a restore, a failed copy -- and no
+  // backup exists to fall back on. Distinct from the line above: that one is
+  // "we could not send it", this one is "it is no longer here". Either way the
+  // row must not render as though the photo were safely saved.
+  if (receipt.imageSyncStatus === 'missing_local_file') return 'Photo unavailable';
+  return null;
 };
 
 type ReceiptItemProps = { receipt: ManagedReceipt; onEdit: (receipt: ManagedReceipt) => void; onDelete: (receipt: ManagedReceipt) => void };
@@ -282,6 +333,7 @@ function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
   const styles = useStyles();
   const colors = useColors();
   const badge = duplicateBadgeLabel(receipt);
+  const status = statusBadgeLabel(receipt);
   return (
     <Pressable style={styles.listRow} onPress={() => onEdit(receipt)}>
       <View style={styles.listIcon}><Ionicons name="receipt-outline" size={18} color={colors.textSecondary} /></View>
@@ -292,6 +344,11 @@ function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
           {badge ? (
             <View style={styles.duplicateBadge}>
               <Text style={styles.duplicateText}>{badge}</Text>
+            </View>
+          ) : null}
+          {status ? (
+            <View style={styles.statusBadge}>
+              <Text style={styles.statusText}>{status}</Text>
             </View>
           ) : null}
         </View>
@@ -398,6 +455,18 @@ const useStyles = makeStyles((colors) => ({
     borderColor: colors.warningBorder,
   },
   duplicateText: { fontFamily: typography.button.fontFamily, fontSize: 10, color: colors.warning },
+  // Neutral, not warning: neither state is the user's fault or their problem to
+  // act on, and borrowing the duplicate badge's amber would read as an error.
+  statusBadge: {
+    flexShrink: 0,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  statusText: { fontFamily: typography.button.fontFamily, fontSize: 10, color: colors.textSecondary },
   listMeta: { marginTop: 2, ...typography.meta, fontSize: 12, color: colors.textSecondary },
   listTotal: { ...typography.row, color: colors.textPrimary, fontVariant: ['tabular-nums'] },
   snackbar: {

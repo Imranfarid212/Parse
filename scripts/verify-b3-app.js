@@ -28,6 +28,7 @@ const types = read('src/lib/receipts/types.ts');
 const client = read('src/lib/receipts/client.ts');
 // Where a failed image backup has to become visible — see the T3.5 block below.
 const search = read('src/components/search/SearchView.tsx');
+const management = read('src/lib/receipts/management.ts');
 
 // T3.1 specifies a ceiling (≤1080 px), not one exact value — B4 tuned this down
 // to 640 for latency, which the old equality check read as a regression.
@@ -102,8 +103,19 @@ includes(
  * in one place and read in none.
  */
 includes(capture, 'export async function retryFailedImageUpload', 'T3.5 a failed upload can be retried');
-includes(search, "row.imageSyncStatus === 'upload_failed_final'", 'T3.5 a failed upload is visible to the user');
-includes(search, "row.imageSyncStatus === 'missing_local_file'", 'T3.5 an unavailable photo is visible rather than looking saved');
+/**
+ * The state being visible, not the expression that reads it.
+ *
+ * This pinned `row.imageSyncStatus === 'upload_failed_final'` in SearchView.
+ * The check was right that the state must be on screen and wrong that it must
+ * be spelled that way: the field is on ManagedReceipt now, so the row reads
+ * `receipt.imageSyncStatus`. It was red because the surface had genuinely been
+ * dropped -- management.ts computed the state and nothing rendered it -- so the
+ * fix was to put the badge back, not to relax the assertion.
+ */
+includes(management, 'imageSyncStatus: row.imageSyncStatus', 'T3.5 the failed-upload state reaches the UI layer');
+includes(search, "receipt.imageSyncStatus === 'upload_failed_final'", 'T3.5 a failed upload is visible to the user');
+includes(search, "receipt.imageSyncStatus === 'missing_local_file'", 'T3.5 an unavailable photo is visible rather than looking saved');
 includes(search, 'IMAGE_BACKUP_IN_FLIGHT', 'T3.5 Recents refreshes while a photo backup is running');
 includes(client, "EXPO_PUBLIC_FORCE_IMAGE_BACKUP_FAILURE === '1'", 'T3.5 development drill can force only the image backup to fail');
 includes(capture, 'function scheduleImageBackupRetry', 'T3.5 a reachable app schedules the next image backup attempt');

@@ -71,14 +71,22 @@ includes(fn, "return json(200", 'ack response after durable writes');
  * DL-002 makes this rule Precise-specific. Balanced never receives the image and
  * is asserted separately in b4:backend.
  */
-includes(
-  fn,
-  'const [{ error: uploadError }, extraction] = await Promise.all([\n    storagePromise,\n    grokPromise,\n  ]);',
-  'ack waits for the Storage write',
-);
+/**
+ * The rule is that the ack waits on the Storage write, not that it waits with
+ * `Promise.all`.
+ *
+ * This pinned the exact destructuring `const [{ error: uploadError }, extraction]
+ * = await Promise.all([...])`. The call is `Promise.allSettled` now, so a
+ * provider failure can be handled on its own (that is what the provider-delay
+ * path needs) instead of rejecting the pair. The guarantee is unchanged and
+ * still asserted below: storage is awaited, its error is checked, and the check
+ * comes before any 200.
+ */
+includes(fn, 'await Promise.allSettled([storagePromise, grokPromise]);', 'ack waits for the Storage write');
+includes(fn, 'const uploadError = storageResult.value.error;', 'the Storage result is inspected, not ignored');
 includes(fn, 'if (uploadError) return json(503,', 'a failed Storage write returns an error, not an ack');
 
-const gateIndex = fn.indexOf('const [{ error: uploadError }, extraction] = await Promise.all([');
+const gateIndex = fn.indexOf('await Promise.allSettled([storagePromise, grokPromise]);');
 const guardIndex = fn.indexOf('if (uploadError) return json(503,', gateIndex);
 const firstAckIndex = fn.indexOf('return json(200', gateIndex);
 if (gateIndex === -1 || guardIndex === -1 || firstAckIndex === -1 || guardIndex > firstAckIndex) {

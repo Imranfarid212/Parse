@@ -5,6 +5,7 @@ const root = path.resolve(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const fail = (message) => { throw new Error(`[b6:app] ${message}`); };
 const includes = (source, needle, label) => { if (!source.includes(needle)) fail(`${label}: expected ${JSON.stringify(needle)}`); };
+const excludesPattern = (source, pattern, label) => { if (pattern.test(source)) fail(`${label}: did not expect /${pattern.source}/`); };
 
 const search = read('src/components/search/SearchView.tsx');
 // B7 lifted the filter sheet out of SearchView so Export could use the same one.
@@ -27,7 +28,18 @@ includes(filterSheet, 'minimumDate=', 'end-date picker enforces the selected sta
 includes(filterSheet, 'maximumDate=', 'date pickers prevent invalid future or reversed ranges');
 includes(filterSheet, '<KeyboardAvoidingView', 'filter sheet remains visible above the keyboard');
 includes(filterSheet, 'filterScrollRef.current?.scrollToEnd', 'amount inputs are revealed when focused');
-includes(search, "changeView(enabled ? 'card' : 'list')", 'card/list toggle shares one result set');
+/**
+ * The toggle, not the expression that happened to implement it.
+ *
+ * This pinned the literal `changeView(enabled ? 'card' : 'list')`, which was a
+ * boolean switch. The control is a Segmented now and calls `changeView(next)`,
+ * so the assertion went red on a refactor that changed nothing it was meant to
+ * protect. What T6 actually requires is that both views are driven by one
+ * handler over one result set -- there is no second query and no second list.
+ */
+includes(search, 'const changeView = (next: ReceiptView)', 'one handler drives the view');
+includes(search, 'onChange={changeView}', 'the toggle is wired to that handler');
+excludesPattern(search, /searchManagedReceipts\([^)]*\)[\s\S]{0,400}searchManagedReceipts\(/, 'card/list toggle shares one result set');
 includes(search, '<FanCarousel', 'card view preserves the original stacked receipt carousel');
 includes(search, 'fanWrap: { flex: 1, paddingTop: 30 }', 'card fan has calm separation from search');
 includes(fan, 'details={item.details}', 'fan cards populate the paper receipt face');

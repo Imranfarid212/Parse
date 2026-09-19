@@ -1,0 +1,19 @@
+{
+  "phase": "b5",
+  "status": "passed_local_backend",
+  "note": "Local B5 source and durable-job database checks passed. The breaker, probe and sweeper-cron evidence is the staging HTTP suite (b5:http:verify, b5:breaker:verify, b5:probe:verify, b5:sweeper-cron:verify).",
+  "duration_ms": 12537,
+  "commit_sha": "665eba3850af0b13feff76f8dce56f5d1a128f25",
+  "tests": [
+    {
+      "id": "T5.1-T5.3-fallback-jobs-breaker-source",
+      "status": "passed",
+      "duration_ms": 206
+    },
+    {
+      "id": "T5.2-durable-jobs-db",
+      "status": "passed",
+      "duration_ms": 12331
+    }
+  ]
+}
