@@ -529,7 +529,9 @@ const useStyles = makeStyles((colors, elevation) => ({
   results: { marginTop: spacing.lg, gap: spacing.md },
   resultsHeading: { ...typography.row, color: colors.textPrimary, marginLeft: spacing.xs },
   matchCount: { ...typography.meta, fontSize: 12, color: colors.textSecondary, marginLeft: spacing.xs },
-  matchCountEmpty: { color: colors.danger },
+  // Muted rather than `danger`: an empty range is a true and unremarkable
+  // state the user can simply widen, not an error they have made.
+  matchCountEmpty: { color: colors.dangerMuted },
   earlierToggle: {
     flexDirection: 'row',
     alignItems: 'center',
