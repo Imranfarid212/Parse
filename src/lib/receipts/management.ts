@@ -15,6 +15,18 @@ export type ManagedReceipt = {
   updatedAt: string;
   rank: number;
   revision: number;
+  /**
+   * Set when capture matched this receipt against one already held, and how
+   * confidently. Carried so search can say so -- a badge existed for this until
+   * the B6 rewrite dropped it along with the row shape it read from.
+   *
+   * Null on the server search path, which is the first-install and
+   * account-takeover fallback: the RPC does not return these columns, so the
+   * badge is absent there rather than wrong. That path only runs until the
+   * local mirror is hydrated.
+   */
+  duplicateOf: string | null;
+  duplicateMatchStrength: string | null;
 };
 
 type RpcReceipt = {
@@ -57,6 +69,10 @@ function fromRpc(row: RpcReceipt): ManagedReceipt {
     updatedAt: row.updated_at,
     rank: Number(row.search_rank) || 0,
     revision: 0,
+    // The RPC does not carry these; see the note on the type. Null rather than
+    // guessed, so the badge is simply absent on this path instead of wrong.
+    duplicateOf: null,
+    duplicateMatchStrength: null,
   };
 }
 
@@ -74,6 +90,8 @@ async function searchLocal(query: SearchQuery): Promise<ManagedReceipt[]> {
       updatedAt: new Date(row.updatedAt).toISOString(),
       rank,
       revision: row.serverRevision,
+      duplicateOf: row.duplicateOf,
+      duplicateMatchStrength: row.duplicateMatchStrength,
     }) satisfies ManagedReceipt);
 }
 
