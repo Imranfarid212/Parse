@@ -12,7 +12,7 @@
  * same sheet Search uses, so "what I searched" and "what I exported" cannot
  * mean two different things.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, Share, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
@@ -49,6 +49,7 @@ import {
 import { makeStyles, useColors } from '@/theme/appearance';
 import { radius, spacing, typography, type ColorTokens } from '@/theme/tokens';
 import { logSafeError } from '@/lib/monitoring';
+import { countMatchingReceipts } from '@/lib/receipts/store';
 
 type Preset = 'this' | 'last' | 'quarter' | 'all';
 
@@ -116,6 +117,30 @@ export function ExportScreen() {
     [auth.categories, auth.selectedCategoryIds],
   );
   const summary = describeFilters(filters, categories);
+  /**
+   * How many receipts the current filters actually match. `null` while it is
+   * being counted, so the line can stay out of the way rather than flashing
+   * "0 receipts" before the real answer arrives -- which would be the one
+   * reading that stops someone pressing Generate.
+   */
+  const [matchCount, setMatchCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setMatchCount(null);
+    void countMatchingReceipts(filters)
+      .then((total) => {
+        if (alive) setMatchCount(total);
+      })
+      .catch((cause: unknown) => {
+        // The count is an aid, not a gate: Generate stays available and the
+        // server remains the authority on what the export contains.
+        logSafeError(cause, 'export.countReceipts');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [filters]);
 
   const applyPreset = (next: Preset) => {
     setPreset(next);
@@ -217,6 +242,17 @@ export function ExportScreen() {
               </View>
               <Feather name="chevron-right" size={16} color={colors.textFaint} />
             </Pressable>
+            {/* Answered before the export runs rather than after it returns an
+                empty file. Counted locally against the same predicates the
+                search uses, so it agrees with what Search shows for the same
+                filters. */}
+            {matchCount !== null ? (
+              <Text style={[styles.matchCount, matchCount === 0 && styles.matchCountEmpty]}>
+                {matchCount === 0
+                  ? 'No receipts match these filters'
+                  : `${matchCount} receipt${matchCount === 1 ? '' : 's'} found`}
+              </Text>
+            ) : null}
           </View>
 
           <Eyebrow style={{ marginLeft: spacing.xs, marginBottom: spacing.sm }}>Format</Eyebrow>
@@ -492,6 +528,8 @@ const useStyles = makeStyles((colors, elevation) => ({
 
   results: { marginTop: spacing.lg, gap: spacing.md },
   resultsHeading: { ...typography.row, color: colors.textPrimary, marginLeft: spacing.xs },
+  matchCount: { ...typography.meta, fontSize: 12, color: colors.textSecondary, marginLeft: spacing.xs },
+  matchCountEmpty: { color: colors.danger },
   earlierToggle: {
     flexDirection: 'row',
     alignItems: 'center',

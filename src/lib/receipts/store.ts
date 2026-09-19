@@ -1003,7 +1003,7 @@ export async function listUsedCurrencies(): Promise<string[]> {
     .filter((code) => /^[A-Z]{3}$/.test(code));
 }
 
-export async function searchReceipts(query: {
+type ReceiptQuery = {
   text?: string;
   date_from?: string;
   date_to?: string;
@@ -1011,16 +1011,34 @@ export async function searchReceipts(query: {
   amount_min?: number;
   amount_max?: number;
   amount_currency?: string;
-  limit?: number;
-}): Promise<LocalSearchResult[]> {
-  const db = await getDb();
+};
+
+/**
+ * The WHERE clause shared by every query that answers "which receipts do you
+ * mean".
+ *
+ * Extracted so a count and a search cannot answer it differently. A count that
+ * quietly used looser predicates would promise rows an export then failed to
+ * produce, which is worse than no count at all.
+ *
+ * The four standing clauses are not incidental. A row is only a receipt the user
+ * can act on once it belongs to this account, has been extracted, has reached
+ * the server, and is not on its way to being deleted.
+ */
+function receiptPredicates(query: ReceiptQuery): {
+  clauses: string[];
+  // The record half of SQLiteBindParams specifically: the published type is a
+  // union with an array form, which no key can be assigned to.
+  params: Record<string, SQLite.SQLiteBindValue>;
+  fts: string | null;
+} {
   const clauses = [
     owned('r'),
     "r.fields IS NOT NULL",
     "r.receipt_id IS NOT NULL",
     "r.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted')",
   ];
-  const params: SQLite.SQLiteBindParams = {};
+  const params: Record<string, SQLite.SQLiteBindValue> = {};
   const fts = query.text ? toFtsQuery(query.text) : null;
   if (fts) {
     clauses.push('receipt_search_fts MATCH $fts');
@@ -1036,6 +1054,39 @@ export async function searchReceipts(query: {
     clauses.push(`r.category_id IN (${names.join(', ')})`);
     query.category_ids.forEach((id, index) => { params[`$category${index}`] = id; });
   }
+  return { clauses, params, fts };
+}
+
+/**
+ * How many receipts a set of filters actually matches.
+ *
+ * Unlimited on purpose: `searchReceipts` caps at 200 rows for rendering, and a
+ * count that inherited that cap would report "200" for every larger range and
+ * be wrong exactly when the number matters most.
+ */
+export async function countMatchingReceipts(query: ReceiptQuery): Promise<number> {
+  const db = await getDb();
+  const { clauses, params, fts } = receiptPredicates(query);
+  const join = fts ? 'JOIN receipt_search_fts ON receipt_search_fts.local_id = r.id' : '';
+  const row = await db.getFirstAsync<{ total: number }>(
+    `SELECT COUNT(*) AS total FROM receipts r ${join} WHERE ${clauses.join(' AND ')}`,
+    params,
+  );
+  return row?.total ?? 0;
+}
+
+export async function searchReceipts(query: {
+  text?: string;
+  date_from?: string;
+  date_to?: string;
+  category_ids?: number[];
+  amount_min?: number;
+  amount_max?: number;
+  amount_currency?: string;
+  limit?: number;
+}): Promise<LocalSearchResult[]> {
+  const db = await getDb();
+  const { clauses, params, fts } = receiptPredicates(query);
   params.$limit = Math.min(Math.max(query.limit ?? 200, 1), 200);
   const rank = fts ? 'bm25(receipt_search_fts, 0, 10, 4, 6)' : '0';
   const join = fts ? 'JOIN receipt_search_fts ON receipt_search_fts.local_id = r.id' : '';
