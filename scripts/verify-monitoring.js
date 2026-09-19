@@ -116,6 +116,20 @@ check('rejection tracker is installed at init', () => {
   assert.ok(/logSafeError\(rejection, 'global.unhandledRejection'\)/.test(index), 'rejections are not reported');
 });
 
+console.log('\ncorrelation id:');
+check('only an opaque id is accepted, and only as a custom key', () => {
+  // The narrow exception to UUID redaction. It must stay narrow: shape-checked,
+  // and never interpolated into a message, or it becomes a hole in the
+  // sanitiser rather than a join key.
+  assert.ok(/correlation_id: context\.correlationId/.test(index), 'correlation id is not set as an attribute');
+  assert.ok(
+    /\/\^\[0-9a-f-\]\{8,64\}\$\/i\.test\(context\.correlationId\)/.test(index),
+    'correlation id is not shape-checked, so arbitrary text could pass through it',
+  );
+  const messagePath = index.slice(index.indexOf('const message = sanitizeMessage(error)'), index.indexOf('void api.setAttributes'));
+  assert.ok(!/correlationId/.test(messagePath), 'correlation id reaches the message path');
+});
+
 console.log('\nflow watchdogs:');
 const flows = fs.readFileSync(path.join(root, 'src/lib/monitoring/flows.ts'), 'utf8');
 

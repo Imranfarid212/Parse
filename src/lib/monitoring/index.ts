@@ -198,7 +198,25 @@ export function useAnonymousSupportCode(): string | null {
  * blocks; a reporting failure there would replace the real error with a
  * meaningless one.
  */
-export function logSafeError(error: unknown, source: string): void {
+export function logSafeError(
+  error: unknown,
+  source: string,
+  /**
+   * An opaque id joining this report to a server-side record.
+   *
+   * A deliberate, narrow exception to the UUID redaction in `sanitizeMessage`.
+   * That rule exists because ids in error text are usually account or user ids;
+   * this one is a per-scan identifier generated on the device, derived from
+   * nothing about the person, and already sent to the server with the request
+   * it describes. Without it a report saying "extraction timed out" cannot be
+   * matched to the edge-function log for the same request, which is the only
+   * thing that distinguishes a stalled upload from a stalled server.
+   *
+   * Passed as a custom key, never interpolated into the message, so the default
+   * stays strict: nothing reaches the message path unsanitised.
+   */
+  context?: { correlationId?: string | null },
+): void {
   const message = sanitizeMessage(error);
   const safeSource = sanitizeMessage(source);
 
@@ -224,6 +242,11 @@ export function logSafeError(error: unknown, source: string): void {
       platform: Platform.OS,
       app_version: Application.nativeApplicationVersion ?? 'unknown',
       build_number: Application.nativeBuildVersion ?? 'unknown',
+      // Shape-checked rather than trusted: only an opaque uuid is accepted, so a
+      // caller cannot smuggle arbitrary text past the sanitiser through here.
+      ...(context?.correlationId && /^[0-9a-f-]{8,64}$/i.test(context.correlationId)
+        ? { correlation_id: context.correlationId }
+        : {}),
     });
     api.recordError(cx, redacted, safeSource);
   } catch {

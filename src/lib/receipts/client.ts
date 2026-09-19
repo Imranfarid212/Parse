@@ -803,6 +803,41 @@ export const supabaseExtractClient: ExtractClient = {
         ms_since_warmup: lastPreciseWarmupCompletedAt == null ? null : Date.now() - lastPreciseWarmupCompletedAt,
       });
     }
+    /**
+     * Precise returned `attempts: []` while Balanced returned real traces, so a
+     * Precise failure carried no evidence at all -- no transport, no duration,
+     * no abort reason. A report could say the extraction did not finish and
+     * nothing more, which is the difference between "it hung" and knowing where.
+     *
+     * Populated as the attempt proceeds and read by the visible-deadline return
+     * below, which fires while the request is still in flight.
+     */
+    const preciseAttemptStartedAt = Date.now();
+    const preciseTrace: CaptureAttemptTrace = {
+      attempt_number: 1,
+      transport: 'image_extract',
+      started_at: new Date(preciseAttemptStartedAt).toISOString(),
+      // Seeded, then overwritten by closePreciseTrace. The contract requires
+      // both, and the visible-deadline snapshot can be read before the attempt
+      // ends -- a zero duration there reads correctly as "still running".
+      ended_at: new Date(preciseAttemptStartedAt).toISOString(),
+      duration_ms: 0,
+      status_code: null,
+      error_message: null,
+      retry_delay_ms: null,
+      attempt_timeout_ms: PRECISE_HARD_DEADLINE_MS,
+      timed_out: 0,
+      transport_error: 0,
+      ms_since_warmup: lastPreciseWarmupCompletedAt == null ? null : preciseAttemptStartedAt - lastPreciseWarmupCompletedAt,
+      app_state: AppState.currentState,
+      abort_reason: null,
+    };
+    const closePreciseTrace = (patch: Partial<CaptureAttemptTrace>) => {
+      preciseTrace.ended_at = new Date().toISOString();
+      preciseTrace.duration_ms = Date.now() - preciseAttemptStartedAt;
+      Object.assign(preciseTrace, patch);
+    };
+
     const completion = (async (): Promise<ExtractCompletedAck> => {
       if (forceB5OfflineTransport) throw new Error('The internet connection appears to be offline');
       // createUploadTask rather than uploadAsync: the latter takes no abort
@@ -843,6 +878,12 @@ export const supabaseExtractClient: ExtractClient = {
       let response;
       try {
         response = await uploadTask.uploadAsync();
+      } catch (error) {
+        closePreciseTrace({
+          transport_error: 1,
+          error_message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
       } finally {
         clearTimeout(hardDeadline);
       }
@@ -850,12 +891,18 @@ export const supabaseExtractClient: ExtractClient = {
       // response is the deadline firing -- and it has to become an error, or the
       // caller would read it as a successful empty extraction.
       if (!response) {
+        closePreciseTrace({
+          timed_out: hardDeadlineHit ? 1 : 0,
+          abort_reason: hardDeadlineHit ? 'hard_timeout' : 'winner_cancelled',
+          error_message: hardDeadlineHit ? 'precise_hard_deadline' : 'precise_cancelled',
+        });
         throw new Error(
           hardDeadlineHit
             ? `Precise extraction exceeded ${PRECISE_HARD_DEADLINE_MS}ms`
             : 'Precise extraction was cancelled',
         );
       }
+      closePreciseTrace({ status_code: response.status });
 
       assertNotAborted(signal);
       let data: ExtractFunctionPayload | null = null;
@@ -943,7 +990,9 @@ export const supabaseExtractClient: ExtractClient = {
           visibleDeadlineMs: PRECISE_VISIBLE_DEADLINE_MS,
         });
       }
-      return { state: 'visible_deadline', attempts: [], deferred: completion };
+      // A snapshot, not the finished trace: the request is still running. It
+      // records how far it had got when the UI stopped waiting.
+      return { state: 'visible_deadline', attempts: [{ ...preciseTrace }], deferred: completion };
     }
     return result;
   },

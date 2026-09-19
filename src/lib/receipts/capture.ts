@@ -47,6 +47,7 @@ import {
 } from '@/lib/receipts/types';
 
 import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
+import { beginFlow } from '@/lib/monitoring/flows';
 
 
 /** B4 latency test: 640px long edge, lower JPEG quality. */
@@ -346,7 +347,43 @@ let imageBackupInFlight: Promise<number> | null = null;
 let imageBackupRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let metricsFlushInFlight: Promise<number> | null = null;
 
+/**
+ * Reports a capture that reaches no outcome at all.
+ *
+ * The Precise hard deadline bounds the upload, but only the upload. A capture
+ * can stall anywhere else in this pipeline -- OCR, image preparation, the local
+ * write -- and nothing would say so: the screen simply waits forever. This does
+ * not need to know how it stalled, only that it did.
+ *
+ * A wrapper rather than a watchdog threaded through the body, because that body
+ * has thirteen return points and settling the flow at each is a line someone
+ * will forget to add to the fourteenth. Every exit, including a throw, passes
+ * through the finally here.
+ *
+ * The deadline is longer than every request deadline beneath it, so a slow but
+ * working capture is never reported -- this should only fire when those have
+ * themselves failed to fire.
+ */
 export async function processCapture(
+  photoUri: string,
+  captureMode: CaptureMode = 'default',
+  extractionMode: ExtractionMode = 'balanced',
+  options?: Parameters<typeof runCapture>[3],
+): Promise<CaptureOutcome> {
+  const flow = beginFlow(`capture.${extractionMode}`, { timeoutMs: 90_000 });
+  try {
+    const outcome = await runCapture(photoUri, captureMode, extractionMode, options);
+    // Any outcome is an outcome, `queued` included: the capture resolved to a
+    // state the app can show and act on. Only silence is the failure here.
+    flow.succeed();
+    return outcome;
+  } catch (error) {
+    flow.fail('threw');
+    throw error;
+  }
+}
+
+async function runCapture(
   photoUri: string,
   captureMode: CaptureMode = 'default',
   extractionMode: ExtractionMode = 'balanced',
@@ -744,7 +781,7 @@ export async function processCapture(
             await store.markFinalFailure(row.id, 'blocked_quota');
             return { kind: 'quota_exhausted', row };
           }
-          logSafeError(error, 'capture.visibleDeadline');
+          logSafeError(error, 'capture.visibleDeadline', { correlationId: row.id });
           return {
             kind: 'queued' as const,
             row,
@@ -1230,7 +1267,7 @@ async function applyDeferredDispatch(row: ReceiptRow, deferred: Promise<ExtractA
       return;
     }
     // Anything else stays queued; the row is already scheduled for another try.
-    logSafeError(error, 'capture.deferredRetry');
+    logSafeError(error, 'capture.deferredRetry', { correlationId: row.id });
   }
 }
 
