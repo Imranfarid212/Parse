@@ -516,23 +516,39 @@ export default function CameraScreen() {
             text: 'View Existing',
             onPress: () => {
               void (async () => {
-                await store.remove(currentRowId);
+                // Resolve the existing receipt BEFORE discarding this capture.
+                //
+                // The old order removed it first and looked up second, so a
+                // failed lookup left the user with neither: their fresh scan was
+                // gone and nothing opened. Discarding is only safe once there is
+                // something to show instead.
+                //
+                // This prompt carries the SERVER's candidate, so matchedReceiptId
+                // is a real receipt id. It can still be absent locally: the
+                // server matches across the whole account, including receipts
+                // from another device this one has not pulled yet.
                 const existing = await store.getByReceiptId(candidate.matchedReceiptId);
-                if (existing?.fields) {
-                  showExistingLocalReceipt(
-                    {
-                      ...candidate,
-                      matchedLocalRowId: existing.id,
-                      matchedImageUri: existing.imageUri,
-                      fields: existing.fields,
-                    },
-                    currentPhotoUri,
-                    startedAt,
-                  );
-                } else {
+
+                if (!existing?.fields) {
+                  // Keep the capture. Losing the new scan to show nothing is the
+                  // worst of the available outcomes, and it is recoverable only
+                  // by asking the user to photograph the receipt again.
                   setPhase({ k: 'idle' });
-                  flashNotice('Existing receipt is already saved');
+                  flashNotice('Could not open that receipt — keeping this scan');
+                  return;
                 }
+
+                await store.remove(currentRowId);
+                showExistingLocalReceipt(
+                  {
+                    ...candidate,
+                    matchedLocalRowId: existing.id,
+                    matchedImageUri: existing.imageUri,
+                    fields: existing.fields,
+                  },
+                  currentPhotoUri,
+                  startedAt,
+                );
               })();
             },
           },
