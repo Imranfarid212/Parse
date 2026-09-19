@@ -12,6 +12,7 @@ import { tierForProduct, type Tier } from '@/../packages/contracts/src/products'
 import { decideQuota, type QuotaVerdict } from '@/../packages/contracts/src/quota';
 import { supabase } from '@/lib/auth/supabase';
 import * as store from '@/lib/receipts/store';
+import { logSafeError } from '@/lib/monitoring';
 
 /** Past this, refresh in the background; the cached answer is still used meanwhile. */
 const STALE_AFTER_MS = 5 * 60 * 1000;
@@ -76,7 +77,7 @@ export async function refreshQuota(userId: string): Promise<QuotaVerdict | null>
       return verdict;
     })
     .catch((error) => {
-      if (__DEV__) console.warn('[quota] refresh failed', error instanceof Error ? error.message : String(error));
+      logSafeError(error, 'quota.refresh');
       return null;
     })
     .finally(() => {

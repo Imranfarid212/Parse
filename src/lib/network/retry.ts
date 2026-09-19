@@ -1,3 +1,6 @@
+
+import { trackAnonymousBreadcrumb } from '@/lib/monitoring';
+
 type NetworkRetryOptions = {
   attempts?: number;
   baseDelayMs?: number;
@@ -64,7 +67,7 @@ export async function withNetworkRetry<T>(operation: () => Promise<T>, options: 
       if (isLastAttempt || !isTransientNetworkError(error)) throw error;
 
       if (__DEV__) {
-        console.warn(`Retrying transient network failure${options.label ? ` in ${options.label}` : ''}.`, error);
+        trackAnonymousBreadcrumb(`network.retry ${options.label ?? 'unlabelled'}`);
       }
 
       await wait(getRetryDelayMs(attemptIndex, retryOptions));

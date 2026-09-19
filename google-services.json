@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "611511433234",
+    "project_id": "parse-6b0c2",
+    "storage_bucket": "parse-6b0c2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:611511433234:android:f17b8b92fc6354055240cb",
+        "android_client_info": {
+          "package_name": "com.imranfarid.parse"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBCRAUr8NHTbza1XUODmdQ5DThbrts-XIM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

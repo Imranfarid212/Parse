@@ -36,6 +36,7 @@ import { MANAGE_SUBSCRIPTION_URLS } from '@/lib/billing/config';
 import { deleteAccount } from '@/lib/billing/delete-account';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 function ManageRow({ label, url }: { label: string; url: string }) {
   const styles = useStyles();
@@ -72,7 +73,7 @@ export function DeleteAccountScreen({ onCancel }: { onCancel: () => void }) {
               // without it the app holds a token for an account that is gone.
               await auth.signOut();
             } catch (error) {
-              if (__DEV__) console.warn('[delete-account] failed', error);
+              logSafeError(error, 'account.delete');
               Alert.alert(COPY_DELETE_ACCOUNT_TITLE, COPY_DELETE_ACCOUNT_FAILED);
             } finally {
               setBusy(false);

@@ -58,6 +58,7 @@ import type { CaptureMode, DuplicateCandidate, ExtractionMode, LocalDuplicateCan
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { fontFamily, radius, spacing } from '@/theme/tokens';
 import { useAppAppearance } from '@/theme/appearance';
+import { logSafeError } from '@/lib/monitoring';
 
 type Mode = 'default' | 'oneclick';
 /** MenuPanel's TABS order: Export, Search, Plan, Settings. */
@@ -767,7 +768,7 @@ export default function CameraScreen() {
         releaseShutter();
         void runDetachedCapture(photo.uri, toCaptureMode(mode), detachedAc, startedAt)
           .catch((error: unknown) => {
-            console.warn('[capture] detached capture failed', error);
+            logSafeError(error, 'camera.detachedCapture');
             flashNotice("That didn't go through — try again");
           })
           .finally(() => {
@@ -809,7 +810,7 @@ export default function CameraScreen() {
         handleDefaultCaptureOutcome(await outPromise, photo.uri, startedAt);
       }
     } catch (e) {
-      console.warn('[capture] failed', e);
+      logSafeError(e, 'camera.capture');
       // Only the Precise overlay was reset here. In Balanced
       // the skeleton card is not set until after the photo is taken, so a throw
       // before that — the camera session, the temp-file spill — left the screen
@@ -848,7 +849,7 @@ export default function CameraScreen() {
         detachedAborts.current.add(detachedAc);
         void runDetachedCapture(uri, toCaptureMode(mode), detachedAc, startedAt)
           .catch((error: unknown) => {
-            console.warn('[capture] detached gallery capture failed', error);
+            logSafeError(error, 'camera.detachedGalleryCapture');
             flashNotice("That didn't go through — try again");
           })
           .finally(() => detachedAborts.current.delete(detachedAc));

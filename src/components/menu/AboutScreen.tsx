@@ -21,11 +21,12 @@
  * the privacy policy and the App Store privacy labels — Apple checks that.
  */
 import React from 'react';
-import { Linking, Pressable, ScrollView, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import Constants from 'expo-constants';
+import * as Application from 'expo-application';
 
 import { Card, Divider, Eyebrow } from '@/components/menu/primitives';
+import { isMonitoringAvailable, logSafeError, trackAnonymousBreadcrumb, useAnonymousSupportCode } from '@/lib/monitoring';
 import { SUPPORT_EMAIL } from '@/lib/support';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
@@ -70,7 +71,12 @@ function Person({ name, title }: { name: string; title: string }) {
 export function AboutScreen({ onBack }: { onBack: () => void }) {
   const styles = useStyles();
   const colors = useColors();
-  const version = Constants.expoConfig?.version ?? null;
+  // The native values, not the ones in the Expo config: an OTA update leaves
+  // the config version behind the binary the user is actually running, and the
+  // whole point of printing a build number is to identify that binary.
+  const version = Application.nativeApplicationVersion;
+  const build = Application.nativeBuildVersion;
+  const supportCode = useAnonymousSupportCode();
 
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -118,7 +124,46 @@ export function AboutScreen({ onBack }: { onBack: () => void }) {
         <Text style={styles.contactNote}>It reaches us both.</Text>
       </Card>
 
-      {version && <Text style={styles.version}>Parse {version}</Text>}
+      <View style={styles.buildBlock}>
+        {version && (
+          /**
+           * Long-press sends a test report.
+           *
+           * Deliberately a hidden gesture on a release-safe action rather than a
+           * visible "test crash" button: `crashlytics_debug_enabled` is false, so
+           * a debug build uploads nothing and the pipeline can only be proven
+           * from a TestFlight or store build — where a button that deliberately
+           * crashes the app is not something to ship. This records a non-fatal
+           * instead, which exercises the identical path (attributes, user id,
+           * breadcrumb flush) without killing the session.
+           */
+          <Pressable
+            onLongPress={() => {
+              trackAnonymousBreadcrumb('about.testReport');
+              logSafeError(new Error('Test report from the About screen'), 'about.selfTest');
+              Alert.alert(
+                'Test report sent',
+                isMonitoringAvailable()
+                  ? `Support code ${supportCode ?? 'pending'}. It appears in Crashlytics within a few minutes of the next launch.`
+                  : 'Crash reporting is not available in this build.',
+              );
+            }}
+            delayLongPress={1200}
+          >
+            <Text style={styles.version} selectable>
+              Parse {version}
+              {build ? ` (${build})` : ''}
+            </Text>
+          </Pressable>
+        )}
+        {/* Anonymous by construction: six characters of a random id generated on
+            this install, tied to no account. It is here so a support email can
+            be matched to a crash report without either of us handling anything
+            that identifies the person sending it. */}
+        <Text style={styles.supportCode} selectable accessibilityLabel={`Support code ${(supportCode ?? '').split('').join(' ')}`}>
+          Support code · {supportCode ?? '——————'}
+        </Text>
+      </View>
 
       <Pressable onPress={onBack} style={styles.backBtn} accessibilityRole="button">
         <Text style={styles.backText}>Back</Text>
@@ -167,7 +212,15 @@ const useStyles = makeStyles((colors) => ({
   contactText: { ...typography.label, fontSize: 14, color: colors.accent },
   contactNote: { ...typography.eyebrow, fontFamily: fontFamily.regular, color: colors.textFaint },
 
+  buildBlock: { alignItems: 'center', gap: 2 },
   version: { ...typography.eyebrow, fontFamily: fontFamily.regular, color: colors.textFaint, textAlign: 'center' },
+  supportCode: {
+    ...typography.eyebrow,
+    fontFamily: fontFamily.regular,
+    color: colors.textFaint,
+    textAlign: 'center',
+    letterSpacing: 1,
+  },
 
   backBtn: {
     height: 52,

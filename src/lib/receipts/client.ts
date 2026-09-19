@@ -29,6 +29,9 @@ import {
   normalizeReceiptItems,
 } from '@/lib/receipts/types';
 
+import { logSafeError } from '@/lib/monitoring';
+
+
 export type ExtractInput = {
   captureId: string;
   imageUri: string;
@@ -505,7 +508,7 @@ export const supabaseExtractClient: ExtractClient = {
         lastBalancedWarmupCompletedAt = Date.now();
       })
       .catch((error) => {
-        if (__DEV__) console.warn('[extract] balanced warm-up failed', error instanceof Error ? error.message : String(error));
+        logSafeError(error, 'extract.balancedWarmup');
       })
       .finally(() => {
         balancedWarmupInFlight = null;
@@ -548,7 +551,7 @@ export const supabaseExtractClient: ExtractClient = {
         lastPreciseWarmupCompletedAt = Date.now();
       })
       .catch((error) => {
-        if (__DEV__) console.warn('[extract] precise warm-up failed', error instanceof Error ? error.message : String(error));
+        logSafeError(error, 'extract.preciseWarmup');
       })
       .finally(() => {
         preciseWarmupInFlight = null;
