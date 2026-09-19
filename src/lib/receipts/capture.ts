@@ -46,6 +46,9 @@ import {
   type ReceiptRow,
 } from '@/lib/receipts/types';
 
+import { logSafeError } from '@/lib/monitoring';
+
+
 /** B4 latency test: 640px long edge, lower JPEG quality. */
 const TARGET_LONG_EDGE = 640;
 const JPEG_QUALITY = 0.55;
@@ -114,7 +117,7 @@ async function recognizeTextWithDeadline(uri: string, timeoutMs: number): Promis
     .catch((error) => {
       settled = true;
       if (timeout) clearTimeout(timeout);
-      if (__DEV__) console.warn('[capture] local OCR failed', describeError(error));
+      logSafeError(error, 'capture.localOcr');
       return null;
     });
   const timeoutPromise = new Promise<null>((resolve) => {
@@ -517,6 +520,7 @@ export async function processCapture(
     extractionMode,
     options?.defaultCurrency ?? null,
     captureId,
+    options?.userId ?? null,
   );
   if (duplicateOfLocalRowId) {
     await store.setDuplicateRelation(row.id, duplicateOfLocalRowId, duplicateMatchStrength);
@@ -588,7 +592,7 @@ export async function processCapture(
           return persisted;
         })
         .catch((error) => {
-          if (__DEV__) console.warn('[capture] image file persistence queued', describeError(error));
+          logSafeError(error, 'capture.persistImage');
           return row.imageUri;
         });
     }
@@ -672,7 +676,7 @@ export async function processCapture(
             await store.markFinalFailure(row.id, 'blocked_quota');
             return { kind: 'quota_exhausted', row };
           }
-          if (__DEV__) console.warn('[capture] visible-deadline request stayed queued', describeError(error));
+          logSafeError(error, 'capture.visibleDeadline');
           return {
             kind: 'queued' as const,
             row,
@@ -801,13 +805,30 @@ export async function confirm(id: string, fields: ReceiptFields, userId?: string
 }
 
 /**
+ * Purge only the rows the given user does not own, with their images.
+ *
+ * The narrow counterpart to clearLocalReceiptsForAccountSwitch, for a store
+ * that records no owner at all: rows of unknown provenance go, rows already
+ * stamped for this user stay. Sync state and the metric queue are left alone
+ * deliberately — both are keyed per user, so neither can carry across.
+ */
+export async function clearForeignLocalReceipts(userId: string): Promise<number> {
+  const uris = await store.listForeignImageUris(userId);
+  await Promise.all(uris.map((uri) => deleteLocalFile(uri).catch(() => {})));
+  const removed = await store.deleteForeignReceipts(userId);
+  if (removed > 0 && __DEV__) console.warn(`[capture] purged ${removed} unowned local receipt(s)`);
+  return removed;
+}
+
+/**
  * Wipe the local receipt store because a different account has signed in.
  *
- * Local rows carry no user id, so without this the incoming user would see the
- * previous one's receipts — and, since the restore only runs against an empty
- * database, would never get their own. Deliberately not called on sign-out: a
- * user signing back into their own account would lose any capture that had not
- * yet reached the server.
+ * Local rows now carry a user id and every read filters on it, so this is no
+ * longer the only thing standing between two accounts — but it is still what
+ * makes the store usable: the restore only runs against an empty database, so
+ * without the wipe the incoming user would never get their own rows back.
+ * Deliberately not called on sign-out: a user signing back into their own
+ * account would lose any capture that had not yet reached the server.
  */
 export async function clearLocalReceiptsForAccountSwitch(): Promise<void> {
   const uris = await store.listAllImageUris();
@@ -856,7 +877,7 @@ export async function syncConfirmed(): Promise<void> {
       await store.setSyncStatus(row.id, { resultSyncStatus: 'synced' });
       await store.setStatus(row.id, 'synced');
     } catch (error) {
-      if (__DEV__) console.warn('[capture] confirm sync queued', describeError(error));
+      logSafeError(error, 'capture.confirmSync');
 
       // A verdict the server will repeat forever — a malformed payload, or a
       // receipt row that no longer exists. Retrying cannot change the answer,
@@ -941,7 +962,7 @@ async function dispatchImageBackups(): Promise<number> {
       }
       uploaded += 1;
     } catch (error) {
-      if (__DEV__) console.warn('[capture] image backup queued', describeError(error));
+      logSafeError(error, 'capture.imageBackup');
       const attempts = row.attempts + 1;
       if (attempts >= MAX_IMAGE_BACKUP_ATTEMPTS) {
         await store.setSyncStatus(row.id, { imageSyncStatus: 'upload_failed_final' });
@@ -962,7 +983,7 @@ export function uploadCaptureMetrics(input: CaptureMetricsPayload): void {
   void store.enqueueCaptureMetric(input)
     .then(() => flushCaptureMetrics())
     .catch((error) => {
-      if (__DEV__) console.warn('[capture] metrics enqueue failed', describeError(error));
+      logSafeError(error, 'capture.metricsEnqueue');
     });
 }
 
@@ -984,7 +1005,7 @@ async function dispatchCaptureMetrics(): Promise<number> {
       await store.removeQueuedCaptureMetric(item.id);
       uploaded += 1;
     } catch (error) {
-      if (__DEV__) console.warn('[capture] metrics upload queued', describeError(error));
+      logSafeError(error, 'capture.metricsUpload');
       const attempts = item.attempts + 1;
       await store.markCaptureMetricRetry(item.id, attempts, Date.now() + nextBackoffWithJitterMs(attempts));
       break;
@@ -1103,7 +1124,7 @@ async function applyDeferredDispatch(row: ReceiptRow, deferred: Promise<ExtractA
       return;
     }
     // Anything else stays queued; the row is already scheduled for another try.
-    if (__DEV__) console.warn('[capture] deferred retry stayed queued', describeError(error));
+    logSafeError(error, 'capture.deferredRetry');
   }
 }
 
@@ -1195,7 +1216,7 @@ async function dispatchPending(): Promise<number> {
         await store.markFinalFailure(row.id, 'blocked_quota');
         continue;
       }
-      if (__DEV__) console.warn('[capture] retry queued', describeError(error));
+      logSafeError(error, 'capture.retry');
       // Throttled, not failed. Wait exactly as long as the server asked, and
       // never let it reach a terminal state — the window always clears, so a
       // capture that is merely too early must not become "could not be
