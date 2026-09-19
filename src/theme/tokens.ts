@@ -25,6 +25,14 @@ export const palette = {
   // Status hues. Kept deliberately few: the UI is grey + forest, and these are
   // only for states the user must not misread (destructive, expiring, failed).
   danger: '#B42318',
+  /**
+   * A desaturated red, for saying something is empty rather than wrong.
+   * "No receipts match these filters" is a true and unremarkable state, and
+   * full `danger` makes an ordinary empty result read as a failure. Chosen to
+   * clear 4.5:1 on both the page (4.81:1) and a white card (5.11:1), so it is
+   * softer without becoming unreadable.
+   */
+  dangerMuted: '#A8564E',
   dangerSurface: '#FEF3F2',
   dangerBorder: '#FECDCA',
   warning: '#B45309',
@@ -46,7 +54,7 @@ export const darkPalette = {
   ink: '#F4F4F5', inkSoft: '#B6B8C0', inkFaint: '#787B85', buttonDark: '#F4F4F5',
   forest: '#34D399', forestSurface: '#123D32', hairline: '#2A2C32', hairlineStrong: '#373941',
   canvas: '#111215', canvasSubtle: '#1B1C21', surface: '#191A1F', white: '#17181C',
-  danger: '#FF8A82', dangerSurface: '#4A2020', dangerBorder: '#773434',
+  danger: '#FF8A82', dangerMuted: '#C98F88', dangerSurface: '#4A2020', dangerBorder: '#773434',
   warning: '#F6C665', warningSurface: '#423515', warningBorder: '#705A20',
   info: '#8AB4FF', infoSurface: '#1C3457',
 } as const;
@@ -89,6 +97,7 @@ export const lightColors = {
   ctaBackground: palette.buttonDark,
   ctaText: palette.white,
   danger: palette.danger,
+  dangerMuted: palette.dangerMuted,
   dangerSurface: palette.dangerSurface,
   dangerBorder: palette.dangerBorder,
   warning: palette.warning,
@@ -125,6 +134,7 @@ export const darkColors = {
   ctaBackground: darkPalette.buttonDark,
   ctaText: darkPalette.white,
   danger: darkPalette.danger,
+  dangerMuted: darkPalette.dangerMuted,
   dangerSurface: darkPalette.dangerSurface,
   dangerBorder: darkPalette.dangerBorder,
   warning: darkPalette.warning,

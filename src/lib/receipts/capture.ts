@@ -46,7 +46,8 @@ import {
   type ReceiptRow,
 } from '@/lib/receipts/types';
 
-import { logSafeError } from '@/lib/monitoring';
+import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
+import { beginFlow } from '@/lib/monitoring/flows';
 
 
 /** B4 latency test: 640px long edge, lower JPEG quality. */
@@ -181,6 +182,8 @@ function describeError(error: unknown): string {
   try {
     return JSON.stringify(error);
   } catch {
+    // monitoring-ignore: describeError is the error formatter; reporting from
+    // inside it would recurse.
     return 'unknown error';
   }
 }
@@ -344,7 +347,43 @@ let imageBackupInFlight: Promise<number> | null = null;
 let imageBackupRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let metricsFlushInFlight: Promise<number> | null = null;
 
+/**
+ * Reports a capture that reaches no outcome at all.
+ *
+ * The Precise hard deadline bounds the upload, but only the upload. A capture
+ * can stall anywhere else in this pipeline -- OCR, image preparation, the local
+ * write -- and nothing would say so: the screen simply waits forever. This does
+ * not need to know how it stalled, only that it did.
+ *
+ * A wrapper rather than a watchdog threaded through the body, because that body
+ * has thirteen return points and settling the flow at each is a line someone
+ * will forget to add to the fourteenth. Every exit, including a throw, passes
+ * through the finally here.
+ *
+ * The deadline is longer than every request deadline beneath it, so a slow but
+ * working capture is never reported -- this should only fire when those have
+ * themselves failed to fire.
+ */
 export async function processCapture(
+  photoUri: string,
+  captureMode: CaptureMode = 'default',
+  extractionMode: ExtractionMode = 'balanced',
+  options?: Parameters<typeof runCapture>[3],
+): Promise<CaptureOutcome> {
+  const flow = beginFlow(`capture.${extractionMode}`, { timeoutMs: 90_000 });
+  try {
+    const outcome = await runCapture(photoUri, captureMode, extractionMode, options);
+    // Any outcome is an outcome, `queued` included: the capture resolved to a
+    // state the app can show and act on. Only silence is the failure here.
+    flow.succeed();
+    return outcome;
+  } catch (error) {
+    flow.fail('threw');
+    throw error;
+  }
+}
+
+async function runCapture(
   photoUri: string,
   captureMode: CaptureMode = 'default',
   extractionMode: ExtractionMode = 'balanced',
@@ -406,6 +445,18 @@ export async function processCapture(
   let duplicateOfLocalRowId: string | null = null;
   let duplicateOfReceiptId: string | null = null;
   let duplicateMatchStrength: 'weak' | 'strong' | null = null;
+  /**
+   * What the local OCR heuristic read as the total, kept so it can be compared
+   * against what the model returns.
+   *
+   * A user reported seeing one amount and a different one after saving, and
+   * nothing recorded enough to tell which stage was wrong. The draft value is
+   * never displayed and never persisted -- the card shows a placeholder until
+   * the model answers -- so reconstructing it afterwards was impossible.
+   * `parseDraftTotal` falls back to the largest number on the receipt when it
+   * recognises no total label, so a wide divergence here is a real signal.
+   */
+  let draftTotal: number | null = null;
 
   if (extractionMode === 'balanced') {
     const ocrResizeStartedAt = Date.now();
@@ -448,6 +499,7 @@ export async function processCapture(
       if (decision !== 'continue') return { kind: 'preflight_rejected' };
     }
     const draft = localOcrText ? draftFromOcr(localOcrText, options?.defaultCurrency ?? 'USD') : null;
+    if (draft) draftTotal = draft.total;
     if (draft) {
       logLatency('local_draft_ready', { captureId, merchant: draft.store, total: draft.total });
       options?.onDraft?.(draft, { captureId, elapsedMs: Date.now() - captureStartedAt });
@@ -525,6 +577,55 @@ export async function processCapture(
   if (duplicateOfLocalRowId) {
     await store.setDuplicateRelation(row.id, duplicateOfLocalRowId, duplicateMatchStrength);
   }
+
+  /**
+   * Duplicate detection for every mode, not just Balanced.
+   *
+   * The pre-model check above lives inside `if (extractionMode === 'balanced')`
+   * because it needs an OCR draft, and Precise does no local OCR -- so Precise
+   * scans were never matched against anything. The same receipt scanned twice in
+   * Precise produced two rows, no prompt, no `duplicate_of`, and no badge.
+   *
+   * The extracted fields are better evidence than the OCR draft was: date,
+   * currency and total come from the model rather than a cheap read. The
+   * fingerprint is null for Precise, so similarity is 0 and the match falls to
+   * the merchant cross-check within the dedupe-key bucket -- narrower than
+   * Balanced's fuzzy tier, and correctly reported as `weak`.
+   *
+   * Recorded rather than prompted. Balanced's prompt earns its interruption by
+   * still being able to save the model call; by this point the call is paid for
+   * and the receipt extracted, so asking "keep this?" would offer to discard
+   * finished work. The relation is stored, search badges it, the user decides.
+   *
+   * MUST be called before `setDedupeSignals` for the same row: that call puts
+   * this row into the very bucket being searched, and since the search returns
+   * the newest match first, the row would match itself and mask the real
+   * duplicate behind it. Sequencing avoids that; an id check would not.
+   */
+  /**
+   * Records what the local read and what the model returned, so a later report
+   * of "it showed the wrong amount first" can be checked rather than guessed at.
+   * Amounts only -- no merchant, no line items -- and only when they disagree by
+   * more than rounding, so an agreeing pair costs nothing on the timeline.
+   */
+  const compareDraftToExtracted = (extracted: ReceiptFields) => {
+    if (draftTotal === null) return;
+    if (Math.abs(draftTotal - extracted.total) <= 0.01) return;
+    trackAnonymousBreadcrumb(
+      `capture.totalDiverged ${extractionMode} draft=${draftTotal.toFixed(2)} final=${extracted.total.toFixed(2)}`,
+    );
+  };
+
+  const recordDuplicateIfAny = async (extracted: ReceiptFields) => {
+    if (duplicateOfLocalRowId) return;
+    const candidate = await store.findLocalDuplicateCandidate(extracted, {
+      userId: options?.userId,
+      ocrText: localOcrText,
+    });
+    if (!candidate || candidate.matchedLocalRowId === row.id) return;
+    await store.setDuplicateRelation(row.id, candidate.matchedLocalRowId, candidate.matchStrength);
+    trackAnonymousBreadcrumb(`capture.duplicateDetected ${extractionMode} ${candidate.matchStrength}`);
+  };
   metrics.local_row_ms = Date.now() - localRowStartedAt;
   logLatency('local_row_inserted', { captureId: row.id });
 
@@ -532,6 +633,7 @@ export async function processCapture(
     await store.setStatus(row.id, 'local_ocr_processing');
     await store.setLocalOcr(row.id, localOcrText, localOcrText ? 'local_ocr_done' : 'image_upload_pending');
     const draft = localOcrText ? draftFromOcr(localOcrText, options?.defaultCurrency ?? 'USD') : null;
+    if (draft) draftTotal = draft.total;
     if (draft) {
       await store.setDedupeSignals(
         row.id,
@@ -634,6 +736,9 @@ export async function processCapture(
           const receiptId = lateAck.receiptId;
           const lateMetrics = { ...metrics, backend_extract_ms: Date.now() - extractStartedAt };
           await store.markDispatched(row.id, lateAck.receiptId, fields);
+          compareDraftToExtracted(fields);
+          compareDraftToExtracted(fields);
+    await recordDuplicateIfAny(fields);
           await store.setDedupeSignals(
             row.id,
             store.buildDedupeKey(fields, options?.userId),
@@ -651,7 +756,7 @@ export async function processCapture(
             metrics: lateMetrics,
             attempts: lateAck.attempts,
           });
-          if (__DEV__) console.log('[capture] visible-deadline request completed in background', { captureId: row.id });
+          trackAnonymousBreadcrumb('capture.visibleDeadline completedInBackground');
           return {
             kind: 'extracted',
             row: {
@@ -676,7 +781,7 @@ export async function processCapture(
             await store.markFinalFailure(row.id, 'blocked_quota');
             return { kind: 'quota_exhausted', row };
           }
-          logSafeError(error, 'capture.visibleDeadline');
+          logSafeError(error, 'capture.visibleDeadline', { correlationId: row.id });
           return {
             kind: 'queued' as const,
             row,
@@ -706,11 +811,13 @@ export async function processCapture(
     metrics.total_to_response_ms = Date.now() - captureStartedAt;
     logLatency('extract_response_received', { receiptId: ack.receiptId, merchant: fields.store, total: fields.total });
     await store.markDispatched(row.id, ack.receiptId, fields);
+    await recordDuplicateIfAny(fields);
     await store.setDedupeSignals(
       row.id,
       store.buildDedupeKey(fields, options?.userId),
       store.buildOcrFingerprint(localOcrText),
     );
+
     if (extractionMode === 'balanced' && localOcrText) {
       await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
       logLatency('ui_ready_image_backup_queued', { receiptId: ack.receiptId });
@@ -781,7 +888,7 @@ export async function processCapture(
       return { kind: 'quota_exhausted', row };
     }
     logLatency('extract_failed_queued', { reason });
-    if (__DEV__) console.warn('[capture] extract queued', reason);
+    trackAnonymousBreadcrumb(`capture.extractQueued ${reason}`);
     await store.setStatus(row.id, 'llm_failed_retryable');
     // A throttle leaves the attempt count alone: it did not fail, it was not
     // served, and spending the budget on it is what killed these captures.
@@ -816,7 +923,7 @@ export async function clearForeignLocalReceipts(userId: string): Promise<number>
   const uris = await store.listForeignImageUris(userId);
   await Promise.all(uris.map((uri) => deleteLocalFile(uri).catch(() => {})));
   const removed = await store.deleteForeignReceipts(userId);
-  if (removed > 0 && __DEV__) console.warn(`[capture] purged ${removed} unowned local receipt(s)`);
+  if (removed > 0) trackAnonymousBreadcrumb(`capture.purgedUnowned ${removed}`);
   return removed;
 }
 
@@ -834,7 +941,7 @@ export async function clearLocalReceiptsForAccountSwitch(): Promise<void> {
   const uris = await store.listAllImageUris();
   await Promise.all(uris.map((uri) => deleteLocalFile(uri).catch(() => {})));
   await store.clearReceiptData();
-  if (__DEV__) console.warn(`[capture] cleared ${uris.length} local receipt image(s) for account switch`);
+  trackAnonymousBreadcrumb(`capture.accountSwitchCleared ${uris.length}`);
 }
 
 /**
@@ -851,7 +958,7 @@ export async function deleteLocalReceipt(captureId: string): Promise<void> {
 
 export async function syncConfirmed(): Promise<void> {
   const reclaimed = await store.reclaimStalledSyncs(STALLED_SYNC_MS);
-  if (reclaimed > 0 && __DEV__) console.warn(`[capture] reclaimed ${reclaimed} stalled sync row(s)`);
+  if (reclaimed > 0) trackAnonymousBreadcrumb(`capture.reclaimedStalled ${reclaimed}`);
 
   const rows = await store.listUnsynced();
 
@@ -1083,7 +1190,7 @@ export async function purgeAbandonedCaptures(ttlMs = ABANDONED_CAPTURE_TTL_MS): 
     await deleteLocalFile(row.imageUri);
     await store.remove(row.id);
   }
-  if (__DEV__ && rows.length > 0) console.log('[capture] purged abandoned captures', { count: rows.length });
+  if (rows.length > 0) trackAnonymousBreadcrumb(`capture.purgedAbandoned ${rows.length}`);
   return rows.length;
 }
 
@@ -1093,6 +1200,41 @@ export async function retryPending(): Promise<number> {
     dispatchInFlight = null;
   });
   return dispatchInFlight;
+}
+
+/**
+ * Lands an extraction result for a row with no screen watching it.
+ *
+ * Both unattended paths -- a deferred dispatch and the queue drain -- previously
+ * called markDispatched and stopped there. That excluded every queued capture
+ * from duplicate matching in BOTH directions: never detected as a duplicate,
+ * and, because setDedupeSignals was never reached either, never findable as the
+ * original by a later scan. Anything that queued -- throttled, offline, a 5xx --
+ * silently left the system.
+ *
+ * The owner comes from the store rather than the row: `hydrate` does not expose
+ * user_id, and a row reaching here is by definition the current owner's, since
+ * every query that produced it already sits behind `owned()`.
+ *
+ * Detection runs before setDedupeSignals, as on the attended path: that call
+ * puts this row into the bucket being searched, and the newest match is returned
+ * first, so the row would otherwise match itself and mask the real duplicate.
+ */
+async function landExtractedFields(row: ReceiptRow, receiptId: string, fields: ReceiptFields): Promise<void> {
+  await store.markDispatched(row.id, receiptId, fields);
+
+  const userId = await store.getLocalOwner();
+  const candidate = await store.findLocalDuplicateCandidate(fields, { userId, ocrText: row.localOcrText });
+  if (candidate && candidate.matchedLocalRowId !== row.id) {
+    await store.setDuplicateRelation(row.id, candidate.matchedLocalRowId, candidate.matchStrength);
+    trackAnonymousBreadcrumb(`capture.duplicateDetected unattended ${candidate.matchStrength}`);
+  }
+
+  await store.setDedupeSignals(
+    row.id,
+    store.buildDedupeKey(fields, userId),
+    store.buildOcrFingerprint(row.localOcrText),
+  );
 }
 
 /**
@@ -1110,7 +1252,8 @@ async function applyDeferredDispatch(row: ReceiptRow, deferred: Promise<ExtractA
       await deleteLocalFile(row.imageUri);
       return;
     }
-    await store.markDispatched(row.id, ack.receiptId, toReceiptFields(ack.response));
+    await landExtractedFields(row, ack.receiptId, toReceiptFields(ack.response));
+
     if (row.extractionMode === 'balanced' && row.localOcrText) {
       await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
       void syncImageBackups();
@@ -1124,7 +1267,7 @@ async function applyDeferredDispatch(row: ReceiptRow, deferred: Promise<ExtractA
       return;
     }
     // Anything else stays queued; the row is already scheduled for another try.
-    logSafeError(error, 'capture.deferredRetry');
+    logSafeError(error, 'capture.deferredRetry', { correlationId: row.id });
   }
 }
 
@@ -1140,6 +1283,8 @@ async function cachedDefaultCurrency(): Promise<string | null> {
     const cached = await getCachedAuth();
     return cached?.profile?.default_currency ?? null;
   } catch {
+    // monitoring-ignore: A missing cached currency falls back to the server
+    // default, which is the normal first-launch path.
     return null;
   }
 }
@@ -1184,7 +1329,7 @@ async function dispatchPending(): Promise<number> {
         await deleteLocalFile(row.imageUri);
         continue;
       }
-      await store.markDispatched(row.id, ack.receiptId, toReceiptFields(ack.response));
+      await landExtractedFields(row, ack.receiptId, toReceiptFields(ack.response));
       if (row.extractionMode === 'balanced' && row.localOcrText) {
         await store.setSyncStatus(row.id, { imageSyncStatus: 'pending_upload' });
         void syncImageBackups();

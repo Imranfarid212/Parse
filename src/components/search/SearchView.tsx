@@ -25,6 +25,7 @@ import { useRealtimeReceipts } from '@/lib/receipts/use-realtime-receipts';
 import { isCategory, type ReceiptFields } from '@/lib/receipts/types';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 const SEARCH_DEBOUNCE_MS = 300;
 const UNDO_WINDOW_MS = 5_000;
@@ -143,7 +144,7 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
       try {
         await pendingDelete;
       } catch {
-        // The delete rollback already restored the optimistic row.
+        // monitoring-ignore: The delete rollback already restored the optimistic row.
         return;
       }
     }
@@ -151,6 +152,7 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
       await restoreManagedReceipt(receipt);
       await reload();
     } catch (cause) {
+      logSafeError(cause, 'search.restoreReceipt');
       setReceipts((current) => current.filter((candidate) => candidate.id !== receipt.id));
       Alert.alert('Could not restore receipt', cause instanceof Error ? cause.message : 'Please try again.');
     }
@@ -260,16 +262,39 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
   );
 }
 
+/**
+ * What capture decided about this receipt when it was taken.
+ *
+ * Only the hard signal: `duplicateOf` is set by capture-time matching against
+ * receipts already held. The soft tier that once sat beside it -- grouping
+ * lookalikes across a result set by a derived key -- is deliberately not
+ * restored here, because "similar" is a judgement about what belongs in a total
+ * and now has an export count reading the same rows.
+ */
+const duplicateBadgeLabel = (receipt: ManagedReceipt): string | null => {
+  if (!receipt.duplicateOf) return null;
+  return receipt.duplicateMatchStrength === 'strong' ? 'Duplicate' : 'Similar';
+};
+
 type ReceiptItemProps = { receipt: ManagedReceipt; onEdit: (receipt: ManagedReceipt) => void; onDelete: (receipt: ManagedReceipt) => void };
 
 function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
   const styles = useStyles();
   const colors = useColors();
+  const badge = duplicateBadgeLabel(receipt);
   return (
     <Pressable style={styles.listRow} onPress={() => onEdit(receipt)}>
       <View style={styles.listIcon}><Ionicons name="receipt-outline" size={18} color={colors.textSecondary} /></View>
       <View style={styles.listText}>
-        <Text selectable numberOfLines={1} style={styles.listLabel}>{receipt.fields.store}</Text>
+        <View style={styles.titleRow}>
+          {/* shrinks so the badge is never pushed off the row */}
+          <Text selectable numberOfLines={1} style={[styles.listLabel, { flexShrink: 1 }]}>{receipt.fields.store}</Text>
+          {badge ? (
+            <View style={styles.duplicateBadge}>
+              <Text style={styles.duplicateText}>{badge}</Text>
+            </View>
+          ) : null}
+        </View>
         <Text selectable numberOfLines={1} style={styles.listMeta}>{[receipt.fields.date, receipt.fields.category].filter(Boolean).join(' • ')}</Text>
       </View>
       <Text selectable style={styles.listTotal}>{formatTotal(receipt)}</Text>
@@ -360,6 +385,19 @@ const useStyles = makeStyles((colors) => ({
   },
   listText: { flex: 1, minWidth: 0 },
   listLabel: { ...typography.row, color: colors.textPrimary },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  // Themed rather than the original's hardcoded amber, which could not follow
+  // the dark mode toggle and would now fail this project's own lint rule.
+  duplicateBadge: {
+    flexShrink: 0,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    backgroundColor: colors.warningSurface,
+    borderWidth: 1,
+    borderColor: colors.warningBorder,
+  },
+  duplicateText: { fontFamily: typography.button.fontFamily, fontSize: 10, color: colors.warning },
   listMeta: { marginTop: 2, ...typography.meta, fontSize: 12, color: colors.textSecondary },
   listTotal: { ...typography.row, color: colors.textPrimary, fontVariant: ['tabular-nums'] },
   snackbar: {

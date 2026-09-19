@@ -72,6 +72,8 @@ function crashlyticsApi(): CrashlyticsModule | null {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     crashlyticsModule = require('@react-native-firebase/crashlytics') as CrashlyticsModule;
   } catch {
+    // monitoring-ignore: absence of the native module is the signal, and it is
+    // recorded as null so every entry point below degrades to a no-op.
     crashlyticsModule = null;
   }
   return crashlyticsModule;
@@ -86,6 +88,8 @@ function analyticsApi(): AnalyticsModule | null {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     analyticsModule = require('@react-native-firebase/analytics') as AnalyticsModule;
   } catch {
+    // monitoring-ignore: as above -- a missing native module is expected in Expo
+    // Go and in any build made before the Firebase credentials were added.
     analyticsModule = null;
   }
   return analyticsModule;
@@ -124,6 +128,9 @@ export function getInstallationId(): Promise<string> {
       cachedInstallId = created;
       return created;
     } catch {
+      // monitoring-ignore: a storage failure yields a session-scoped id. The
+      // support code is then useless across restarts, which is a far smaller
+      // problem than a monitoring call rejecting inside someone's catch block.
       const fallback = cachedInstallId ?? Crypto.randomUUID();
       cachedInstallId = fallback;
       return fallback;
@@ -191,7 +198,25 @@ export function useAnonymousSupportCode(): string | null {
  * blocks; a reporting failure there would replace the real error with a
  * meaningless one.
  */
-export function logSafeError(error: unknown, source: string): void {
+export function logSafeError(
+  error: unknown,
+  source: string,
+  /**
+   * An opaque id joining this report to a server-side record.
+   *
+   * A deliberate, narrow exception to the UUID redaction in `sanitizeMessage`.
+   * That rule exists because ids in error text are usually account or user ids;
+   * this one is a per-scan identifier generated on the device, derived from
+   * nothing about the person, and already sent to the server with the request
+   * it describes. Without it a report saying "extraction timed out" cannot be
+   * matched to the edge-function log for the same request, which is the only
+   * thing that distinguishes a stalled upload from a stalled server.
+   *
+   * Passed as a custom key, never interpolated into the message, so the default
+   * stays strict: nothing reaches the message path unsanitised.
+   */
+  context?: { correlationId?: string | null },
+): void {
   const message = sanitizeMessage(error);
   const safeSource = sanitizeMessage(source);
 
@@ -217,10 +242,16 @@ export function logSafeError(error: unknown, source: string): void {
       platform: Platform.OS,
       app_version: Application.nativeApplicationVersion ?? 'unknown',
       build_number: Application.nativeBuildVersion ?? 'unknown',
+      // Shape-checked rather than trusted: only an opaque uuid is accepted, so a
+      // caller cannot smuggle arbitrary text past the sanitiser through here.
+      ...(context?.correlationId && /^[0-9a-f-]{8,64}$/i.test(context.correlationId)
+        ? { correlation_id: context.correlationId }
+        : {}),
     });
     api.recordError(cx, redacted, safeSource);
   } catch {
-    /* Monitoring must never become the failure it is reporting. */
+    // monitoring-ignore: monitoring must never become the failure it is
+    // reporting -- this runs inside other people's catch blocks.
   }
 }
 
@@ -238,7 +269,8 @@ export function trackAnonymousBreadcrumb(message: string): void {
     if (!api) return;
     api.log(api.getCrashlytics(), safe);
   } catch {
-    /* ignored */
+    // monitoring-ignore: reporting is best-effort by design; a failure here
+    // must not surface to, or replace, whatever the caller was handling.
   }
 }
 
@@ -265,7 +297,8 @@ export function trackAnonymousEvent(eventName: string, params?: Record<string, u
       environment: getFoundationEnv().environment,
     });
   } catch {
-    /* ignored */
+    // monitoring-ignore: reporting is best-effort by design; a failure here
+    // must not surface to, or replace, whatever the caller was handling.
   }
 }
 
@@ -333,7 +366,9 @@ export function installRejectionTracker(): void {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     defaults = require('react-native/Libraries/promiseRejectionTrackingOptions').default ?? {};
   } catch {
-    /* report without the redbox */
+    // monitoring-ignore: a React Native internal path. Losing the dev-time
+    // redbox on an upgrade is an annoyance; losing the reporting below would
+    // be the bug this function exists to fix, so it proceeds without them.
   }
 
   try {
@@ -347,7 +382,8 @@ export function installRejectionTracker(): void {
     });
     rejectionTrackerInstalled = true;
   } catch {
-    /* ignored */
+    // monitoring-ignore: reporting is best-effort by design; a failure here
+    // must not surface to, or replace, whatever the caller was handling.
   }
 }
 
@@ -387,7 +423,8 @@ export async function initMonitoring(): Promise<void> {
       await an.setUserId(instance, supportCode);
     }
   } catch {
-    /* ignored */
+    // monitoring-ignore: reporting is best-effort by design; a failure here
+    // must not surface to, or replace, whatever the caller was handling.
   }
 
   trackAnonymousBreadcrumb('app.launch');

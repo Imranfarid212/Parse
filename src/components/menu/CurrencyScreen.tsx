@@ -25,6 +25,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { currencyName, searchCurrencies, type Currency } from '@/lib/currencies';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { radius, spacing, typography } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 function Row({
   currency,
@@ -85,6 +86,7 @@ export function CurrencyScreen() {
     try {
       await auth.updateDefaultCurrency(code);
     } catch (caught) {
+      logSafeError(caught, 'settings.updateCurrency');
       // Inline rather than an Alert: the list stays visible, so the user can
       // simply tap again once they are back online.
       setError(caught instanceof Error ? caught.message : 'Could not save that currency.');

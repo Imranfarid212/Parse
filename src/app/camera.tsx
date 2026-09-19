@@ -24,7 +24,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { MenuPanel } from '@/components/MenuPanel';
+import { MenuPanel, menuTabIndex } from '@/components/MenuPanel';
 import { ReceiptReview } from '@/components/receipt/ReceiptReview';
 import { TapToFocusLayer, useFocusReticle } from '@/components/camera/TapToFocus';
 import { TrackingDebug, TrackingQuad, useDocumentTracking } from '@/components/camera/TrackingQuad';
@@ -58,11 +58,9 @@ import type { CaptureMode, DuplicateCandidate, ExtractionMode, LocalDuplicateCan
 import { EMPHASIZED, EMPHASIZED_SETTLE, FOLDER_IN_MS, FOLDER_OUT_MS } from '@/theme/motion';
 import { fontFamily, radius, spacing } from '@/theme/tokens';
 import { useAppAppearance } from '@/theme/appearance';
-import { logSafeError } from '@/lib/monitoring';
+import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
 
 type Mode = 'default' | 'oneclick';
-/** MenuPanel's TABS order: Export, Search, Plan, Settings. */
-const PLAN_TAB_INDEX = 2;
 
 /**
  * Every other reason a capture queues: throttled, a timeout, a 5xx, a slow
@@ -196,7 +194,7 @@ export default function CameraScreen() {
   const [mode, setMode] = useState<Mode>('default');
   const [extractionMode, setExtractionMode] = useState<ExtractionMode>('balanced');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuInitialTab, setMenuInitialTab] = useState(0);
+  const [menuInitialTab, setMenuInitialTab] = useState(menuTabIndex('search'));
   const [phase, setPhase] = useState<Phase>({ k: 'idle' });
   const [notice, setNotice] = useState<string | null>(null);
   const focus = useFocusReticle();
@@ -320,7 +318,7 @@ export default function CameraScreen() {
     },
     [menuProgress],
   );
-  const openRecents = () => openMenu(1);
+  const openRecents = () => openMenu(menuTabIndex('search'));
   const closeMenu = () => {
     menuProgress.value = withTiming(0, { duration: 560, easing: EMPHASIZED_SETTLE }, (f) => {
       if (f) runOnJS(setMenuOpen)(false);
@@ -456,7 +454,7 @@ export default function CameraScreen() {
       sellingMax ? COPY_PAYWALL_MAX_BODY : COPY_PAYWALL_PRO_BODY,
       [
         { text: 'OK', style: 'cancel' },
-        { text: 'Upgrade', onPress: () => openMenu(PLAN_TAB_INDEX) },
+        { text: 'Upgrade', onPress: () => openMenu(menuTabIndex('plan')) },
       ],
       { cancelable: true },
     );
@@ -518,23 +516,39 @@ export default function CameraScreen() {
             text: 'View Existing',
             onPress: () => {
               void (async () => {
-                await store.remove(currentRowId);
+                // Resolve the existing receipt BEFORE discarding this capture.
+                //
+                // The old order removed it first and looked up second, so a
+                // failed lookup left the user with neither: their fresh scan was
+                // gone and nothing opened. Discarding is only safe once there is
+                // something to show instead.
+                //
+                // This prompt carries the SERVER's candidate, so matchedReceiptId
+                // is a real receipt id. It can still be absent locally: the
+                // server matches across the whole account, including receipts
+                // from another device this one has not pulled yet.
                 const existing = await store.getByReceiptId(candidate.matchedReceiptId);
-                if (existing?.fields) {
-                  showExistingLocalReceipt(
-                    {
-                      ...candidate,
-                      matchedLocalRowId: existing.id,
-                      matchedImageUri: existing.imageUri,
-                      fields: existing.fields,
-                    },
-                    currentPhotoUri,
-                    startedAt,
-                  );
-                } else {
+
+                if (!existing?.fields) {
+                  // Keep the capture. Losing the new scan to show nothing is the
+                  // worst of the available outcomes, and it is recoverable only
+                  // by asking the user to photograph the receipt again.
                   setPhase({ k: 'idle' });
-                  flashNotice('Existing receipt is already saved');
+                  flashNotice('Could not open that receipt — keeping this scan');
+                  return;
                 }
+
+                await store.remove(currentRowId);
+                showExistingLocalReceipt(
+                  {
+                    ...candidate,
+                    matchedLocalRowId: existing.id,
+                    matchedImageUri: existing.imageUri,
+                    fields: existing.fields,
+                  },
+                  currentPhotoUri,
+                  startedAt,
+                );
               })();
             },
           },
@@ -606,7 +620,7 @@ export default function CameraScreen() {
         }
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
-            if (__DEV__) console.log('[camera] queued deferred outcome ready', { kind: finalOut.kind });
+            trackAnonymousBreadcrumb(`camera.deferredOutcome queued ${finalOut.kind}`);
             handleDefaultCaptureOutcome(finalOut, photoUri, startedAt, true);
           });
         }
@@ -662,7 +676,7 @@ export default function CameraScreen() {
         flashNotice(QUEUED_RETRY_TOAST);
         if (out.deferred) {
           void out.deferred.then((finalOut) => {
-            if (__DEV__) console.log('[camera] one-click precise deferred outcome ready', { kind: finalOut.kind });
+            trackAnonymousBreadcrumb(`camera.deferredOutcome precise ${finalOut.kind}`);
             handleOneClickCaptureOutcome(finalOut, photoUri, startedAt, true);
           });
         }

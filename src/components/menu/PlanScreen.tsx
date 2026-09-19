@@ -47,6 +47,7 @@ import { priceKey, usePlanOfferings } from '@/lib/billing/use-plan-offerings';
 import { getReferralSummary, peekReferralSummary, redeemReferral, shareReferral } from '@/lib/referrals/client';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 type Billing = Term;
 
@@ -160,6 +161,7 @@ export function PlanScreen() {
       referralRef.current = summary;
       setReferral(summary);
     } catch (error) {
+      logSafeError(error, 'referral.refresh');
       // A refresh failure must not contradict a valid summary already rendered
       // on screen (for example, "Referral already applied" plus a load error).
       // Keep the last confirmed server state and surface an error only when the
@@ -191,6 +193,7 @@ export function PlanScreen() {
         Alert.alert('Referral not applied', COPY_REFERRAL_BLOCKED);
       }
     } catch (error) {
+      logSafeError(error, 'referral.apply');
       const message = error instanceof Error ? error.message : 'Could not apply the referral code.';
       setReferralError(message);
     } finally {
@@ -212,6 +215,7 @@ export function PlanScreen() {
     try {
       await shareReferral(referral.code);
     } catch (error) {
+      logSafeError(error, 'referral.share');
       const message = error instanceof Error ? error.message : 'Could not open the share sheet. Please try again.';
       setReferralError(message);
       Alert.alert('Could not share invite', message);

@@ -66,7 +66,6 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
     CREATE INDEX IF NOT EXISTS idx_receipts_status  ON receipts (status);
     CREATE INDEX IF NOT EXISTS idx_receipts_retry   ON receipts (status, next_retry_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_receipts_created ON receipts (created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_receipts_user ON receipts (user_id);
     CREATE TABLE IF NOT EXISTS receipt_metric_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       payload TEXT NOT NULL,
@@ -147,6 +146,17 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   // Where the image lives on the server. A row restored from the server has no
   // local file, so this is the only way back to its photo.
   await ensureColumn(db, 'remote_image_path', 'ALTER TABLE receipts ADD COLUMN remote_image_path TEXT');
+
+  // Indexed only now, and deliberately not in the schema block above.
+  //
+  // `user_id` is not in CREATE TABLE -- it is added by ALTER TABLE, twenty lines
+  // down from where the schema is declared. Creating an index on it up there
+  // named a column that did not exist yet, which failed the ENTIRE execAsync
+  // statement, so every migration after it was skipped and the column was never
+  // added at all. Every query then raised `no such column: user_id` forever,
+  // on a fresh install as much as an upgrade, and each one was an unhandled
+  // rejection that nothing surfaced.
+  await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_user ON receipts (user_id);');
   await ensureTableColumn(db, 'sync_state', 'last_attempt_at', 'ALTER TABLE sync_state ADD COLUMN last_attempt_at INTEGER');
   await ensureTableColumn(db, 'sync_state', 'last_success_at', 'ALTER TABLE sync_state ADD COLUMN last_success_at INTEGER');
   await ensureTableColumn(db, 'sync_state', 'last_error', 'ALTER TABLE sync_state ADD COLUMN last_error TEXT');
@@ -418,6 +428,8 @@ function parseFingerprint(value: string | null | undefined): string[] {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed.filter((token): token is string => typeof token === 'string') : [];
   } catch {
+    // monitoring-ignore: A row whose stored JSON will not parse is treated as
+    // empty; the column is a cache, not the source of truth.
     return [];
   }
 }
@@ -960,7 +972,38 @@ const toFtsQuery = (text: string): string | null => {
 };
 
 /** Indexed, parameterized search over the hydrated local mirror. */
-export async function searchReceipts(query: {
+/**
+ * The currencies this account's receipts are actually denominated in, most used
+ * first.
+ *
+ * Read from `fields.currency`, not `default_currency`: the latter is the
+ * fallback the capture was made under, which is frequently not what the receipt
+ * says. `searchReceipts` filters on `$.currency`, so a currency absent from this
+ * list matches nothing — which is the whole argument against offering a
+ * free-text box for it. The same row predicates as the search are applied here
+ * so the offered set and the filterable set cannot drift.
+ */
+export async function listUsedCurrencies(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ currency: string | null }>(
+    // Normalised in SQL, not after: grouping on the raw value would make 'usd'
+    // and 'USD' two rows that collapse into one duplicated capsule in the UI.
+    `SELECT upper(trim(json_extract(r.fields, '$.currency'))) AS currency, COUNT(*) AS uses
+       FROM receipts r
+      WHERE ${owned('r')}
+        AND r.fields IS NOT NULL
+        AND r.receipt_id IS NOT NULL
+        AND r.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted')
+        AND nullif(trim(json_extract(r.fields, '$.currency')), '') IS NOT NULL
+      GROUP BY currency
+      ORDER BY uses DESC, currency ASC`,
+  );
+  return rows
+    .map((row) => (row.currency ?? '').trim().toUpperCase())
+    .filter((code) => /^[A-Z]{3}$/.test(code));
+}
+
+type ReceiptQuery = {
   text?: string;
   date_from?: string;
   date_to?: string;
@@ -968,16 +1011,34 @@ export async function searchReceipts(query: {
   amount_min?: number;
   amount_max?: number;
   amount_currency?: string;
-  limit?: number;
-}): Promise<LocalSearchResult[]> {
-  const db = await getDb();
+};
+
+/**
+ * The WHERE clause shared by every query that answers "which receipts do you
+ * mean".
+ *
+ * Extracted so a count and a search cannot answer it differently. A count that
+ * quietly used looser predicates would promise rows an export then failed to
+ * produce, which is worse than no count at all.
+ *
+ * The four standing clauses are not incidental. A row is only a receipt the user
+ * can act on once it belongs to this account, has been extracted, has reached
+ * the server, and is not on its way to being deleted.
+ */
+function receiptPredicates(query: ReceiptQuery): {
+  clauses: string[];
+  // The record half of SQLiteBindParams specifically: the published type is a
+  // union with an array form, which no key can be assigned to.
+  params: Record<string, SQLite.SQLiteBindValue>;
+  fts: string | null;
+} {
   const clauses = [
     owned('r'),
     "r.fields IS NOT NULL",
     "r.receipt_id IS NOT NULL",
     "r.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted')",
   ];
-  const params: SQLite.SQLiteBindParams = {};
+  const params: Record<string, SQLite.SQLiteBindValue> = {};
   const fts = query.text ? toFtsQuery(query.text) : null;
   if (fts) {
     clauses.push('receipt_search_fts MATCH $fts');
@@ -993,6 +1054,39 @@ export async function searchReceipts(query: {
     clauses.push(`r.category_id IN (${names.join(', ')})`);
     query.category_ids.forEach((id, index) => { params[`$category${index}`] = id; });
   }
+  return { clauses, params, fts };
+}
+
+/**
+ * How many receipts a set of filters actually matches.
+ *
+ * Unlimited on purpose: `searchReceipts` caps at 200 rows for rendering, and a
+ * count that inherited that cap would report "200" for every larger range and
+ * be wrong exactly when the number matters most.
+ */
+export async function countMatchingReceipts(query: ReceiptQuery): Promise<number> {
+  const db = await getDb();
+  const { clauses, params, fts } = receiptPredicates(query);
+  const join = fts ? 'JOIN receipt_search_fts ON receipt_search_fts.local_id = r.id' : '';
+  const row = await db.getFirstAsync<{ total: number }>(
+    `SELECT COUNT(*) AS total FROM receipts r ${join} WHERE ${clauses.join(' AND ')}`,
+    params,
+  );
+  return row?.total ?? 0;
+}
+
+export async function searchReceipts(query: {
+  text?: string;
+  date_from?: string;
+  date_to?: string;
+  category_ids?: number[];
+  amount_min?: number;
+  amount_max?: number;
+  amount_currency?: string;
+  limit?: number;
+}): Promise<LocalSearchResult[]> {
+  const db = await getDb();
+  const { clauses, params, fts } = receiptPredicates(query);
   params.$limit = Math.min(Math.max(query.limit ?? 200, 1), 200);
   const rank = fts ? 'bm25(receipt_search_fts, 0, 10, 4, 6)' : '0';
   const join = fts ? 'JOIN receipt_search_fts ON receipt_search_fts.local_id = r.id' : '';
@@ -1303,6 +1397,8 @@ export async function listQueuedCaptureMetrics(limit = 20): Promise<QueuedCaptur
     try {
       return [{ id: row.id, payload: JSON.parse(row.payload) as CaptureMetricsPayload, attempts: row.attempts, nextRetryAt: row.next_retry_at }];
     } catch {
+      // monitoring-ignore: An unparseable metrics payload is dropped rather than
+      // retried forever; the receipt itself is unaffected.
       return [];
     }
   });

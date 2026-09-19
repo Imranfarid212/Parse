@@ -7,6 +7,7 @@ import type { ManagedReceipt } from '@/lib/receipts/management';
 import type { Category, ReceiptFields } from '@/lib/receipts/types';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { fontFamily, spacing } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 export function ReceiptEditorModal({
   receipt,
@@ -39,6 +40,7 @@ export function ReceiptEditorModal({
       await onSave(fields);
       onClose();
     } catch (cause) {
+      logSafeError(cause, 'receipt.save');
       setError(cause instanceof Error ? cause.message : 'Could not save this receipt.');
     } finally {
       setSaving(false);

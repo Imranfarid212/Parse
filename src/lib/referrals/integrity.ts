@@ -31,13 +31,13 @@ async function edgeFunctionErrorMessage(error: unknown, fallback: string) {
   const context = (error as { context?: { clone?: () => unknown; json?: () => Promise<unknown> } } | null)?.context;
   let readable = context;
   if (typeof context?.clone === 'function') {
-    try { readable = context.clone() as typeof context; } catch { /* use the original response */ }
+    try { readable = context.clone() as typeof context; } catch { /* monitoring-ignore: use the original response */ }
   }
   if (typeof readable?.json === 'function') {
     try {
       const payload = await readable.json() as { message?: unknown } | null;
       if (typeof payload?.message === 'string') return payload.message;
-    } catch { /* use the safe fallback */ }
+    } catch { /* monitoring-ignore: use the safe fallback */ }
   }
   return fallback;
 }

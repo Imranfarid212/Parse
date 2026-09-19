@@ -27,6 +27,7 @@ export function useRealtimeReceipts(query: SearchQuery) {
       setReceipts(next);
       setError(null);
     } catch (cause) {
+      logSafeError(cause, 'receipts.load');
       if (request !== requestRef.current) return;
       setError(cause instanceof Error ? cause.message : 'Could not load receipts.');
     } finally {

@@ -28,6 +28,7 @@ function asErrorPayload(value: unknown): Record<string, unknown> | null {
     const parsed = JSON.parse(value) as unknown;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
   } catch {
+    // monitoring-ignore: Cached referral JSON that will not parse is refetched.
     return null;
   }
 }
@@ -48,16 +49,22 @@ async function functionErrorPayload(data: unknown, error: unknown) {
 
   let readable = context;
   if (typeof context.clone === 'function') {
-    try { readable = context.clone() as typeof context; } catch { /* use the original response */ }
+    try { readable = context.clone() as typeof context; } catch { /* monitoring-ignore: use the original response */ }
   }
   if (typeof readable.json === 'function') {
     try {
       const parsed = asErrorPayload(await readable.json());
       if (parsed) return parsed;
-    } catch { /* fall through to text when available */ }
+    } catch { /* monitoring-ignore: fall through to text when available */ }
   }
   if (typeof readable.text === 'function') {
-    try { return asErrorPayload(await readable.text()); } catch { return null; }
+    try {
+      return asErrorPayload(await readable.text());
+    } catch {
+      // monitoring-ignore: last resort in an error-message reader; there is
+      // nothing left to fall back to.
+      return null;
+    }
   }
   return null;
 }

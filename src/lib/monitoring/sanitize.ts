@@ -41,6 +41,8 @@ export function sanitizeMessage(input: unknown): string {
             try {
               return JSON.stringify(input) ?? String(input);
             } catch {
+              // monitoring-ignore: a value that will not serialise still has to yield
+              // a string; reporting here would recurse through the sanitiser.
               return String(input);
             }
           })();

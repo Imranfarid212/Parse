@@ -66,7 +66,7 @@ let diagnosisDetail: string | null = null;
 function setDiagnosis(next: BillingDiagnosis, detail?: unknown) {
   diagnosis = next;
   diagnosisDetail = detail == null ? null : detail instanceof Error ? detail.message : String(detail);
-  if (__DEV__ && next !== 'ok') console.warn(`[billing] ${next}`, diagnosisDetail ?? '');
+  if (next !== 'ok') logSafeError(new Error(`billing diagnosis: ${next} ${diagnosisDetail ?? ''}`), 'billing.diagnosis');
 }
 
 export function getBillingDiagnosis(): { code: BillingDiagnosis; detail: string | null } {
@@ -126,6 +126,7 @@ export async function ensureConfigured(): Promise<boolean> {
       setDiagnosis('ok');
       return true;
     } catch (error) {
+      logSafeError(error, 'billing.configure');
       // A missing native module surfaces here on some platforms instead.
       const message = error instanceof Error ? error.message : String(error);
       setDiagnosis(/native|NativeModule|null is not an object|undefined is not/i.test(message)
@@ -163,7 +164,7 @@ export async function forgetUser(): Promise<void> {
   try {
     await Purchases.logOut();
   } catch {
-    // logOut throws when the current user is already anonymous. Nothing to do.
+    // monitoring-ignore: logOut throws when the current user is already anonymous. Nothing to do.
   }
 }
 
@@ -195,6 +196,7 @@ export async function fetchOfferings(): Promise<Record<Offering, PurchasesOfferi
     if (!result.default && !result.promo) setDiagnosis('offerings_empty');
     return result;
   } catch (error) {
+    logSafeError(error, 'billing.offerings');
     setDiagnosis('offerings_error', error);
     return { default: null, promo: null };
   }
@@ -238,6 +240,7 @@ export async function restorePurchases(): Promise<PurchaseOutcome> {
     const customerInfo = await Purchases.restorePurchases();
     return { status: 'purchased', customerInfo };
   } catch (error) {
+    logSafeError(error, 'billing.restore');
     const message = error instanceof Error ? error.message : String(error);
     return { status: 'failed', message };
   }
@@ -248,6 +251,8 @@ export async function getCustomerInfo(): Promise<CustomerInfo | null> {
   try {
     return await Purchases.getCustomerInfo();
   } catch {
+    // monitoring-ignore: The caller treats null as "entitlements unknown" and fails
+    // closed; callers that care already report.
     return null;
   }
 }
@@ -290,6 +295,8 @@ export function safeManagementURL(url: string | null | undefined): string | null
     if (parsed.protocol !== 'https:') return null;
     return MANAGEMENT_HOSTS.test(parsed.hostname) ? url : null;
   } catch {
+    // monitoring-ignore: URL validation. A malformed management URL is rejected by
+    // returning null, which is the point of parsing it.
     return null;
   }
 }
@@ -351,7 +358,7 @@ export async function openManageSubscriptions(crossStoreURL?: string | null): Pr
         await Linking.openURL(fromSdk);
         return 'opened';
       } catch {
-        // Fall through to the generic page.
+        // monitoring-ignore: Fall through to the generic page.
       }
     }
   }

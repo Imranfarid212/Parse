@@ -38,6 +38,7 @@ import {
 } from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
 import { CATEGORIES, isCategory, type ReceiptFields, type ReceiptLineItem, type ReceiptStatus } from '@/lib/receipts/types';
+import { trackAnonymousBreadcrumb } from '@/lib/monitoring';
 
 const PAGE_SIZE = 200;
 /** Guard against an unbounded loop if the server keeps handing back full pages. */
@@ -172,7 +173,7 @@ async function runSyncFromServer(userId: string, categories: Category[]): Promis
     // Ours already. Rows left NULL by an upgrade are ours too — local_owner is
     // exactly the assurance that this device is this account's.
     const adopted = await store.adoptUnownedReceipts(userId);
-    if (adopted > 0 && __DEV__) console.warn(`[sync] stamped ${adopted} pre-existing local receipt(s)`);
+    if (adopted > 0) trackAnonymousBreadcrumb(`sync.adoptedUnowned ${adopted}`);
   } else if (owner !== null) {
     // A genuine account switch: a different user is recorded as the owner, so
     // everything here — rows, images, queued metrics — belongs to them.

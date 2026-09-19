@@ -116,6 +116,20 @@ check('rejection tracker is installed at init', () => {
   assert.ok(/logSafeError\(rejection, 'global.unhandledRejection'\)/.test(index), 'rejections are not reported');
 });
 
+console.log('\ncorrelation id:');
+check('only an opaque id is accepted, and only as a custom key', () => {
+  // The narrow exception to UUID redaction. It must stay narrow: shape-checked,
+  // and never interpolated into a message, or it becomes a hole in the
+  // sanitiser rather than a join key.
+  assert.ok(/correlation_id: context\.correlationId/.test(index), 'correlation id is not set as an attribute');
+  assert.ok(
+    /\/\^\[0-9a-f-\]\{8,64\}\$\/i\.test\(context\.correlationId\)/.test(index),
+    'correlation id is not shape-checked, so arbitrary text could pass through it',
+  );
+  const messagePath = index.slice(index.indexOf('const message = sanitizeMessage(error)'), index.indexOf('void api.setAttributes'));
+  assert.ok(!/correlationId/.test(messagePath), 'correlation id reaches the message path');
+});
+
 console.log('\nflow watchdogs:');
 const flows = fs.readFileSync(path.join(root, 'src/lib/monitoring/flows.ts'), 'utf8');
 
@@ -166,6 +180,34 @@ for (const file of srcFiles) {
     );
   });
 }
+
+console.log('\nsilent-catch guard:');
+const eslintConfig = fs.readFileSync(path.join(root, 'eslint.config.js'), 'utf8');
+check('the rule is an error, not a warning', () => {
+  assert.ok(
+    /'monitoring\/no-silent-catch':\s*'error'/.test(eslintConfig),
+    'downgraded to a warning, where it guards nothing',
+  );
+});
+
+const SUPPRESSION_BASELINE = 0;
+check('the backlog stays at zero', () => {
+  // The 48 inherited violations were worked through rather than baselined, so
+  // there is no suppressions file left. Its reappearance would mean a new silent
+  // catch was recorded instead of examined -- the one way this guard can be
+  // defeated without anyone noticing.
+  const file = path.join(root, 'eslint-suppressions.json');
+  if (!fs.existsSync(file)) return;
+  const suppressions = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const total = Object.values(suppressions)
+    .map((rules) => rules['monitoring/no-silent-catch']?.count ?? 0)
+    .reduce((a, b) => a + b, 0);
+  assert.equal(
+    total,
+    SUPPRESSION_BASELINE,
+    `${total} suppressed. Fix the catch rather than baselining it.`,
+  );
+});
 
 console.log('\nfirebase.json privacy flags:');
 const firebase = JSON.parse(fs.readFileSync(path.join(root, 'firebase.json'), 'utf8'))['react-native'];

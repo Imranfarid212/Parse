@@ -12,7 +12,7 @@
  * same sheet Search uses, so "what I searched" and "what I exported" cannot
  * mean two different things.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, Share, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
@@ -48,6 +48,8 @@ import {
 } from '@/lib/receipts/exports';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { radius, spacing, typography, type ColorTokens } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
+import { countMatchingReceipts } from '@/lib/receipts/store';
 
 type Preset = 'this' | 'last' | 'quarter' | 'all';
 
@@ -103,6 +105,8 @@ export function ExportScreen() {
   const [filters, setFilters] = useState<ReceiptFilters>(() => rangeFor('this'));
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [format, setFormat] = useState<ExportFormat>('pdf');
+  /** Collapsed by default: history is a reference, not the result of this run. */
+  const [showEarlier, setShowEarlier] = useState(false);
   const [includeScans, setIncludeScans] = useState(false);
   const [starting, setStarting] = useState(false);
 
@@ -113,6 +117,30 @@ export function ExportScreen() {
     [auth.categories, auth.selectedCategoryIds],
   );
   const summary = describeFilters(filters, categories);
+  /**
+   * How many receipts the current filters actually match. `null` while it is
+   * being counted, so the line can stay out of the way rather than flashing
+   * "0 receipts" before the real answer arrives -- which would be the one
+   * reading that stops someone pressing Generate.
+   */
+  const [matchCount, setMatchCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setMatchCount(null);
+    void countMatchingReceipts(filters)
+      .then((total) => {
+        if (alive) setMatchCount(total);
+      })
+      .catch((cause: unknown) => {
+        // The count is an aid, not a gate: Generate stays available and the
+        // server remains the authority on what the export contains.
+        logSafeError(cause, 'export.countReceipts');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [filters]);
 
   const applyPreset = (next: Preset) => {
     setPreset(next);
@@ -136,6 +164,7 @@ export function ExportScreen() {
       }
       await startExport({ filters, format, include_images: includeScans });
     } catch (cause) {
+      logSafeError(cause, 'export.start');
       Alert.alert('Export not started', cause instanceof Error ? cause.message : 'Try again in a moment.');
     } finally {
       setStarting(false);
@@ -147,6 +176,7 @@ export function ExportScreen() {
       const url = await createExportDownloadUrl(artifact);
       await WebBrowser.openBrowserAsync(url);
     } catch (cause) {
+      logSafeError(cause, 'export.download');
       Alert.alert('Download failed', cause instanceof Error ? cause.message : 'That file is no longer available.');
     }
   };
@@ -156,6 +186,7 @@ export function ExportScreen() {
       const url = await createExportDownloadUrl(artifact);
       await Share.share({ url, message: artifact.file_name });
     } catch (cause) {
+      logSafeError(cause, 'export.share');
       Alert.alert('Share failed', cause instanceof Error ? cause.message : 'That file is no longer available.');
     }
   };
@@ -164,6 +195,7 @@ export function ExportScreen() {
     try {
       await retryExportJob(job.id);
     } catch (cause) {
+      logSafeError(cause, 'export.retry');
       Alert.alert('Retry failed', cause instanceof Error ? cause.message : 'Try again in a moment.');
     }
   };
@@ -172,6 +204,7 @@ export function ExportScreen() {
     try {
       await repeatExport(job);
     } catch (cause) {
+      logSafeError(cause, 'export.repeat');
       Alert.alert('Export not started', cause instanceof Error ? cause.message : 'Try again in a moment.');
     }
   };
@@ -209,6 +242,17 @@ export function ExportScreen() {
               </View>
               <Feather name="chevron-right" size={16} color={colors.textFaint} />
             </Pressable>
+            {/* Answered before the export runs rather than after it returns an
+                empty file. Counted locally against the same predicates the
+                search uses, so it agrees with what Search shows for the same
+                filters. */}
+            {matchCount !== null ? (
+              <Text style={[styles.matchCount, matchCount === 0 && styles.matchCountEmpty]}>
+                {matchCount === 0
+                  ? 'No receipts match these filters'
+                  : `${matchCount} receipt${matchCount === 1 ? '' : 's'} found`}
+              </Text>
+            ) : null}
           </View>
 
           <Eyebrow style={{ marginLeft: spacing.xs, marginBottom: spacing.sm }}>Format</Eyebrow>
@@ -238,18 +282,55 @@ export function ExportScreen() {
 
       {jobs.length > 0 ? (
         <Animated.View entering={FadeInDown.duration(300)} style={styles.results}>
-          <Text style={styles.resultsHeading}>Your exports</Text>
-          {jobs.map((job) => (
-            <ExportJobRow
-              key={job.id}
-              job={job}
-              categories={categories}
-              onOpen={(artifact) => void openArtifact(artifact)}
-              onShare={(artifact) => void shareArtifact(artifact)}
-              onRetry={() => void onRetry(job)}
-              onRepeat={() => void onRepeat(job)}
-            />
-          ))}
+          {/* The newest export stands alone under its own heading, and the rest
+              are folded away.
+              Previously every export of the last seven days was rendered as an
+              identical card in one list directly beneath the Export button, so
+              a PDF export sitting above last week's Excel export read as a
+              single export that had produced both. One user ran the same PDF
+              export three times in seventy seconds before giving up. Downloads
+              stay live for seven days, so the older rows are genuinely useful —
+              they just must not look like part of what was asked for now. */}
+          <Text style={styles.resultsHeading}>Latest export</Text>
+          <ExportJobRow
+            key={jobs[0].id}
+            job={jobs[0]}
+            categories={categories}
+            onOpen={(artifact) => void openArtifact(artifact)}
+            onShare={(artifact) => void shareArtifact(artifact)}
+            onRetry={() => void onRetry(jobs[0])}
+            onRepeat={() => void onRepeat(jobs[0])}
+          />
+
+          {jobs.length > 1 ? (
+            <>
+              <Pressable
+                onPress={() => setShowEarlier((open) => !open)}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: showEarlier }}
+                style={({ pressed }) => [styles.earlierToggle, pressed && { opacity: 0.7 }]}
+              >
+                <Feather name={showEarlier ? 'chevron-down' : 'chevron-right'} size={16} color={colors.textSecondary} />
+                <Text style={styles.earlierText}>
+                  Earlier exports ({jobs.length - 1})
+                </Text>
+              </Pressable>
+
+              {showEarlier
+                ? jobs.slice(1).map((job) => (
+                    <ExportJobRow
+                      key={job.id}
+                      job={job}
+                      categories={categories}
+                      onOpen={(artifact) => void openArtifact(artifact)}
+                      onShare={(artifact) => void shareArtifact(artifact)}
+                      onRetry={() => void onRetry(job)}
+                      onRepeat={() => void onRepeat(job)}
+                    />
+                  ))
+                : null}
+            </>
+          ) : null}
         </Animated.View>
       ) : loading ? null : (
         <Text style={styles.emptyText}>Exports you generate will appear here.</Text>
@@ -350,8 +431,13 @@ function ExportJobRow({ job, categories, onOpen, onShare, onRetry, onRepeat }: {
         <Text style={styles.jobTitle}>Ready to download</Text>
       </View>
       <Text style={styles.jobContents} numberOfLines={2}>{contents}</Text>
+      {/* `describe` was in the queued and expired cards but not this one -- the
+          only state that actually offers a download. So the row handing a user
+          an .xlsx never said "Excel sheet", which is most of why a PDF export
+          with an older Excel export beneath it reads as one export producing
+          two files. */}
       <Text style={styles.jobMeta}>
-        {job.receipt_count ?? 0} receipt{job.receipt_count === 1 ? '' : 's'}
+        {describe} · {job.receipt_count ?? 0} receipt{job.receipt_count === 1 ? '' : 's'}
         {job.expires_at ? ` · Available until ${formatFilterDate(job.expires_at.slice(0, 10))}` : ''}
       </Text>
       {job.artifacts.map((artifact) => (
@@ -442,6 +528,20 @@ const useStyles = makeStyles((colors, elevation) => ({
 
   results: { marginTop: spacing.lg, gap: spacing.md },
   resultsHeading: { ...typography.row, color: colors.textPrimary, marginLeft: spacing.xs },
+  matchCount: { ...typography.meta, fontSize: 12, color: colors.textSecondary, marginLeft: spacing.xs },
+  // Muted rather than `danger`: an empty range is a true and unremarkable
+  // state the user can simply widen, not an error they have made.
+  matchCountEmpty: { color: colors.dangerMuted },
+  earlierToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.xs,
+    marginLeft: spacing.xs,
+    minHeight: 44,
+  },
+  earlierText: { ...typography.label, color: colors.textSecondary },
   emptyText: { marginTop: spacing.lg, textAlign: 'center', ...typography.meta, color: colors.textSecondary },
   errorText: { marginTop: spacing.md, textAlign: 'center', ...typography.meta, color: colors.danger },
 

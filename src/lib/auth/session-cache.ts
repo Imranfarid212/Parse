@@ -51,6 +51,8 @@ function parseJson<T>(raw: string | null, fallback: T): T {
     const parsed: unknown = JSON.parse(raw);
     return (parsed ?? fallback) as T;
   } catch {
+    // monitoring-ignore: A corrupt snapshot is replaced by the fallback and
+    // refetched; reporting it on every cold start would say nothing new.
     return fallback;
   }
 }
