@@ -962,6 +962,37 @@ const toFtsQuery = (text: string): string | null => {
 };
 
 /** Indexed, parameterized search over the hydrated local mirror. */
+/**
+ * The currencies this account's receipts are actually denominated in, most used
+ * first.
+ *
+ * Read from `fields.currency`, not `default_currency`: the latter is the
+ * fallback the capture was made under, which is frequently not what the receipt
+ * says. `searchReceipts` filters on `$.currency`, so a currency absent from this
+ * list matches nothing — which is the whole argument against offering a
+ * free-text box for it. The same row predicates as the search are applied here
+ * so the offered set and the filterable set cannot drift.
+ */
+export async function listUsedCurrencies(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ currency: string | null }>(
+    // Normalised in SQL, not after: grouping on the raw value would make 'usd'
+    // and 'USD' two rows that collapse into one duplicated capsule in the UI.
+    `SELECT upper(trim(json_extract(r.fields, '$.currency'))) AS currency, COUNT(*) AS uses
+       FROM receipts r
+      WHERE ${owned('r')}
+        AND r.fields IS NOT NULL
+        AND r.receipt_id IS NOT NULL
+        AND r.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted')
+        AND nullif(trim(json_extract(r.fields, '$.currency')), '') IS NOT NULL
+      GROUP BY currency
+      ORDER BY uses DESC, currency ASC`,
+  );
+  return rows
+    .map((row) => (row.currency ?? '').trim().toUpperCase())
+    .filter((code) => /^[A-Z]{3}$/.test(code));
+}
+
 export async function searchReceipts(query: {
   text?: string;
   date_from?: string;
