@@ -21,14 +21,20 @@ const MUTED = '#6B7280';
 const FAINT = '#E5E7EB';
 const TAG = '#F9FAFB';
 
-const HEADER_U = 72;
-// 72 + 360.6 + 88.4 + 8 = 529 at 340 wide — the same 0.64 ratio the onboarding
+const HEADER_U = 100;
+// 100 + 332.6 + 88.4 + 8 = 529 at 340 wide — the same 0.64 ratio the onboarding
 // card uses. At 176 the card came out 340x344, i.e. square, which is why it
 // read as a shrunk box rather than a receipt; ReceiptReview's own pre-measure
 // fallback (cardW * 1.5) had always assumed something near this.
+//
+// The four numbers are balanced against each other, not chosen independently:
+// giving HEADER_U its 28 units of breathing room came straight out of here, so
+// the total stays 529. Keep it that way — both the print-feed animation and the
+// search fan's card height are derived from this sum.
+//
 // It is a MINIMUM: a short receipt simply leaves white paper below, which is
 // what a real till roll does.
-const BODY_MIN_U = 360.6;
+const BODY_MIN_U = 332.6;
 const FOOTER_U = 88.4;
 const TEETH_U = 8;
 const MAX_ITEMS = 4;
@@ -92,9 +98,9 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
     <View style={{ width }}>
       <View style={{ borderTopLeftRadius: r, borderTopRightRadius: r, boxShadow: softShadow(s) }}>
         <View style={[styles.clip, { borderTopLeftRadius: r, borderTopRightRadius: r }]}>
-          <View style={{ height: headerH, paddingHorizontal: 24 * s, paddingBottom: 12 * s, justifyContent: 'flex-end', overflow: 'hidden' }}>
+          <View style={{ height: headerH, paddingHorizontal: 30 * s, paddingBottom: 12 * s, justifyContent: 'flex-end', overflow: 'hidden' }}>
             <BandFill w={bandW} h={headerH} keyline={keyline} />
-            <View style={[styles.headerContent, { left: 24 * s, right: 24 * s, bottom: 24 * s }]}>
+            <View style={[styles.headerContent, { left: 30 * s, right: 30 * s, bottom: 30 * s }]}>
               {fields ? (
                 <>
                   <Text numberOfLines={1} style={[styles.store, { fontSize: 22 * s }]}>
@@ -115,9 +121,9 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
           {/* No solid seam here: the header's dashed perforation already marks
               the boundary. The rule was only ever the bottom edge of the silver
               band, and once the paper was flattened it read as a stray line. */}
-          <View style={{ minHeight: bodyMinH, backgroundColor: paper.body, paddingHorizontal: 20 * s, paddingTop: 16 * s, paddingBottom: 14 * s }}>
+          <View style={{ minHeight: bodyMinH, backgroundColor: paper.body, paddingHorizontal: 26 * s, paddingTop: 20 * s, paddingBottom: 17 * s }}>
             <Text style={[styles.eyebrow, { fontSize: 12 * s }]}>ITEMS</Text>
-            <View style={{ marginTop: 8 * s, gap: 7 * s }}>
+            <View style={{ marginTop: 11 * s, gap: 9 * s }}>
               {!final ? (
                 <>
                   <View style={styles.itemRow}>
@@ -150,8 +156,8 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
               )}
             </View>
 
-            <View style={[styles.dashed, { marginTop: 12 * s }]} />
-            <View style={[styles.totalRow, { marginTop: 12 * s }]}>
+            <View style={[styles.dashed, { marginTop: 15 * s }]} />
+            <View style={[styles.totalRow, { marginTop: 15 * s }]}>
               <Text style={[styles.totalLabel, { fontSize: 19 * s }]}>Total</Text>
               {final && fields ? (
                 <Text style={[styles.total, { fontSize: 24 * s }]}>{money(fields.total, currency)}</Text>
@@ -161,7 +167,7 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
             </View>
 
             {final && fields?.handwritten_notes ? (
-              <View style={{ marginTop: 14 * s, gap: 8 * s }}>
+              <View style={{ marginTop: 17 * s, gap: 8 * s }}>
                 <Text style={[styles.eyebrow, { fontSize: 12 * s }]}>NOTES</Text>
                 <Text style={[styles.notes, { fontSize: 16 * s, lineHeight: 22 * s }]}>{fields.handwritten_notes}</Text>
               </View>
@@ -170,7 +176,7 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
             {/* marginTop auto: the chip sits at the foot of the paper, directly
                 above the footer's perforation and barcode, instead of floating
                 under the total with white space beneath it. */}
-            <View style={{ marginTop: 'auto', paddingTop: 14 * s, alignItems: 'center' }}>
+            <View style={{ marginTop: 'auto', paddingTop: 17 * s, alignItems: 'center' }}>
               {final && fields ? (
                 <View style={[styles.tag, { paddingHorizontal: 12 * s, paddingVertical: 6 * s }]}>
                   <Text numberOfLines={1} style={[styles.tagText, { fontSize: 15 * s }]}>
