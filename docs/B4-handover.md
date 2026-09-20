@@ -239,7 +239,10 @@ Adds to `public.receipts`:
 
 Contract types:
 
-- Must match `supabase gen types typescript --local`.
+- Must match `supabase gen types typescript --local --schema public`.
+- `--schema public` matters: without it the output includes the `storage` schema, whose
+  internal tables are created by the Supabase platform image rather than by this repo's
+  migrations, so the check drifts whenever that image changes and never on a commit here.
 - The B1 gate checks this exactly using `scripts/verify-b1-db.js`.
 - Important lesson: generate from local reset DB, not linked staging, before committing type updates.
 

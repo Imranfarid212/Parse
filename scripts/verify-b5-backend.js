@@ -43,6 +43,7 @@ const capture = read('src/lib/receipts/capture.ts');
 const camera = read('src/app/camera.tsx');
 const store = read('src/lib/receipts/store.ts');
 const search = read('src/components/search/SearchView.tsx');
+const management = read('src/lib/receipts/management.ts');
 const layout = read('src/app/_layout.tsx');
 
 includes(decisionLog, 'DL-004 - B5 uses hybrid provider fallback with durable server jobs', 'B5 decision logged before implementation');
@@ -100,7 +101,17 @@ includes(capture, 'store.markProviderDelayed', 'capture marks server-owned pendi
 includes(store, "'provider_delayed'", 'local store knows provider-delayed status');
 includes(store, "row.status === 'provider_delayed'", 'server sync may overwrite provider-delayed rows');
 includes(camera, 'COPY_PROVIDER_DELAY', 'camera uses canonical provider delay copy');
-includes(search, 'provider_delayed', 'Recents/Search show pending provider jobs');
+/**
+ * `provider_delayed` is a store status; the UI sees it as 'processing'.
+ *
+ * management.ts maps one to the other, so requiring the raw string in
+ * SearchView asserted an implementation detail that had moved. It was still
+ * catching something real, though: the mapped status was computed and then read
+ * by nobody, so a receipt the server had not finished looked exactly like a
+ * settled one. Both halves are asserted now -- the mapping, and the badge.
+ */
+includes(management, "row.status === 'provider_delayed' ? 'processing'", 'provider-delayed maps to a UI status');
+includes(search, "receipt.status === 'processing'", 'Recents/Search show pending provider jobs');
 includes(store, 'countProviderDelayed', 'store can identify server-owned pending jobs');
 includes(layout, 'ProviderDelayPoller', 'app polls while a provider-delayed receipt exists');
 includes(layout, 'syncFromServer(auth.user.id, auth.categories)', 'pending poll pulls completed jobs from the server');

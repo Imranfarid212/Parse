@@ -124,15 +124,37 @@ const FOLDER_W = 82;
 
 const toCaptureMode = (mode: Mode): CaptureMode => (mode === 'oneclick' ? 'one_click' : 'default');
 
+/**
+ * Optically matched icon sizes for the bottom controls row.
+ *
+ * A shared `size` does NOT render as a shared size: Ionicons glyphs fill their
+ * em box by different amounts, so at a nominal 26 the ink measures 22.70pt tall
+ * for images-outline but only 19.50pt for albums-outline -- the Default icon
+ * came out 14% shorter and 19% narrower than Gallery facing it across the row.
+ * These sizes normalise each glyph's *ink* height to Gallery's 22.70pt, which
+ * also equalises the gap down to the label (2.65 / 2.75 / 2.66pt) because the
+ * label is pinned to the button's bottom edge. Measured from Ionicons.ttf; if
+ * an icon here is swapped, re-measure rather than reusing a number.
+ */
+const ICON_PT = {
+  'images-outline': 26,
+  'albums-outline': 30,
+  'flash-outline': 24,
+} as const;
+
 /** Single tap toggles Default ↔ One click. Bottom-right of the controls row,
- *  mirroring the gallery button on the left; it keeps the Menu button's card
- *  styling (and its 56pt width, which is what balances the row). */
+ *  mirroring the gallery button on the left: bare icon over label, no card.
+ *  The card styling it used to borrow from the Menu button made it read as a
+ *  different class of control than the gallery button facing it across the row.
+ *  Menu keeps its card because it sits over the live preview and needs the
+ *  scrim; down here the row has the shutter and the toggle to anchor it. */
 function ModeButton({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
   const next = mode === 'default' ? 'oneclick' : 'default';
+  const icon = mode === 'default' ? 'albums-outline' : 'flash-outline';
   return (
-    <Pressable style={styles.menuCard} onPress={() => onChange(next)}>
-      <Ionicons name={mode === 'default' ? 'albums-outline' : 'flash-outline'} size={22} color="#fff" />
-      <Text style={styles.menuLabel}>{mode === 'default' ? 'Default' : 'One click'}</Text>
+    <Pressable style={[styles.sideBtn, styles.modeBtnRaise]} onPress={() => onChange(next)} hitSlop={12}>
+      <Ionicons name={icon} size={ICON_PT[icon]} color="#fff" style={styles.sideIcon} />
+      <Text numberOfLines={1} style={styles.sideLabel}>{mode === 'default' ? 'Default' : 'One click'}</Text>
     </Pressable>
   );
 }
@@ -1064,7 +1086,7 @@ export default function CameraScreen() {
           <View style={[styles.topRight, { top: insets.top + spacing.sm }]}>
             <Pressable style={styles.menuCard} onPress={() => openMenu()}>
               <Ionicons name="menu" size={22} color="#fff" />
-              <Text style={styles.menuLabel}>Menu</Text>
+              <Text style={styles.btnLabel}>Menu</Text>
             </Pressable>
           </View>
 
@@ -1088,7 +1110,8 @@ export default function CameraScreen() {
 
             <View style={styles.controlsRow}>
               <Pressable style={styles.sideBtn} onPress={onPickFromGallery} hitSlop={12}>
-                <Ionicons name="images-outline" size={26} color="#fff" />
+                <Ionicons name="images-outline" size={ICON_PT['images-outline']} color="#fff" style={styles.sideIcon} />
+                <Text numberOfLines={1} style={styles.sideLabel}>Gallery</Text>
               </Pressable>
 
               <ExtractionModeToggle mode={extractionMode} onChange={setExtractionMode} />
@@ -1160,7 +1183,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 2,
   },
-  menuLabel: { color: '#fff', fontSize: 11 },
+  btnLabel: { color: '#fff', fontSize: 11 },
 
   guideWrap: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
   guide: { width: '70%', aspectRatio: 0.72, borderWidth: 2, borderColor: 'rgba(255,255,255,0.6)', borderRadius: radius.md },
@@ -1173,7 +1196,37 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing.xl,
   },
+  // The icon is centred in the 56pt box and the label is taken out of flow
+  // beneath it, so the icon's centre -- not the centre of the icon-plus-label
+  // stack -- lands on the row's centre line, level with the Balanced/Precise
+  // text. In normal flow the label pushes the icon up by half its own height
+  // (8pt), which left the two end buttons visibly riding above the pill.
   sideBtn: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
+  // left/right 0 with centred text so a label wider than the icon ("One click")
+  // grows evenly either side instead of shifting off centre.
+  sideLabel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    color: '#fff',
+    fontSize: 11,
+    includeFontPadding: false,
+  },
+  // Android-only, and the same strip the search field does: this font carries
+  // lineGap 46, which Android adds above the glyph and scales with font size,
+  // so differently-sized icons land at slightly different heights. Only 0.18pt
+  // between 26 and 30 here, but it is pure noise in a row that is supposed to
+  // sit on one line.
+  sideIcon: { includeFontPadding: false },
+  // A deliberate 2pt lift of the whole Default/One-click button -- icon and
+  // label together -- dialled in by eye on device (4pt read as too high). It is
+  // a translate, not a margin, so it shifts what you see without disturbing the
+  // row's layout or the equal space-between gaps either side of the pill. Note
+  // this pushes the button off the geometric centre line its styles otherwise
+  // put it on: if the row ever looks high on the right, this is the line to drop.
+  modeBtnRaise: { transform: [{ translateY: -2 }] },
   capture: {
     width: 78,
     height: 78,

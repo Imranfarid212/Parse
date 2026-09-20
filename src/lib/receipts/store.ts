@@ -1090,9 +1090,13 @@ export async function searchReceipts(query: {
   params.$limit = Math.min(Math.max(query.limit ?? 200, 1), 200);
   const rank = fts ? 'bm25(receipt_search_fts, 0, 10, 4, 6)' : '0';
   const join = fts ? 'JOIN receipt_search_fts ON receipt_search_fts.local_id = r.id' : '';
+  // Search lists newest-scanned first, not newest-printed first: a receipt
+  // captured today carrying last month's date belongs at the top, because the
+  // user is looking for what they just scanned. The receipt's own date and the
+  // FTS rank stay on as tie-breakers for rows captured in the same instant.
   const order = fts
-    ? "rank ASC, json_extract(r.fields, '$.date') DESC, r.created_at DESC"
-    : "json_extract(r.fields, '$.date') DESC, r.created_at DESC";
+    ? "r.created_at DESC, rank ASC, json_extract(r.fields, '$.date') DESC"
+    : "r.created_at DESC, json_extract(r.fields, '$.date') DESC";
   const rows = await db.getAllAsync<Persisted & { search_rank: number }>(
     `SELECT r.*, ${rank} AS search_rank FROM receipts r ${join}
      WHERE ${clauses.join(' AND ')} ORDER BY ${order} LIMIT $limit`, params,
