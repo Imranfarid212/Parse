@@ -58,7 +58,7 @@ export function CategoryChecklist({ s, empty = false }: { s: number; empty?: boo
   const headerH = 97 * s; // tightened after moving the progress meter inline
   const footerH = 88.4 * s;
 
-  const keyline = headerKeylinePath(bandW, headerH, 18 * s);
+  const keyline = headerKeylinePath(bandW, headerH, 9 * s);
 
   return (
     <View style={styles.root}>

@@ -72,7 +72,7 @@ export function ReceiptCard({
           { width, shadowOpacity: 0.084, shadowRadius: 24 * k, shadowOffset: { width: 0, height: 12 } },
         ]}
       >
-        <View style={[styles.body, { height: height - zigH, borderTopLeftRadius: 18 * k, borderTopRightRadius: 18 * k }]}>
+        <View style={[styles.body, { height: height - zigH, borderTopLeftRadius: 9 * k, borderTopRightRadius: 9 * k }]}>
           {children(k)}
         </View>
         <View style={styles.zigzag}>
@@ -90,7 +90,7 @@ export function ReceiptCard({
   if (bare) {
     return (
       <View style={[styles.card, { width, shadowRadius: 20 * s }]}>
-        <View style={[styles.body, { height: height - toothH, borderTopLeftRadius: 18 * s, borderTopRightRadius: 18 * s, padding: pad }]}>
+        <View style={[styles.body, { height: height - toothH, borderTopLeftRadius: 9 * s, borderTopRightRadius: 9 * s, padding: pad }]}>
           <View style={{ flex: 1, borderRadius: 8 * s, backgroundColor: paper.tint }} />
         </View>
 
