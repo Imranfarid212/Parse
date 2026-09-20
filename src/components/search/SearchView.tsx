@@ -71,16 +71,12 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
   );
   const { receipts, setReceipts, loading, error, reload } = useRealtimeReceipts(query);
   const fanItems = useMemo<FanItem[]>(
+    // No reshaping: the card renders ReceiptFields directly, so a field added
+    // to a receipt reaches the card without a mapping step to forget to update.
     () => receipts.map((receipt) => ({
       id: receipt.id,
       total: formatTotal(receipt),
-      details: {
-        merchant: receipt.fields.store,
-        date: receipt.fields.date,
-        category: receipt.fields.category,
-        currency: receipt.fields.currency,
-        items: receipt.fields.items.map((item) => ({ name: item.name, amount: item.amount })),
-      },
+      fields: receipt.fields,
     })),
     [receipts],
   );
