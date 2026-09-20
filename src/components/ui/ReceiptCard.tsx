@@ -1,37 +1,28 @@
 /**
- * ReceiptCard — a paper-receipt-styled card (header, faint placeholder lines,
- * total, barcode, torn zigzag bottom). Content scales with `width` (via s) so
- * it reads correctly both large (onboarding) and small (search fan carousel).
+ * ReceiptCard — blank receipt PAPER: the card body, its shadow and the torn
+ * zigzag bottom, with no printed content of its own.
+ *
+ * It used to carry a second printed face as well — its own header, totals and
+ * barcode — which the Search fan rendered. That was a duplicate of ScannedFace
+ * in everything but the code, and the two drifted. The fan now renders
+ * ScannedFace directly, so the printed path is gone and this is only the paper
+ * that `children` prints onto.
  */
 import React from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
 
-import { Barcode } from '@/components/ui/Barcode';
 import { makeStyles, usePaper } from '@/theme/appearance';
 
 const ZIG = 16;
 
-export type ReceiptCardDetails = {
-  merchant: string;
-  date?: string | null;
-  category?: string | null;
-  currency?: string;
-  items?: { name: string; amount?: number }[];
-};
-
 export function ReceiptCard({
   width,
   height,
-  total = '45.60',
-  details,
   bare = false,
   children,
 }: {
   width: number;
   height: number;
-  total?: string;
-  /** Real receipt content used by Search without changing the paper design. */
-  details?: ReceiptCardDetails;
   /** Blank paper: no printed content (grey panel), unless `children` is given. */
   bare?: boolean;
   /** Printed face for the `bare` receipt. Receives the card's scale `s`. When
@@ -99,75 +90,6 @@ export function ReceiptCard({
     );
   }
 
-  return (
-    <View style={[styles.card, { width, shadowRadius: 20 * s }]}>
-      <View style={[styles.body, { height: height - toothH, borderTopLeftRadius: 8 * s, borderTopRightRadius: 8 * s, paddingHorizontal: pad, paddingTop: pad }]}>
-        <Text style={{ fontFamily: 'InstrumentSans_700Bold', fontSize: 34 * s, letterSpacing: 1 * s, color: '#111', textAlign: 'center' }}>
-          RECEIPT
-        </Text>
-        <Text style={{ textAlign: 'center', color: '#111', letterSpacing: 4 * s, marginTop: 2 * s, fontSize: 12 * s }}>* * * *</Text>
-
-        <View style={[styles.rule, { marginVertical: 14 * s }]} />
-        {details ? (
-          <>
-            <Text numberOfLines={1} style={{ fontFamily: 'InstrumentSans_700Bold', fontSize: 17 * s, color: '#111', textAlign: 'center' }}>
-              {details.merchant}
-            </Text>
-            <Text numberOfLines={1} style={{ fontFamily: 'InstrumentSans_400Regular', fontSize: 11 * s, color: paper.inkMuted, textAlign: 'center', marginTop: 4 * s }}>
-              {[details.date, details.category].filter(Boolean).join(' • ') || 'Receipt details'}
-            </Text>
-          </>
-        ) : (
-          <>
-            <View style={[styles.line, { width: '58%', height: 9 * s, borderRadius: 5 * s, alignSelf: 'center' }]} />
-            <View style={[styles.line, { width: '42%', height: 9 * s, borderRadius: 5 * s, alignSelf: 'center', marginTop: 6 * s }]} />
-          </>
-        )}
-
-        <View style={[styles.rule, { marginVertical: 14 * s }]} />
-        {details ? (
-          <View style={{ gap: 6 * s, minHeight: 39 * s, flexShrink: 1, overflow: 'hidden' }}>
-            {(details.items ?? []).slice(0, 3).map((item, index) => (
-              <View key={`${item.name}-${index}`} style={[styles.row, { alignItems: 'flex-start' }]}>
-                <Text numberOfLines={2} style={{ flex: 1, paddingRight: 6 * s, fontFamily: 'InstrumentSans_400Regular', fontSize: 14 * s, lineHeight: 17 * s, color: paper.inkStrong }}>
-                  {item.name}
-                </Text>
-                {item.amount !== undefined ? (
-                  <Text style={{ fontFamily: 'InstrumentSans_500Medium', fontSize: 14 * s, lineHeight: 17 * s, color: '#111', fontVariant: ['tabular-nums'] }}>
-                    {item.amount.toFixed(2)}
-                  </Text>
-                ) : null}
-              </View>
-            ))}
-            {(details.items?.length ?? 0) === 0 ? (
-              <Text style={{ fontFamily: 'InstrumentSans_400Regular', fontSize: 13 * s, color: paper.inkFaint, textAlign: 'center' }}>No line items</Text>
-            ) : null}
-          </View>
-        ) : (
-          <View style={styles.row}>
-            <View style={{ gap: 6 * s }}>
-              <View style={[styles.line, { width: 88 * s, height: 9 * s, borderRadius: 5 * s }]} />
-              <View style={[styles.line, { width: 60 * s, height: 9 * s, borderRadius: 5 * s }]} />
-            </View>
-            <View style={{ gap: 6 * s, alignItems: 'flex-end' }}>
-              <View style={[styles.line, { width: 48 * s, height: 9 * s, borderRadius: 5 * s }]} />
-              <View style={[styles.line, { width: 48 * s, height: 9 * s, borderRadius: 5 * s }]} />
-            </View>
-          </View>
-        )}
-
-        <View style={[styles.rule, { marginVertical: 14 * s }]} />
-        <Text style={{ textAlign: 'center', color: paper.inkFaint, fontSize: 13 * s, fontFamily: 'InstrumentSans_400Regular' }}>Total</Text>
-        <Text style={{ fontFamily: 'InstrumentSans_700Bold', fontSize: 30 * s, color: '#111', textAlign: 'center', marginTop: 2 * s }}>{total}</Text>
-
-        <View style={{ marginTop: 18 * s }}>
-          <Barcode s={s} />
-        </View>
-      </View>
-
-      {tornEdge}
-    </View>
-  );
 }
 
 const useStyles = makeStyles((colors, elevation, isDark, paper) => ({
