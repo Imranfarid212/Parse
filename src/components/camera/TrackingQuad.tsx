@@ -51,6 +51,19 @@ const MIN_CONFIDENCE = 0.5;
 const MAX_AREA = 0.5;
 const MIN_AREA = 0.04;
 /**
+ * Shape gate, applied ONLY while acquiring. Area alone said nothing about
+ * proportion, and every observed mis-lock — a palm plus the floor, a table edge
+ * — came back markedly WIDE, where a receipt is essentially always tall. Above
+ * this ratio a fresh detection is not eligible to become the lock.
+ *
+ * Acquisition-only is deliberate: once tracking a real page, the continuity
+ * gate already owns the decision, so this cannot break a good lock if the page
+ * is turned, and the cost of being wrong is no box rather than a confidently
+ * wrong one. A receipt held deliberately sideways will not acquire; that is the
+ * trade, and it is one constant to loosen if it ever matters.
+ */
+const MAX_ACQUIRE_ASPECT = 1.5;
+/**
  * Acquisition window. Before a lock exists, only a detection whose centre falls
  * within this much of the ANCHOR is accepted. The anchor is frame-centre by
  * default, or wherever the user last tapped — that's what makes a tap redirect
@@ -143,6 +156,17 @@ export type DocumentTracking = {
   frames: SharedValue<number>;
   hits: SharedValue<number>;
   lastConf: SharedValue<number>;
+  /**
+   * Geometry diagnostics. `fw/fh` is the UPRIGHT frame size native reports;
+   * `nw/nh` is the detected quad's bounding box in Vision's normalised space.
+   * Together they say whether a wrongly-shaped overlay came from the detector
+   * finding a wrongly-shaped region, or from the frame being mapped into the
+   * view with its axes transposed — which look identical on screen.
+   */
+  dbgFw: SharedValue<number>;
+  dbgFh: SharedValue<number>;
+  dbgNw: SharedValue<number>;
+  dbgNh: SharedValue<number>;
 };
 
 export function useDocumentTracking(): DocumentTracking {
@@ -154,6 +178,10 @@ export function useDocumentTracking(): DocumentTracking {
   const frames = useSharedValue(0);
   const hits = useSharedValue(0);
   const lastConf = useSharedValue(0);
+  const dbgFw = useSharedValue(0);
+  const dbgFh = useSharedValue(0);
+  const dbgNw = useSharedValue(0);
+  const dbgNh = useSharedValue(0);
   // Timestamp of the last frame we actually ran detection on (seconds).
   const lastDetectTs = useSharedValue(0);
   // Lock state carried between detections: the locked centre, the consecutive
@@ -196,6 +224,14 @@ export function useDocumentTracking(): DocumentTracking {
         if (q != null) {
           hits.value += 1;
           lastConf.value = q.confidence;
+          dbgFw.value = q.uprightWidth;
+          dbgFh.value = q.uprightHeight;
+          // Bounding box of the quad in Vision's own normalised space, before
+          // any view mapping touches it.
+          const xs = [q.topLeftX, q.topRightX, q.bottomRightX, q.bottomLeftX];
+          const ys = [q.topLeftY, q.topRightY, q.bottomRightY, q.bottomLeftY];
+          dbgNw.value = Math.max(...xs) - Math.min(...xs);
+          dbgNh.value = Math.max(...ys) - Math.min(...ys);
         }
         if (q == null) return;
         const prev = raw.value;
@@ -255,6 +291,9 @@ export function useDocumentTracking(): DocumentTracking {
       const vy = ny.map((v) => v * q.fh * scale - dy);
       const cx = (vx[0] + vx[1] + vx[2] + vx[3]) / 4;
       const cy = (vy[0] + vy[1] + vy[2] + vy[3]) / 4;
+      // Axis-aligned bounds of the quad, for the acquisition shape gate below.
+      const bbw = Math.max(vx[0], vx[1], vx[2], vx[3]) - Math.min(vx[0], vx[1], vx[2], vx[3]);
+      const bbh = Math.max(vy[0], vy[1], vy[2], vy[3]) - Math.min(vy[0], vy[1], vy[2], vy[3]);
 
       const st = track.value;
       if (!st.active) {
@@ -263,6 +302,9 @@ export function useDocumentTracking(): DocumentTracking {
         // lets a tap choose the target.
         const a = anchor.value;
         if (Math.abs(cx / L.w - a.x) > CENTER_X_TOL || Math.abs(cy / L.h - a.y) > CENTER_Y_TOL) return;
+        // Too wide to be a receipt — almost certainly the hand, the desk or the
+        // floor rather than the page.
+        if (bbh <= 0 || bbw / bbh > MAX_ACQUIRE_ASPECT) return;
       } else {
         // Tracking: a detection whose centre jumped too far is a mis-lock —
         // ignore it OUTRIGHT, never blend, unless it has insisted REJECT_MAX
@@ -371,6 +413,10 @@ export function useDocumentTracking(): DocumentTracking {
     frames,
     hits,
     lastConf,
+    dbgFw,
+    dbgFh,
+    dbgNw,
+    dbgNh,
   };
 }
 
@@ -386,23 +432,36 @@ export function useDocumentTracking(): DocumentTracking {
  *  hits + good conf, still no quad     → the view mapping / render is at fault
  */
 export function TrackingDebug({ tracking }: { tracking: DocumentTracking }) {
-  const [s, setS] = useState({ frames: 0, hits: 0, conf: 0 });
+  const [s, setS] = useState({ frames: 0, hits: 0, conf: 0, fw: 0, fh: 0, nw: 0, nh: 0 });
   useEffect(() => {
     const id = setInterval(() => {
       setS({
         frames: Math.round(tracking.frames.value),
         hits: Math.round(tracking.hits.value),
         conf: tracking.lastConf.value,
+        fw: Math.round(tracking.dbgFw.value),
+        fh: Math.round(tracking.dbgFh.value),
+        nw: tracking.dbgNw.value,
+        nh: tracking.dbgNh.value,
       });
     }, 400);
     return () => clearInterval(id);
   }, [tracking]);
+
+  // Pixel aspect of the detected region: the normalised box scaled back up by
+  // the frame it came from. Above 1 is landscape. Holding a portrait receipt,
+  // this should read well below 1 — if it does and the overlay is still wide,
+  // the fault is in the view mapping, not the detector.
+  const px = s.fh > 0 && s.nh > 0 ? (s.nw * s.fw) / (s.nh * s.fh) : 0;
 
   return (
     <View style={styles.debug} pointerEvents="none">
       <Text style={styles.debugText}>
         plugin {tracking.available ? 'YES' : 'NO'} · frames {s.frames} · pages {s.hits} · conf{' '}
         {s.conf.toFixed(2)}
+        {'\n'}frame {s.fw}x{s.fh} {s.fw > s.fh ? '(LANDSCAPE)' : '(portrait)'}
+        {'\n'}norm {s.nw.toFixed(2)}x{s.nh.toFixed(2)} · px aspect {px.toFixed(2)}{' '}
+        {px > 1 ? '(wide)' : '(tall)'}
       </Text>
     </View>
   );
