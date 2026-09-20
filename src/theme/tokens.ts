@@ -161,7 +161,10 @@ export const darkColors = {
  */
 export const lightPaper = {
   body: '#FFFFFF',
-  band: ['#e2e3e4', '#eef0f0', '#f7f8f8', '#eff0f0', '#dee0e1'],
+  /** Flat: the silver sheen was removed: the torn edge, perforation and
+   *  barcode carry the receipt read on their own. Five identical stops keep
+   *  BandFill's gradient machinery intact so it can be restored in one line. */
+  band: ['#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF'],
   seam: '#c4c6ca',
   dash: '#b1b3b8',
   headerStroke: '#9099a1',
@@ -194,7 +197,8 @@ export type PaperTokens = {
 
 export const darkPaper = {
   body: '#C2C2C2',
-  band: ['#ACADAD', '#B5B6B6', '#BCBCBC', '#B6B6B6', '#A9AAAB'],
+  /** Flat, matching `body`: see lightPaper.band. */
+  band: ['#C2C2C2', '#C2C2C2', '#C2C2C2', '#C2C2C2', '#C2C2C2'],
   seam: '#95969A',
   dash: '#87888C',
   headerStroke: '#6D747A',

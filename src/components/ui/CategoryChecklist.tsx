@@ -22,16 +22,15 @@ const DESIGN_W = 340;
 // seam, dash, keyline — lives in receiptTheme so it stays in sync with the
 // review card).
 const GREEN = '#0e7043'; // selected check circle, filled progress dots
-const GREEN_TEXT = '#1b5e3b'; // "YOUR CATEGORIES"
-const SPARKLE = '#4d4742'; // ✦ glyphs
 const TITLE_INK = '#1a1714'; // "Expense categories"
 const MUTED = '#8a877e'; // counts
-const SELECTED_TEXT = '#111827'; // selected row label — dark, bold, draws the eye
-const UNSELECTED_TEXT = '#6b7280'; // unselected row label — subtle grey
+const ROW_TEXT = '#111827'; // every row label — selection is carried by the circle alone
 const OUTLINE = '#d1d5db'; // empty (unselected) circle outline
-const ROW_BORDER = '#f0eeeb'; // row dividers
 
-const ITEMS = ['Travel & Gas', 'Meals and Entertainment', 'Office & Software', 'Professional Fees', 'Marketing Expenses', 'Miscellaneous'];
+// The first five defaults from packages/contracts fixtures, plus the system
+// fallback — the same names the real picker shows. A preview card advertising
+// categories that do not exist is worse than no preview.
+const ITEMS = ['Travel & Transit', 'Meals & Entertainment', 'Office Supplies', 'Software & IT', 'Vehicle Expenses', 'Miscellaneous'];
 const DONE = 3; // first 3 rows selected (checked green); rest unselected
 const NUM_DOTS = 18;
 const FILLED_DOTS = Math.round((DONE / ITEMS.length) * NUM_DOTS); // meter tracks DONE (3/6 → 9)
@@ -68,14 +67,16 @@ export function CategoryChecklist({ s, empty = false }: { s: number; empty?: boo
       <View style={{ height: headerH, paddingHorizontal: 24 * s, paddingTop: 24 * s, paddingBottom: 12 * s, gap: 12 * s, overflow: 'hidden' }}>
         <BandFill w={bandW} h={headerH} keyline={keyline} />
 
-        <Text style={{ textAlign: 'center', fontFamily: fontFamily.semibold, fontSize: 13 * s, letterSpacing: 0.8 * s, textTransform: 'uppercase' }}>
-          <Text style={{ color: SPARKLE }}>✦ </Text>
-          <Text style={{ color: GREEN_TEXT }}>YOUR CATEGORIES</Text>
-          <Text style={{ color: SPARKLE }}> ✦</Text>
+        {/* Type is deliberately NOT multiplied by `s`. This card is a 340-wide
+            Figma artboard scaled to fit, and scaling the type with it dropped
+            every label off the app's scale — rows landed at 12.5pt against the
+            real picker's 15pt. Geometry still scales; type does not. */}
+        <Text style={{ fontFamily: fontFamily.semibold, fontSize: 12, letterSpacing: 0.6, textTransform: 'uppercase', color: paper.inkFaint }}>
+          Your categories
         </Text>
 
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <Text style={{ fontFamily: fontFamily.medium, fontSize: 16 * s, color: TITLE_INK }}>Expense categories</Text>
+          <Text style={{ fontFamily: fontFamily.semibold, fontSize: 16, color: TITLE_INK }}>Expense categories</Text>
           {/* Modern segmented progress meter — thin vertical bars, inline to the
               right of the label and left of the count. */}
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginHorizontal: 10 * s }}>
@@ -86,7 +87,7 @@ export function CategoryChecklist({ s, empty = false }: { s: number; empty?: boo
               />
             ))}
           </View>
-          <Text style={{ fontFamily: fontFamily.semibold, fontSize: 13 * s, color: MUTED }}>
+          <Text style={{ fontFamily: fontFamily.semibold, fontSize: 13, color: MUTED }}>
             {DONE}/{ITEMS.length}
           </Text>
         </View>
@@ -113,16 +114,16 @@ export function CategoryChecklist({ s, empty = false }: { s: number; empty?: boo
           {ITEMS.map((label, i) => {
             const selected = i < DONE;
             return (
-              <View key={label} style={{ height: ROW_H * s, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 * s, borderBottomWidth: 1, borderBottomColor: ROW_BORDER }}>
+              <View key={label} style={{ height: ROW_H * s, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20 * s, borderBottomWidth: 1, borderBottomColor: paper.rule }}>
                 <Circle selected={selected} s={s} />
                 <Text
                   numberOfLines={1}
                   style={{
                     flex: 1,
                     marginLeft: 14 * s,
-                    fontFamily: selected ? fontFamily.semibold : fontFamily.regular,
-                    fontSize: 13.5 * s,
-                    color: selected ? SELECTED_TEXT : UNSELECTED_TEXT,
+                    fontFamily: fontFamily.semibold,
+                    fontSize: 15,
+                    color: ROW_TEXT,
                   }}
                 >
                   {label}
