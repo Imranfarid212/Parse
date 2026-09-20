@@ -57,7 +57,10 @@
   "submit": {
     "production": {},
     "testflight": {
-      "extends": "production"
+      "extends": "production",
+      "ios": {
+        "ascAppId": "6799488925"
+      }
     }
   }
 }
