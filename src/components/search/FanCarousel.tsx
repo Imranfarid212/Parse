@@ -8,14 +8,19 @@ import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-na
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
-import { ReceiptCard, type ReceiptCardDetails } from '@/components/ui/ReceiptCard';
+import { ScannedFace, scannedFaceHeight } from '@/components/receipt/ScannedFace';
+import type { ReceiptFields } from '@/lib/receipts/types';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { radius, spacing, typography } from '@/theme/tokens';
 
-export type FanItem = { id: string; total: string; details: ReceiptCardDetails };
+export type FanItem = { id: string; total: string; fields: ReceiptFields };
 
 const CARD_W = 168;
-const CARD_H = 280;
+// Derived, not chosen: the fan shows the same face the review screen does, so
+// its height has to be whatever that face measures at this width. A card
+// design that exists in one place can only look right in one place if the
+// geometry comes from the same source too.
+const CARD_H = scannedFaceHeight(CARD_W);
 const MAX_VISIBLE_CARDS = 5;
 const CENTER_SLOT = Math.floor(MAX_VISIBLE_CARDS / 2);
 const SWIPE_THRESHOLD = 60;
@@ -75,11 +80,11 @@ function FanCard({ item, slot, activeSlot, left, active, onPress }: {
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${item.details.merchant}, ${item.total}${active ? ', tap to edit' : ', tap to select'}`}
+        accessibilityLabel={`${item.fields.store}, ${item.total}${active ? ', tap to edit' : ', tap to select'}`}
         onPress={onPress}
         style={StyleSheet.absoluteFill}
       >
-        <ReceiptCard width={CARD_W} height={CARD_H} total={item.total} details={item.details} />
+        <ScannedFace width={CARD_W} fields={item.fields} />
       </Pressable>
     </Animated.View>
   );
@@ -194,7 +199,7 @@ export function FanCarousel({ items, onOpenItem, onDeleteItem }: {
             </Pressable>
           ) : null}
           {onDeleteItem ? (
-            <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${selectedItem.details.merchant}`} onPress={() => onDeleteItem(selectedItem.id)} style={styles.deleteButton} hitSlop={6}>
+            <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${selectedItem.fields.store}`} onPress={() => onDeleteItem(selectedItem.id)} style={styles.deleteButton} hitSlop={6}>
               <Ionicons name="trash-outline" size={17} color={colors.danger} />
             </Pressable>
           ) : null}

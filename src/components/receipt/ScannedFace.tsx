@@ -21,8 +21,20 @@ const MUTED = '#6B7280';
 const FAINT = '#E5E7EB';
 const TAG = '#F9FAFB';
 
-const HEADER_U = 72;
-const BODY_MIN_U = 176;
+const HEADER_U = 100;
+// 100 + 332.6 + 88.4 + 8 = 529 at 340 wide — the same 0.64 ratio the onboarding
+// card uses. At 176 the card came out 340x344, i.e. square, which is why it
+// read as a shrunk box rather than a receipt; ReceiptReview's own pre-measure
+// fallback (cardW * 1.5) had always assumed something near this.
+//
+// The four numbers are balanced against each other, not chosen independently:
+// giving HEADER_U its 28 units of breathing room came straight out of here, so
+// the total stays 529. Keep it that way — both the print-feed animation and the
+// search fan's card height are derived from this sum.
+//
+// It is a MINIMUM: a short receipt simply leaves white paper below, which is
+// what a real till roll does.
+const BODY_MIN_U = 332.6;
 const FOOTER_U = 88.4;
 const TEETH_U = 8;
 const MAX_ITEMS = 4;
@@ -70,7 +82,7 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
   const paper = usePaper();
   const styles = useStyles();
   const s = width / 340;
-  const r = 18 * s;
+  const r = 9 * s;
   const bandW = width;
   const headerH = HEADER_U * s;
   const bodyMinH = BODY_MIN_U * s;
@@ -86,15 +98,15 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
     <View style={{ width }}>
       <View style={{ borderTopLeftRadius: r, borderTopRightRadius: r, boxShadow: softShadow(s) }}>
         <View style={[styles.clip, { borderTopLeftRadius: r, borderTopRightRadius: r }]}>
-          <View style={{ height: headerH, paddingHorizontal: 24 * s, paddingBottom: 12 * s, justifyContent: 'flex-end', overflow: 'hidden' }}>
+          <View style={{ height: headerH, paddingHorizontal: 30 * s, paddingBottom: 12 * s, justifyContent: 'flex-end', overflow: 'hidden' }}>
             <BandFill w={bandW} h={headerH} keyline={keyline} />
-            <View style={[styles.headerContent, { left: 24 * s, right: 24 * s, bottom: 24 * s }]}>
+            <View style={[styles.headerContent, { left: 30 * s, right: 30 * s, bottom: 30 * s }]}>
               {fields ? (
                 <>
-                  <Text numberOfLines={1} style={[styles.store, { fontSize: 19 * s }]}>
+                  <Text numberOfLines={1} style={[styles.store, { fontSize: 22 * s }]}>
                     {fields.store || 'Unknown store'}
                   </Text>
-                  <Text style={[styles.date, { fontSize: 11 * s, marginTop: 3 * s }]}>{prettyDate(fields.date)}</Text>
+                  <Text style={[styles.date, { fontSize: 14 * s, marginTop: 3 * s }]}>{prettyDate(fields.date)}</Text>
                 </>
               ) : (
                 <View style={{ gap: 7 * s }}>
@@ -106,11 +118,12 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
             <DashedLine s={s} />
           </View>
 
-          <View style={{ height: 1, backgroundColor: paper.seam }} />
-
-          <View style={{ minHeight: bodyMinH, backgroundColor: paper.body, paddingHorizontal: 20 * s, paddingTop: 16 * s, paddingBottom: 14 * s }}>
-            <Text style={[styles.eyebrow, { fontSize: 10 * s }]}>ITEMS</Text>
-            <View style={{ marginTop: 8 * s, gap: 7 * s }}>
+          {/* No solid seam here: the header's dashed perforation already marks
+              the boundary. The rule was only ever the bottom edge of the silver
+              band, and once the paper was flattened it read as a stray line. */}
+          <View style={{ minHeight: bodyMinH, backgroundColor: paper.body, paddingHorizontal: 26 * s, paddingTop: 20 * s, paddingBottom: 17 * s }}>
+            <Text style={[styles.eyebrow, { fontSize: 12 * s }]}>ITEMS</Text>
+            <View style={{ marginTop: 11 * s, gap: 9 * s }}>
               {!final ? (
                 <>
                   <View style={styles.itemRow}>
@@ -131,39 +144,42 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
                   {shown.map((item, i) => {
                     return (
                       <View key={`${item.name}-${i}`} style={styles.itemRow}>
-                        <Text numberOfLines={1} style={[styles.itemName, { fontSize: 14 * s }]}>
+                        <Text numberOfLines={1} style={[styles.itemName, { fontSize: 18 * s }]}>
                           {item.qty !== 1 ? `${item.qty} × ` : ''}{item.name}
                         </Text>
-                        <Text style={[styles.itemPrice, { fontSize: 14 * s }]}>{money(item.amount, currency)}</Text>
+                        <Text style={[styles.itemPrice, { fontSize: 18 * s }]}>{money(item.amount, currency)}</Text>
                       </View>
                     );
                   })}
-                  {hidden > 0 ? <Text style={[styles.more, { fontSize: 12 * s }]}>+{hidden} more</Text> : null}
+                  {hidden > 0 ? <Text style={[styles.more, { fontSize: 14 * s }]}>+{hidden} more</Text> : null}
                 </>
               )}
             </View>
 
-            <View style={[styles.dashed, { marginTop: 12 * s }]} />
-            <View style={[styles.totalRow, { marginTop: 12 * s }]}>
-              <Text style={[styles.totalLabel, { fontSize: 15 * s }]}>Total</Text>
+            <View style={[styles.dashed, { marginTop: 15 * s }]} />
+            <View style={[styles.totalRow, { marginTop: 15 * s }]}>
+              <Text style={[styles.totalLabel, { fontSize: 19 * s }]}>Total</Text>
               {final && fields ? (
-                <Text style={[styles.total, { fontSize: 17 * s }]}>{money(fields.total, currency)}</Text>
+                <Text style={[styles.total, { fontSize: 24 * s }]}>{money(fields.total, currency)}</Text>
               ) : (
                 <Placeholder width={82 * s} height={12} s={s} />
               )}
             </View>
 
             {final && fields?.handwritten_notes ? (
-              <View style={{ marginTop: 14 * s, gap: 8 * s }}>
-                <Text style={[styles.eyebrow, { fontSize: 10 * s }]}>NOTES</Text>
-                <Text style={[styles.notes, { fontSize: 13 * s, lineHeight: 18 * s }]}>{fields.handwritten_notes}</Text>
+              <View style={{ marginTop: 17 * s, gap: 8 * s }}>
+                <Text style={[styles.eyebrow, { fontSize: 12 * s }]}>NOTES</Text>
+                <Text style={[styles.notes, { fontSize: 16 * s, lineHeight: 22 * s }]}>{fields.handwritten_notes}</Text>
               </View>
             ) : null}
 
-            <View style={{ marginTop: 14 * s, alignItems: 'center' }}>
+            {/* marginTop auto: the chip sits at the foot of the paper, directly
+                above the footer's perforation and barcode, instead of floating
+                under the total with white space beneath it. */}
+            <View style={{ marginTop: 'auto', paddingTop: 17 * s, alignItems: 'center' }}>
               {final && fields ? (
                 <View style={[styles.tag, { paddingHorizontal: 12 * s, paddingVertical: 6 * s }]}>
-                  <Text numberOfLines={1} style={[styles.tagText, { fontSize: 11.5 * s }]}>
+                  <Text numberOfLines={1} style={[styles.tagText, { fontSize: 15 * s }]}>
                     {fields.category}
                   </Text>
                 </View>
@@ -207,14 +223,18 @@ const useStyles = makeStyles((colors, elevation, isDark, paper) => ({
   date: { fontFamily: fontFamily.semibold, color: MUTED, letterSpacing: 0.9 },
   eyebrow: { fontFamily: fontFamily.display, letterSpacing: 1.3, color: '#9CA3AF' },
   itemRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  itemName: { flex: 1, fontFamily: fontFamily.regular, color: INK },
-  itemPrice: { fontFamily: fontFamily.semibold, color: INK, letterSpacing: 0.6 },
-  more: { fontFamily: fontFamily.semibold, color: '#9CA3AF' },
+  // Weights step up one rung where the loaded ladder allows. Only 400/500/600/
+  // 700 exist, and tokens.ts forbids stacking fontWeight on a named family
+  // (faux-bold), so `eyebrow`, `totalLabel` and `total` stay at display — they
+  // are already the heaviest face in the build.
+  itemName: { flex: 1, fontFamily: fontFamily.medium, color: INK },
+  itemPrice: { fontFamily: fontFamily.display, color: INK, letterSpacing: 0.6 },
+  more: { fontFamily: fontFamily.display, color: '#9CA3AF' },
   dashed: { borderTopWidth: 1, borderStyle: 'dashed', borderTopColor: FAINT },
   totalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   totalLabel: { fontFamily: fontFamily.display, color: INK, letterSpacing: 0.6 },
   total: { fontFamily: fontFamily.display, color: INK, letterSpacing: 0.5 },
-  notes: { fontFamily: fontFamily.regular, color: MUTED },
+  notes: { fontFamily: fontFamily.medium, color: MUTED },
   tag: { alignSelf: 'center', backgroundColor: TAG, borderWidth: 1, borderColor: FAINT, borderRadius: 999 },
-  tagText: { fontFamily: fontFamily.semibold, color: '#374151' },
+  tagText: { fontFamily: fontFamily.display, color: '#374151' },
 }));
