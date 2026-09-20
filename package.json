@@ -11,13 +11,19 @@
     "@expo/ngrok": "^4.1.0",
     "@expo/ui": "~57.0.11",
     "@expo/vector-icons": "^15.0.2",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-firebase/analytics": "^26.4.0",
+    "@react-native-firebase/app": "^26.4.0",
+    "@react-native-firebase/crashlytics": "^26.4.0",
     "@shopify/react-native-skia": "2.6.2",
     "@supabase/supabase-js": "^2.110.7",
     "document-tracker": "file:modules/document-tracker",
     "expo": "~57.0.13",
     "expo-apple-authentication": "~57.0.1",
+    "expo-application": "~57.0.3",
     "expo-auth-session": "~57.0.7",
     "expo-blur": "~57.0.2",
+    "expo-build-properties": "~57.0.21",
     "expo-camera": "~57.0.3",
     "expo-constants": "~57.0.3",
     "expo-crypto": "~57.0.1",
@@ -60,13 +66,14 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "asn1js": "3.0.10",
+    "@types/node": "^26.6.2",
     "@types/react": "~19.2.2",
+    "asn1js": "3.0.10",
     "cbor": "10.0.12",
     "eslint": "^9.39.5",
     "eslint-config-expo": "~57.0.1",
-    "pkijs": "3.4.0",
     "pg": "^8.22.0",
+    "pkijs": "3.4.0",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -146,7 +153,10 @@
     "b9:all": "npm run b9:app && npm run b9:backend && npm run b9:deno && npm run b9:db:verify",
     "b9:influencer:seed": "node scripts/seed-b9-influencer.js",
     "pods": "cd ios && LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install",
-    "prebuild:ios": "npx expo prebuild --platform ios && npm run pods"
+    "prebuild:ios": "npx expo prebuild --platform ios && npm run pods",
+    "verify:monitoring": "node --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-monitoring.js",
+    "sourcemaps": "expo export --platform all --source-maps --output-dir build/sourcemaps",
+    "symbolicate": "metro-symbolicate"
   },
   "private": true
 }

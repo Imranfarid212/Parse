@@ -116,6 +116,12 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   await ensureColumn(db, 'extraction_mode', "ALTER TABLE receipts ADD COLUMN extraction_mode TEXT NOT NULL DEFAULT 'balanced'");
   await ensureColumn(db, 'default_currency', 'ALTER TABLE receipts ADD COLUMN default_currency TEXT');
   await ensureColumn(db, 'local_ocr_text', 'ALTER TABLE receipts ADD COLUMN local_ocr_text TEXT');
+  // Whose rows these are. The local store holds one account at a time, so this
+  // is not a multi-tenant key — it is a seal: a row that does not carry the
+  // current owner's id is unreadable, whatever state the wipe is in. Rows
+  // written before this column existed carry NULL and so are never readable,
+  // which is the correct default for rows of unknown provenance.
+  await ensureColumn(db, 'user_id', 'ALTER TABLE receipts ADD COLUMN user_id TEXT');
   await ensureColumn(db, 'dedupe_key', 'ALTER TABLE receipts ADD COLUMN dedupe_key TEXT');
   await ensureColumn(db, 'ocr_fingerprint', 'ALTER TABLE receipts ADD COLUMN ocr_fingerprint TEXT');
   await ensureColumn(db, 'duplicate_of', 'ALTER TABLE receipts ADD COLUMN duplicate_of TEXT');
@@ -140,6 +146,17 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   // Where the image lives on the server. A row restored from the server has no
   // local file, so this is the only way back to its photo.
   await ensureColumn(db, 'remote_image_path', 'ALTER TABLE receipts ADD COLUMN remote_image_path TEXT');
+
+  // Indexed only now, and deliberately not in the schema block above.
+  //
+  // `user_id` is not in CREATE TABLE -- it is added by ALTER TABLE, twenty lines
+  // down from where the schema is declared. Creating an index on it up there
+  // named a column that did not exist yet, which failed the ENTIRE execAsync
+  // statement, so every migration after it was skipped and the column was never
+  // added at all. Every query then raised `no such column: user_id` forever,
+  // on a fresh install as much as an upgrade, and each one was an unhandled
+  // rejection that nothing surfaced.
+  await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_user ON receipts (user_id);');
   await ensureTableColumn(db, 'sync_state', 'last_attempt_at', 'ALTER TABLE sync_state ADD COLUMN last_attempt_at INTEGER');
   await ensureTableColumn(db, 'sync_state', 'last_success_at', 'ALTER TABLE sync_state ADD COLUMN last_success_at INTEGER');
   await ensureTableColumn(db, 'sync_state', 'last_error', 'ALTER TABLE sync_state ADD COLUMN last_error TEXT');
@@ -216,6 +233,28 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
   await db.execAsync('CREATE INDEX IF NOT EXISTS idx_receipts_duplicate_of ON receipts (duplicate_of, created_at DESC)');
   return db;
 }
+
+/**
+ * Restricts a receipts query to rows belonging to whoever currently owns this
+ * device's store.
+ *
+ * Read as a subquery rather than a bound parameter on purpose: the owner is
+ * then resolved by SQLite at statement time, inside whatever transaction the
+ * caller is in, so there is no window where a stale id captured in JS could be
+ * used against rows that have since changed hands. It also means no call site
+ * can forget to pass it.
+ *
+ * `IS NOT NULL` is not redundant — `= (subquery)` yields NULL (not false) when
+ * local_owner is empty, and a NULL predicate filters the row out; spelling it
+ * out says that unowned rows are excluded by intent, not by SQL trivia.
+ */
+const owned = (alias = ''): string => {
+  const column = `${alias}${alias ? '.' : ''}user_id`;
+  return `${column} IS NOT NULL AND ${column} = (SELECT user_id FROM local_owner WHERE id = 1)`;
+};
+
+/** The owner id as a SQL expression, for INSERTs that must stamp a new row. */
+const CURRENT_OWNER = '(SELECT user_id FROM local_owner WHERE id = 1)';
 
 async function ensureColumn(db: SQLite.SQLiteDatabase, name: string, sql: string): Promise<void> {
   return ensureTableColumn(db, 'receipts', name, sql);
@@ -389,6 +428,8 @@ function parseFingerprint(value: string | null | undefined): string[] {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed.filter((token): token is string => typeof token === 'string') : [];
   } catch {
+    // monitoring-ignore: A row whose stored JSON will not parse is treated as
+    // empty; the column is a cache, not the source of truth.
     return [];
   }
 }
@@ -420,6 +461,14 @@ export async function insertCaptured(
   extractionMode: ExtractionMode,
   defaultCurrency: string | null,
   captureId = newCaptureId(),
+  /**
+   * Who this capture belongs to. Passed explicitly rather than read from
+   * local_owner because a capture can, in principle, beat the sign-in sync that
+   * claims the store — and a row stamped NULL is a row its own author cannot
+   * see. Falls back to the recorded owner when the caller has no session to
+   * hand (offline relaunch mid-capture).
+   */
+  userId: string | null = null,
 ): Promise<ReceiptRow> {
   const db = await getDb();
   const now = Date.now();
@@ -450,7 +499,7 @@ export async function insertCaptured(
     updatedAt: now,
   };
   await db.runAsync(
-    'INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, default_currency, status, fields, local_ocr_text, dedupe_key, ocr_fingerprint, duplicate_of, duplicate_match_strength, image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    `INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, default_currency, status, fields, local_ocr_text, dedupe_key, ocr_fingerprint, duplicate_of, duplicate_match_strength, image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ${CURRENT_OWNER}))`,
     [
       row.id,
       row.imageUri,
@@ -472,6 +521,7 @@ export async function insertCaptured(
       null,
       now,
       now,
+      userId,
     ],
   );
   return row;
@@ -625,18 +675,18 @@ export async function setSyncStatus(
 /** Retake in One-click destroys an already-stored receipt — PM-confirmed. */
 export async function remove(id: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync('DELETE FROM receipts WHERE id = ?', [id]);
+  await db.runAsync(`DELETE FROM receipts WHERE id = ? AND ${owned()}`, [id]);
 }
 
 export async function getById(id: string): Promise<ReceiptRow | null> {
   const db = await getDb();
-  const r = await db.getFirstAsync<Persisted>('SELECT * FROM receipts WHERE id = ?', [id]);
+  const r = await db.getFirstAsync<Persisted>(`SELECT * FROM receipts WHERE id = ? AND ${owned()}`, [id]);
   return r ? hydrate(r) : null;
 }
 
 export async function getByReceiptId(receiptId: string): Promise<ReceiptRow | null> {
   const db = await getDb();
-  const r = await db.getFirstAsync<Persisted>('SELECT * FROM receipts WHERE receipt_id = ? ORDER BY created_at DESC LIMIT 1', [receiptId]);
+  const r = await db.getFirstAsync<Persisted>(`SELECT * FROM receipts WHERE receipt_id = ? AND ${owned()} ORDER BY created_at DESC LIMIT 1`, [receiptId]);
   return r ? hydrate(r) : null;
 }
 
@@ -675,6 +725,46 @@ export async function setLocalOwner(userId: string): Promise<void> {
      ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at`,
     [userId, now],
   );
+}
+
+/**
+ * Stamp this user onto rows written before the column existed.
+ *
+ * Only ever called once local_owner already names this user, which is the
+ * guarantee that predates the column: the device was theirs, so the rows are
+ * theirs. Without this an upgrading user would open the app to an empty folder,
+ * every receipt intact on disk but sealed behind a NULL.
+ */
+export async function adoptUnownedReceipts(userId: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync(
+    'UPDATE receipts SET user_id = ? WHERE user_id IS NULL', [userId],
+  );
+  return result.changes ?? 0;
+}
+
+/** Image paths of rows this user does not own — the files a targeted purge must take with it. */
+export async function listForeignImageUris(userId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ image_uri: string }>(
+    "SELECT image_uri FROM receipts WHERE (user_id IS NULL OR user_id <> ?) AND image_uri IS NOT NULL AND image_uri <> ''",
+    [userId],
+  );
+  return rows.map((row) => row.image_uri);
+}
+
+/**
+ * Drop every row this user does not own, leaving their own rows untouched.
+ *
+ * Used when the store has no recorded owner: the rows already stamped for this
+ * user are demonstrably theirs and must survive, while rows of unknown
+ * provenance must not. A full wipe would be safe but would also destroy a
+ * capture taken before the sign-in sync got round to claiming the store.
+ */
+export async function deleteForeignReceipts(userId: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync('DELETE FROM receipts WHERE user_id IS NULL OR user_id <> ?', [userId]);
+  return result.changes ?? 0;
 }
 
 /** Every local image path, so the files can go when their rows do. */
@@ -814,7 +904,7 @@ export async function setHydrated(userId: string, cursor: string | null): Promis
 
 export async function countReceipts(): Promise<number> {
   const db = await getDb();
-  const row = await db.getFirstAsync<{ n: number }>('SELECT COUNT(*) AS n FROM receipts');
+  const row = await db.getFirstAsync<{ n: number }>(`SELECT COUNT(*) AS n FROM receipts WHERE ${owned()}`);
   return row?.n ?? 0;
 }
 
@@ -842,8 +932,10 @@ export async function upsertRestored(row: RestoredReceipt): Promise<void> {
   await db.runAsync(
     `INSERT INTO receipts (id, image_uri, capture_mode, extraction_mode, status, fields,
        image_sync_status, result_sync_status, attempts, next_retry_at, receipt_id, acked_at,
-       remote_image_path, category_id, server_revision, server_updated_at, created_at, updated_at)
-     VALUES (?, '', 'default', 'balanced', ?, ?, ?, 'synced', 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+       remote_image_path, category_id, server_revision, server_updated_at, created_at, updated_at,
+       user_id)
+     VALUES (?, '', 'default', 'balanced', ?, ?, ?, 'synced', 0, 0, ?, ?, ?, ?, ?, ?, ?, ?,
+       ${CURRENT_OWNER})
      ON CONFLICT(id) DO NOTHING`,
     [
       row.captureId,
@@ -866,7 +958,7 @@ export async function upsertRestored(row: RestoredReceipt): Promise<void> {
 export async function listRecent(limit = 20): Promise<ReceiptRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted') ORDER BY created_at DESC LIMIT ?",
+    `SELECT * FROM receipts WHERE ${owned()} AND status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted') ORDER BY created_at DESC LIMIT ?`,
     [limit],
   );
   return rows.map(hydrate);
@@ -880,7 +972,38 @@ const toFtsQuery = (text: string): string | null => {
 };
 
 /** Indexed, parameterized search over the hydrated local mirror. */
-export async function searchReceipts(query: {
+/**
+ * The currencies this account's receipts are actually denominated in, most used
+ * first.
+ *
+ * Read from `fields.currency`, not `default_currency`: the latter is the
+ * fallback the capture was made under, which is frequently not what the receipt
+ * says. `searchReceipts` filters on `$.currency`, so a currency absent from this
+ * list matches nothing — which is the whole argument against offering a
+ * free-text box for it. The same row predicates as the search are applied here
+ * so the offered set and the filterable set cannot drift.
+ */
+export async function listUsedCurrencies(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ currency: string | null }>(
+    // Normalised in SQL, not after: grouping on the raw value would make 'usd'
+    // and 'USD' two rows that collapse into one duplicated capsule in the UI.
+    `SELECT upper(trim(json_extract(r.fields, '$.currency'))) AS currency, COUNT(*) AS uses
+       FROM receipts r
+      WHERE ${owned('r')}
+        AND r.fields IS NOT NULL
+        AND r.receipt_id IS NOT NULL
+        AND r.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted')
+        AND nullif(trim(json_extract(r.fields, '$.currency')), '') IS NOT NULL
+      GROUP BY currency
+      ORDER BY uses DESC, currency ASC`,
+  );
+  return rows
+    .map((row) => (row.currency ?? '').trim().toUpperCase())
+    .filter((code) => /^[A-Z]{3}$/.test(code));
+}
+
+type ReceiptQuery = {
   text?: string;
   date_from?: string;
   date_to?: string;
@@ -888,15 +1011,34 @@ export async function searchReceipts(query: {
   amount_min?: number;
   amount_max?: number;
   amount_currency?: string;
-  limit?: number;
-}): Promise<LocalSearchResult[]> {
-  const db = await getDb();
+};
+
+/**
+ * The WHERE clause shared by every query that answers "which receipts do you
+ * mean".
+ *
+ * Extracted so a count and a search cannot answer it differently. A count that
+ * quietly used looser predicates would promise rows an export then failed to
+ * produce, which is worse than no count at all.
+ *
+ * The four standing clauses are not incidental. A row is only a receipt the user
+ * can act on once it belongs to this account, has been extracted, has reached
+ * the server, and is not on its way to being deleted.
+ */
+function receiptPredicates(query: ReceiptQuery): {
+  clauses: string[];
+  // The record half of SQLiteBindParams specifically: the published type is a
+  // union with an array form, which no key can be assigned to.
+  params: Record<string, SQLite.SQLiteBindValue>;
+  fts: string | null;
+} {
   const clauses = [
+    owned('r'),
     "r.fields IS NOT NULL",
     "r.receipt_id IS NOT NULL",
     "r.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted')",
   ];
-  const params: SQLite.SQLiteBindParams = {};
+  const params: Record<string, SQLite.SQLiteBindValue> = {};
   const fts = query.text ? toFtsQuery(query.text) : null;
   if (fts) {
     clauses.push('receipt_search_fts MATCH $fts');
@@ -912,6 +1054,39 @@ export async function searchReceipts(query: {
     clauses.push(`r.category_id IN (${names.join(', ')})`);
     query.category_ids.forEach((id, index) => { params[`$category${index}`] = id; });
   }
+  return { clauses, params, fts };
+}
+
+/**
+ * How many receipts a set of filters actually matches.
+ *
+ * Unlimited on purpose: `searchReceipts` caps at 200 rows for rendering, and a
+ * count that inherited that cap would report "200" for every larger range and
+ * be wrong exactly when the number matters most.
+ */
+export async function countMatchingReceipts(query: ReceiptQuery): Promise<number> {
+  const db = await getDb();
+  const { clauses, params, fts } = receiptPredicates(query);
+  const join = fts ? 'JOIN receipt_search_fts ON receipt_search_fts.local_id = r.id' : '';
+  const row = await db.getFirstAsync<{ total: number }>(
+    `SELECT COUNT(*) AS total FROM receipts r ${join} WHERE ${clauses.join(' AND ')}`,
+    params,
+  );
+  return row?.total ?? 0;
+}
+
+export async function searchReceipts(query: {
+  text?: string;
+  date_from?: string;
+  date_to?: string;
+  category_ids?: number[];
+  amount_min?: number;
+  amount_max?: number;
+  amount_currency?: string;
+  limit?: number;
+}): Promise<LocalSearchResult[]> {
+  const db = await getDb();
+  const { clauses, params, fts } = receiptPredicates(query);
   params.$limit = Math.min(Math.max(query.limit ?? 200, 1), 200);
   const rank = fts ? 'bm25(receipt_search_fts, 0, 10, 4, 6)' : '0';
   const join = fts ? 'JOIN receipt_search_fts ON receipt_search_fts.local_id = r.id' : '';
@@ -978,7 +1153,7 @@ export async function findLocalDuplicateCandidate(
   const db = await getDb();
   const currentFingerprint = buildOcrFingerprint(input?.ocrText);
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE dedupe_key = ? AND fields IS NOT NULL AND status NOT IN ('deleted', 'delete_pending') ORDER BY created_at DESC LIMIT 8",
+    `SELECT * FROM receipts WHERE ${owned()} AND dedupe_key = ? AND fields IS NOT NULL AND status NOT IN ('deleted', 'delete_pending') ORDER BY created_at DESC LIMIT 8`,
     [dedupeKey],
   );
   for (const row of rows.map(hydrate)) {
@@ -1006,7 +1181,7 @@ export async function findLocalDuplicateCandidate(
   // keep the threshold high because this fallback is broader than the key.
   if (currentFingerprint && parseFingerprint(currentFingerprint).length > 0) {
     const fingerprintRows = await db.getAllAsync<Persisted>(
-      "SELECT * FROM receipts WHERE ocr_fingerprint IS NOT NULL AND fields IS NOT NULL AND status NOT IN ('deleted', 'delete_pending') ORDER BY created_at DESC LIMIT 20",
+      `SELECT * FROM receipts WHERE ${owned()} AND ocr_fingerprint IS NOT NULL AND fields IS NOT NULL AND status NOT IN ('deleted', 'delete_pending') ORDER BY created_at DESC LIMIT 20`,
     );
     for (const row of fingerprintRows.map(hydrate)) {
       if (!row.fields) continue;
@@ -1058,7 +1233,7 @@ export async function requeueForExtract(id: string): Promise<void> {
 export async function listAbandoned(olderThanMs: number): Promise<ReceiptRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE status IN ('blocked_quota', 'llm_failed_final') AND updated_at <= ? ORDER BY updated_at ASC",
+    `SELECT * FROM receipts WHERE ${owned()} AND status IN ('blocked_quota', 'llm_failed_final') AND updated_at <= ? ORDER BY updated_at ASC`,
     [Date.now() - olderThanMs],
   );
   return rows.map(hydrate);
@@ -1068,7 +1243,7 @@ export async function listAbandoned(olderThanMs: number): Promise<ReceiptRow[]> 
 export async function listPendingExtract(): Promise<ReceiptRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'image_upload_pending') AND next_retry_at <= ? ORDER BY created_at ASC",
+    `SELECT * FROM receipts WHERE ${owned()} AND status IN ('pending_extract', 'llm_failed_retryable', 'image_upload_pending') AND next_retry_at <= ? ORDER BY created_at ASC`,
     [Date.now()],
   );
   return rows.map(hydrate);
@@ -1104,7 +1279,7 @@ export async function reclaimStalledSyncs(staleMs: number): Promise<number> {
 export async function listUnsynced(): Promise<ReceiptRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE status = 'confirmed_local' AND result_sync_status IN ('pending_sync', 'sync_failed') AND next_retry_at <= ? ORDER BY created_at ASC",
+    `SELECT * FROM receipts WHERE ${owned()} AND status = 'confirmed_local' AND result_sync_status IN ('pending_sync', 'sync_failed') AND next_retry_at <= ? ORDER BY created_at ASC`,
     [Date.now()],
   );
   return rows.map(hydrate);
@@ -1132,7 +1307,7 @@ export async function requeueImageBackup(id: string): Promise<void> {
 export async function listPendingImageBackups(): Promise<ReceiptRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<Persisted>(
-    "SELECT * FROM receipts WHERE image_sync_status IN ('pending_upload', 'upload_failed') AND next_retry_at <= ? ORDER BY created_at ASC",
+    `SELECT * FROM receipts WHERE ${owned()} AND image_sync_status IN ('pending_upload', 'upload_failed') AND next_retry_at <= ? ORDER BY created_at ASC`,
     [Date.now()],
   );
   return rows.map(hydrate);
@@ -1141,7 +1316,7 @@ export async function listPendingImageBackups(): Promise<ReceiptRow[]> {
 export async function countPending(): Promise<number> {
   const db = await getDb();
   const r = await db.getFirstAsync<{ n: number }>(
-    "SELECT COUNT(*) AS n FROM receipts WHERE status IN ('pending_extract', 'llm_failed_retryable', 'provider_delayed', 'image_upload_pending', 'confirmed_local', 'result_sync_pending')",
+    `SELECT COUNT(*) AS n FROM receipts WHERE ${owned()} AND status IN ('pending_extract', 'llm_failed_retryable', 'provider_delayed', 'image_upload_pending', 'confirmed_local', 'result_sync_pending')`,
   );
   return r?.n ?? 0;
 }
@@ -1150,7 +1325,7 @@ export async function countPending(): Promise<number> {
 export async function countProviderDelayed(): Promise<number> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ n: number }>(
-    "SELECT COUNT(*) AS n FROM receipts WHERE status = 'provider_delayed'",
+    `SELECT COUNT(*) AS n FROM receipts WHERE ${owned()} AND status = 'provider_delayed'`,
   );
   return row?.n ?? 0;
 }
@@ -1222,6 +1397,8 @@ export async function listQueuedCaptureMetrics(limit = 20): Promise<QueuedCaptur
     try {
       return [{ id: row.id, payload: JSON.parse(row.payload) as CaptureMetricsPayload, attempts: row.attempts, nextRetryAt: row.next_retry_at }];
     } catch {
+      // monitoring-ignore: An unparseable metrics payload is dropped rather than
+      // retried forever; the receipt itself is unaffected.
       return [];
     }
   });

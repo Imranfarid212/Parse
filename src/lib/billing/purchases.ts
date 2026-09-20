@@ -37,6 +37,9 @@ import {
   usingTestStore,
 } from '@/lib/billing/config';
 
+import { logSafeError } from '@/lib/monitoring';
+
+
 let configured = false;
 let configuring: Promise<boolean> | null = null;
 
@@ -63,7 +66,7 @@ let diagnosisDetail: string | null = null;
 function setDiagnosis(next: BillingDiagnosis, detail?: unknown) {
   diagnosis = next;
   diagnosisDetail = detail == null ? null : detail instanceof Error ? detail.message : String(detail);
-  if (__DEV__ && next !== 'ok') console.warn(`[billing] ${next}`, diagnosisDetail ?? '');
+  if (next !== 'ok') logSafeError(new Error(`billing diagnosis: ${next} ${diagnosisDetail ?? ''}`), 'billing.diagnosis');
 }
 
 export function getBillingDiagnosis(): { code: BillingDiagnosis; detail: string | null } {
@@ -123,6 +126,7 @@ export async function ensureConfigured(): Promise<boolean> {
       setDiagnosis('ok');
       return true;
     } catch (error) {
+      logSafeError(error, 'billing.configure');
       // A missing native module surfaces here on some platforms instead.
       const message = error instanceof Error ? error.message : String(error);
       setDiagnosis(/native|NativeModule|null is not an object|undefined is not/i.test(message)
@@ -150,7 +154,7 @@ export async function identify(userId: string): Promise<void> {
   try {
     await Purchases.logIn(userId);
   } catch (error) {
-    if (__DEV__) console.warn('[billing] logIn failed', error);
+    logSafeError(error, 'billing.logIn');
   }
 }
 
@@ -160,7 +164,7 @@ export async function forgetUser(): Promise<void> {
   try {
     await Purchases.logOut();
   } catch {
-    // logOut throws when the current user is already anonymous. Nothing to do.
+    // monitoring-ignore: logOut throws when the current user is already anonymous. Nothing to do.
   }
 }
 
@@ -192,6 +196,7 @@ export async function fetchOfferings(): Promise<Record<Offering, PurchasesOfferi
     if (!result.default && !result.promo) setDiagnosis('offerings_empty');
     return result;
   } catch (error) {
+    logSafeError(error, 'billing.offerings');
     setDiagnosis('offerings_error', error);
     return { default: null, promo: null };
   }
@@ -220,7 +225,7 @@ export async function purchasePackage(pkg: PurchasesPackage): Promise<PurchaseOu
     const cancelled = (error as { userCancelled?: boolean })?.userCancelled === true;
     if (cancelled) return { status: 'cancelled' };
     const message = error instanceof Error ? error.message : String(error);
-    if (__DEV__) console.warn('[billing] purchase failed', message);
+    logSafeError(message, 'billing.purchase');
     return { status: 'failed', message };
   }
 }
@@ -235,6 +240,7 @@ export async function restorePurchases(): Promise<PurchaseOutcome> {
     const customerInfo = await Purchases.restorePurchases();
     return { status: 'purchased', customerInfo };
   } catch (error) {
+    logSafeError(error, 'billing.restore');
     const message = error instanceof Error ? error.message : String(error);
     return { status: 'failed', message };
   }
@@ -245,6 +251,8 @@ export async function getCustomerInfo(): Promise<CustomerInfo | null> {
   try {
     return await Purchases.getCustomerInfo();
   } catch {
+    // monitoring-ignore: The caller treats null as "entitlements unknown" and fails
+    // closed; callers that care already report.
     return null;
   }
 }
@@ -287,6 +295,8 @@ export function safeManagementURL(url: string | null | undefined): string | null
     if (parsed.protocol !== 'https:') return null;
     return MANAGEMENT_HOSTS.test(parsed.hostname) ? url : null;
   } catch {
+    // monitoring-ignore: URL validation. A malformed management URL is rejected by
+    // returning null, which is the point of parsing it.
     return null;
   }
 }
@@ -325,7 +335,7 @@ export async function openManageSubscriptions(crossStoreURL?: string | null): Pr
         await Linking.openURL(url);
         return 'opened';
       } catch (error) {
-        if (__DEV__) console.warn('[billing] cross-store manage link failed', error);
+        logSafeError(error, 'billing.manageLink');
         return 'failed';
       }
     }
@@ -339,7 +349,7 @@ export async function openManageSubscriptions(crossStoreURL?: string | null): Pr
       // Thrown on iOS < 13, on some Android configurations, and whenever the
       // native module is absent. Every one of those is a fallback, not a
       // failure to report.
-      if (__DEV__) console.warn('[billing] showManageSubscriptions unavailable', error);
+      logSafeError(error, 'billing.manageSubscriptions');
     }
 
     const fromSdk = safeManagementURL((await getCustomerInfo())?.managementURL);
@@ -348,7 +358,7 @@ export async function openManageSubscriptions(crossStoreURL?: string | null): Pr
         await Linking.openURL(fromSdk);
         return 'opened';
       } catch {
-        // Fall through to the generic page.
+        // monitoring-ignore: Fall through to the generic page.
       }
     }
   }
@@ -357,7 +367,7 @@ export async function openManageSubscriptions(crossStoreURL?: string | null): Pr
     await Linking.openURL(platformManageURL());
     return 'opened';
   } catch (error) {
-    if (__DEV__) console.warn('[billing] no manage route available', error);
+    logSafeError(error, 'billing.manageRoute');
     return 'failed';
   }
 }
@@ -385,7 +395,7 @@ export async function requestRefund(): Promise<RefundOutcome> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/unsupported|not available|iOS 15/i.test(message)) return 'unsupported';
-    if (__DEV__) console.warn('[billing] refund request failed', message);
+    logSafeError(message, 'billing.refund');
     return 'failed';
   }
 }

@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth/auth-context';
 import { supabase } from '@/lib/auth/supabase';
 import { searchManagedReceipts, type ManagedReceipt } from '@/lib/receipts/management';
 import { syncFromServer } from '@/lib/receipts/server-sync';
+import { logSafeError } from '@/lib/monitoring';
 
 export function useRealtimeReceipts(query: SearchQuery) {
   const auth = useAuth();
@@ -26,6 +27,7 @@ export function useRealtimeReceipts(query: SearchQuery) {
       setReceipts(next);
       setError(null);
     } catch (cause) {
+      logSafeError(cause, 'receipts.load');
       if (request !== requestRef.current) return;
       setError(cause instanceof Error ? cause.message : 'Could not load receipts.');
     } finally {
@@ -49,7 +51,7 @@ export function useRealtimeReceipts(query: SearchQuery) {
       } catch (cause) {
         // Keep the already-rendered local mirror available. The next launch,
         // foreground event or realtime signal retries reconciliation.
-        console.warn('[receipts] background reconciliation failed', cause);
+        logSafeError(cause, 'receipts.reconcile');
       }
     };
     void reconcile();

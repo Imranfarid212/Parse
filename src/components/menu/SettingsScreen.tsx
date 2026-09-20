@@ -6,9 +6,10 @@
  * About Us / Delete Account) is reported up through `onSubScreen` — that is
  * what retitles the bar and turns the X into a pop back to here.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, ScrollView, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 
 import { AboutScreen } from '@/components/menu/AboutScreen';
 import { BillingScreen } from '@/components/menu/BillingScreen';
@@ -22,10 +23,11 @@ import {
   COPY_DELETE_ACCOUNT_TITLE,
 } from '@/../packages/contracts/src/copy';
 import { useAuth } from '@/lib/auth/auth-context';
+import { resolveIdentity } from '@/lib/auth/identity';
 import { useEntitlements } from '@/lib/billing/entitlement-store';
 import { buildSupportMailto } from '@/lib/support';
 import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
-import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { fontFamily, spacing, typography } from '@/theme/tokens';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const styles = useStyles();
@@ -33,6 +35,51 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <View style={styles.section}>
       <Eyebrow style={{ marginLeft: spacing.sm }}>{title}</Eyebrow>
       <Card>{children}</Card>
+    </View>
+  );
+}
+
+/**
+ * The circle on the profile card: the provider's picture, else initials, else
+ * the generic glyph.
+ *
+ * The error fallback is not defensive padding. A Google avatar URL outlives the
+ * picture it points at — removing the photo on the Google account leaves the
+ * URL in our stored metadata, still well-formed and now a 404 — so the failure
+ * shows up on accounts that once had a picture, not on broken ones.
+ */
+function ProfileAvatar({ uri, initials, name }: { uri: string | null; initials: string | null; name: string }) {
+  const styles = useStyles();
+  const colors = useColors();
+  const [failed, setFailed] = useState(false);
+
+  // Signing out and back in as someone else reuses this component; without the
+  // reset a previous account's failure would suppress the new account's photo.
+  useEffect(() => setFailed(false), [uri]);
+
+  if (uri && !failed) {
+    return (
+      <Image
+        source={{ uri }}
+        style={styles.avatar}
+        contentFit="cover"
+        transition={150}
+        accessibilityLabel={`${name}'s profile picture`}
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return (
+    <View style={styles.avatar}>
+      {initials ? (
+        // Decorative: the name it abbreviates is read out by the Text beside it.
+        <Text style={styles.initials} numberOfLines={1} accessibilityElementsHidden importantForAccessibility="no">
+          {initials}
+        </Text>
+      ) : (
+        <Feather name="user" size={24} color={colors.textSecondary} />
+      )}
     </View>
   );
 }
@@ -83,8 +130,9 @@ export function SettingsScreen({ onSubScreen }: { onSubScreen?: (s: SettingsSubS
   const chosenCategoryCount = auth.selectedCategoryIds.filter(
     (id) => !auth.categories.some((category) => category.id === id && category.is_system),
   ).length;
-  const email = auth.user?.email ?? 'Signed in';
-  const displayName = auth.user?.user_metadata?.full_name ?? email.split('@')[0] ?? 'Parse user';
+  // Name, email, picture and initials all come off the same provider metadata,
+  // so they are resolved together rather than re-derived per field.
+  const identity = useMemo(() => resolveIdentity(auth.user), [auth.user]);
 
   const logOut = async () => {
     if (signingOut) return;
@@ -137,17 +185,15 @@ export function SettingsScreen({ onSubScreen }: { onSubScreen?: (s: SettingsSubS
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
-      {/* Profile */}
+      {/* Profile. No Edit affordance: name, email and picture are all owned by the
+          identity provider, so the only honest place to change them is the
+          Google or Apple account itself. A button here could either do nothing
+          or write a display name that the next sign-in silently overwrites. */}
       <Card style={styles.profile}>
-        <View style={styles.avatar}>
-          <Feather name="user" size={24} color={colors.textSecondary} />
-        </View>
+        <ProfileAvatar uri={identity.avatarUrl} initials={identity.initials} name={identity.displayName} />
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text numberOfLines={1} style={styles.name}>{displayName}</Text>
-          <Text numberOfLines={1} style={styles.email}>{email}</Text>
-        </View>
-        <View style={styles.editBtn}>
-          <Text style={styles.editText}>Edit</Text>
+          <Text numberOfLines={1} style={styles.name}>{identity.displayName}</Text>
+          <Text numberOfLines={1} style={styles.email}>{identity.email}</Text>
         </View>
       </Card>
 
@@ -236,17 +282,13 @@ const useStyles = makeStyles((colors) => ({
     borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
+    // Android clips a child to a rounded parent only when told to; without it
+    // the photo renders as a square over the circle.
+    overflow: 'hidden',
   },
+  // Sized so two characters clear the 56pt circle at the largest text setting.
+  initials: { fontFamily: fontFamily.display, fontSize: 20, lineHeight: 24, color: colors.textPrimary },
   name: { fontFamily: fontFamily.display, fontSize: 17, color: colors.textPrimary },
   email: { ...typography.meta, color: colors.textSecondary, marginTop: 2 },
-  editBtn: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 8,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surfaceSubtle,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  editText: { ...typography.eyebrow, color: colors.textPrimary },
   version: { ...typography.eyebrow, color: colors.textFaint, textAlign: 'center', marginTop: spacing.xs },
 }));

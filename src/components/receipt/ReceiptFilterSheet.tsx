@@ -17,6 +17,8 @@ import { DateTimePicker } from '@expo/ui/community/datetime-picker';
 
 import type { SearchQuery } from '@/../packages/contracts/src';
 import { searchQuerySchema } from '@/../packages/contracts/src';
+import { logSafeError } from '@/lib/monitoring';
+import { listUsedCurrencies } from '@/lib/receipts/store';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
@@ -113,7 +115,35 @@ export function ReceiptFilterSheet({
   const [maximum, setMaximum] = useState(value.amount_max?.toString() ?? '');
   const [activeDatePicker, setActiveDatePicker] = useState<DateFilterKey | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Read here rather than passed in: it comes from the local database, both
+   * callers would otherwise have to load and plumb the same list, and it has to
+   * be re-read each time the sheet opens because a scan since the last open can
+   * introduce a currency.
+   */
+  const [currencies, setCurrencies] = useState<string[]>([]);
   const filterScrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    let alive = true;
+    void listUsedCurrencies()
+      .then((used) => {
+        if (!alive) return;
+        // The account's own default is always offered even with nothing scanned
+        // in it yet, so the field is never empty on a fresh install.
+        const merged = used.includes(defaultCurrency) ? used : [...used, defaultCurrency];
+        setCurrencies(merged.filter(Boolean));
+      })
+      .catch((cause: unknown) => {
+        // The free-text fallback below still works, so this degrades rather
+        // than blocking the sheet.
+        logSafeError(cause, 'filters.loadCurrencies');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [defaultCurrency, visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -232,16 +262,47 @@ export function ReceiptFilterSheet({
             })}</View>
           </FilterField>
           <FilterField label="Amount range">
-            <TextInput
-              style={styles.filterInput}
-              value={draft.amount_currency ?? defaultCurrency}
-              onChangeText={(currency) => setDraft({ ...draft, amount_currency: currency.trim().toUpperCase() })}
-              onFocus={revealAmountFields}
-              maxLength={3}
-              autoCapitalize="characters"
-              placeholder="USD"
-              placeholderTextColor={colors.textFaint}
-            />
+            {/* Capsules rather than a text box. The filter compares
+                `fields.currency` exactly, so any code the user types that they
+                have no receipts in matches nothing and the empty result looks
+                like a bug. Offering only what they have scanned makes the
+                impossible query unreachable, and is fewer taps besides.
+                Single-select: amounts are only ever compared within one
+                currency. */}
+            {currencies.length > 0 ? (
+              <View style={styles.chips}>
+                {currencies.map((code) => {
+                  const selected = (draft.amount_currency ?? defaultCurrency) === code;
+                  return (
+                    <Pressable
+                      key={code}
+                      onPress={() => {
+                        revealAmountFields();
+                        setDraft({ ...draft, amount_currency: code });
+                      }}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={`Filter amounts in ${code}`}
+                      style={[styles.chip, selected && styles.chipSelected]}
+                    >
+                      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{code}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : (
+              // Nothing scanned yet, so there is nothing to offer.
+              <TextInput
+                style={styles.filterInput}
+                value={draft.amount_currency ?? defaultCurrency}
+                onChangeText={(currency) => setDraft({ ...draft, amount_currency: currency.trim().toUpperCase() })}
+                onFocus={revealAmountFields}
+                maxLength={3}
+                autoCapitalize="characters"
+                placeholder="USD"
+                placeholderTextColor={colors.textFaint}
+              />
+            )}
             <View style={styles.inlineFields}>
               <TextInput style={[styles.filterInput, { flex: 1 }]} value={minimum} onChangeText={setMinimum} onFocus={revealAmountFields} keyboardType="decimal-pad" placeholder="Minimum" placeholderTextColor={colors.textFaint} />
               <TextInput style={[styles.filterInput, { flex: 1 }]} value={maximum} onChangeText={setMaximum} onFocus={revealAmountFields} keyboardType="decimal-pad" placeholder="Maximum" placeholderTextColor={colors.textFaint} />

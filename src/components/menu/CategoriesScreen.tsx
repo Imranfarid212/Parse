@@ -31,6 +31,7 @@ import { Card, Eyebrow } from '@/components/menu/primitives';
 import { useAuth } from '@/lib/auth/auth-context';
 import { makeStyles, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { logSafeError } from '@/lib/monitoring';
 
 /**
  * Split in two so the picker below can seed its draft from `useState` and be
@@ -107,6 +108,7 @@ function CategoryPicker() {
     try {
       await auth.updateCategories(chosen.map((category) => category.id));
     } catch (error) {
+      logSafeError(error, 'settings.updateCategories');
       const message = error instanceof Error ? error.message : 'Please try again.';
       Alert.alert('Categories not saved', message);
     } finally {

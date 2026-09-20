@@ -3,7 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.7';
 
 import { isActiveDevice, isDeviceId } from '../_shared/device.ts';
 
-import { extractWithGeminiImage } from '../_shared/extraction-jobs.ts';
+import { buildExtractionPrompt, extractWithGeminiImage, MERCHANT_FIELD_DESCRIPTION } from '../_shared/extraction-jobs.ts';
 import { evaluateQuota, refundScan } from '../_shared/quota.ts';
 
 const corsHeaders = {
@@ -465,47 +465,9 @@ async function withTimeout<T>(ms: number, run: (signal: AbortSignal) => Promise<
   }
 }
 
-function buildPrompt(categories: string[], defaultCurrency: string) {
-  const categoryLines = categories.map((name) => `- ${JSON.stringify(name)}`).join('\n');
-  return [
-    'Analyze this photo of a receipt. Extract only the fields below. Be terse.',
-    'Categorize the transaction into exactly ONE of these options:',
-    categoryLines,
-    'Return ONLY JSON matching this exact structure, retaining keys:',
-    '{',
-    '  "date": "purchase date as printed",',
-    '  "store": "merchant name",',
-    '  "place": "city or location if printed, else empty string",',
-    '  "items": ["one short entry per line item: item name and price only"],',
-    '  "total": 0.00,',
-    '  "category": "one of the options above",',
-    '  "handwritten_notes": "any handwritten text, else empty string"',
-    '}',
-    'Handwritten note handling is important: inspect the whole image for handwriting,',
-    'including margins, blank areas, the back/side of the receipt, signatures, names,',
-    'initials, tips, table notes, corrections, or short labels. Transcribe handwriting',
-    'verbatim into handwritten_notes even if it is not part of the printed receipt.',
-    'Do not copy printed receipt text into handwritten_notes. Use an empty string only',
-    'when you are confident there is no handwriting visible.',
-    'Do not include greetings or thank-you text, tax breakdowns (GST/HST/PST),',
-    'subtotals, invoice/table/receipt/terminal numbers, card or payment details,',
-    'or loyalty points — not in any field. No text outside the JSON.',
-    `The user's default currency is ${defaultCurrency}; use it when the receipt does not clearly imply another currency.`,
-    'If the receipt shows a city, country, address, phone country code, tax system, or currency symbol that clearly indicates a different country/currency, infer and return that local ISO 4217 currency instead of the user default.',
-    'Do not convert amounts between currencies; only choose the correct currency code for the printed receipt.',
-    'If the image does not show a receipt, invoice, bill, or similar financial',
-    'document, return exactly: {"error": "not_a_receipt"}',
-  ].join('\n');
-}
-
 function buildTextPrompt(ocrText: string, categories: string[], defaultCurrency: string) {
   return [
-    'Return ONLY a raw JSON object. No markdown fences. No prose.',
-    'Extract from this OCR text. If the text is not a receipt, invoice, bill,',
-    'or similar financial document, return exactly: {"error": "not_a_receipt"}',
-    '',
-    buildPrompt(categories, defaultCurrency),
-    '',
+    buildExtractionPrompt(categories, defaultCurrency, 'ocr_text'),
     'OCR text:',
     ocrText.slice(0, 12_000),
   ].join('\n');
@@ -520,9 +482,9 @@ function extractionResponseFormat(categories: string[]) {
       schema: {
         type: 'object',
         additionalProperties: false,
-        required: ['merchant', 'txn_date', 'currency', 'total', 'line_items', 'suggested_category', 'is_receipt'],
+        required: ['merchant', 'txn_date', 'currency', 'total', 'line_items', 'suggested_category', 'handwritten_notes', 'is_receipt'],
         properties: {
-          merchant: { type: 'string' },
+          merchant: { type: 'string', description: MERCHANT_FIELD_DESCRIPTION },
           txn_date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
           currency: { type: 'string', pattern: '^[A-Z]{3}$' },
           total: { type: 'number', minimum: 0 },
@@ -541,6 +503,7 @@ function extractionResponseFormat(categories: string[]) {
             },
           },
           suggested_category: { type: 'string', enum: categories },
+          handwritten_notes: { type: 'string' },
           is_receipt: { type: 'boolean' },
         },
       },
@@ -577,7 +540,7 @@ async function callGrok(
       max_tokens: XAI_MAX_TOKENS,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: buildPrompt(categories, defaultCurrency) },
+        { role: 'system', content: buildExtractionPrompt(categories, defaultCurrency, 'image') },
         {
           role: 'user',
           content: [
@@ -611,7 +574,7 @@ async function repairExtraction(raw: unknown, categories: string[], defaultCurre
       max_tokens: XAI_MAX_TOKENS,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: buildPrompt(categories, defaultCurrency) },
+        { role: 'system', content: buildExtractionPrompt(categories, defaultCurrency, 'image') },
         { role: 'user', content: `Repair this malformed JSON into the exact extraction schema:\n${raw}` },
       ],
     }),

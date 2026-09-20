@@ -16,6 +16,7 @@ import * as Localization from 'expo-localization';
 import type { ExportArtifact, ExportJob, SearchQuery } from '@/../packages/contracts/src';
 import { EXPORT_SIGNED_URL_TTL_SECONDS, exportRequestSchema } from '@/../packages/contracts/src';
 import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
+import { logSafeError } from '@/lib/monitoring';
 
 export type ExportFormat = 'xlsx' | 'pdf';
 
@@ -40,11 +41,13 @@ function deviceTimeZone(): string | undefined {
     const fromCalendar = Localization.getCalendars()[0]?.timeZone;
     if (fromCalendar) return fromCalendar;
   } catch {
-    // fall through to Intl
+    // monitoring-ignore: fall through to Intl
   }
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
   } catch {
+    // monitoring-ignore: Timezone detection falls through to undefined and the
+    // server picks; not a failure.
     return undefined;
   }
 }
@@ -182,6 +185,7 @@ export function useExportJobs(userId: string | null | undefined) {
       setJobs(next);
       setError(null);
     } catch (cause) {
+      logSafeError(cause, 'export.loadJobs');
       if (request !== requestRef.current) return;
       setError(cause instanceof Error ? cause.message : 'Could not load your exports.');
     } finally {

@@ -1,5 +1,6 @@
 const { defineConfig } = require('eslint/config');
 const expoConfig = require('eslint-config-expo/flat');
+const noSilentCatch = require('./eslint-rules/no-silent-catch');
 
 module.exports = defineConfig([
   ...expoConfig,
@@ -48,5 +49,18 @@ module.exports = defineConfig([
         },
       ],
     },
+  },
+  {
+    // See eslint-rules/no-silent-catch.js. Two incidents were unreportable
+    // because a failure was caught and written to a __DEV__ console line that
+    // does not exist in a release build.
+    files: ['src/**/*.{ts,tsx}'],
+    plugins: { monitoring: { rules: { 'no-silent-catch': noSilentCatch } } },
+    // An error, with the pre-existing 48 recorded in eslint-suppressions.json
+    // rather than annotated in bulk: a warning among dozens of warnings is not
+    // a guard, and blanket-annotating catches nobody has examined would launder
+    // "unexamined" into "justified", which is the opposite of the point. New
+    // violations fail; the backlog is visible and shrinks as files are touched.
+    rules: { 'monitoring/no-silent-catch': 'error' },
   },
 ]);

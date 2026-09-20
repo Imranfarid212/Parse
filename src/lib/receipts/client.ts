@@ -29,6 +29,9 @@ import {
   normalizeReceiptItems,
 } from '@/lib/receipts/types';
 
+import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
+
+
 export type ExtractInput = {
   captureId: string;
   imageUri: string;
@@ -209,6 +212,22 @@ const BALANCED_VISIBLE_DEADLINE_MS = 3800;
 const BALANCED_HARD_DEADLINE_MS = 15_000;
 const BALANCED_WARMUP_TIMEOUT_MS = 5000;
 const PRECISE_VISIBLE_DEADLINE_MS = 4500;
+/**
+ * The hard bound Precise never had.
+ *
+ * Balanced caps every attempt against BALANCED_HARD_DEADLINE_MS. Precise only
+ * had a VISIBLE deadline: at 4.5s the UI moves on and the request is handed to
+ * the background as `deferred`, where applyDeferredDispatch awaits it. If the
+ * server or connection stalls without closing, that promise never settles, the
+ * await never returns, and the row sits in its pre-dispatch status forever --
+ * no result, no failure, nothing to retry.
+ *
+ * Generous rather than tight: unlike Balanced this uploads the image, so a slow
+ * connection is normal and must not be cut off. The server's own budget is
+ * EXTRACT_BUDGET_MS=5000 with 3500ms model timeouts, so a healthy round trip
+ * lands far inside this even allowing for the upload.
+ */
+const PRECISE_HARD_DEADLINE_MS = 30_000;
 const PRECISE_WARMUP_TIMEOUT_MS = 5000;
 /** Confirm is a small write; anything this slow is a stalled connection. */
 const CONFIRM_TIMEOUT_MS = 20_000;
@@ -505,7 +524,7 @@ export const supabaseExtractClient: ExtractClient = {
         lastBalancedWarmupCompletedAt = Date.now();
       })
       .catch((error) => {
-        if (__DEV__) console.warn('[extract] balanced warm-up failed', error instanceof Error ? error.message : String(error));
+        logSafeError(error, 'extract.balancedWarmup');
       })
       .finally(() => {
         balancedWarmupInFlight = null;
@@ -548,7 +567,7 @@ export const supabaseExtractClient: ExtractClient = {
         lastPreciseWarmupCompletedAt = Date.now();
       })
       .catch((error) => {
-        if (__DEV__) console.warn('[extract] precise warm-up failed', error instanceof Error ? error.message : String(error));
+        logSafeError(error, 'extract.preciseWarmup');
       })
       .finally(() => {
         preciseWarmupInFlight = null;
@@ -716,7 +735,7 @@ export const supabaseExtractClient: ExtractClient = {
             reject(terminalHttpError);
             return;
           }
-          if (__DEV__) console.warn('[extract] balanced text hedge fired', { delayMs: BALANCED_HEDGE_DELAY_MS });
+          trackAnonymousBreadcrumb(`extract.hedgeFired ${BALANCED_HEDGE_DELAY_MS}ms`);
           startBalancedAttempt(2).then(resolve, reject);
         }, BALANCED_HEDGE_DELAY_MS);
       });
@@ -784,9 +803,47 @@ export const supabaseExtractClient: ExtractClient = {
         ms_since_warmup: lastPreciseWarmupCompletedAt == null ? null : Date.now() - lastPreciseWarmupCompletedAt,
       });
     }
+    /**
+     * Precise returned `attempts: []` while Balanced returned real traces, so a
+     * Precise failure carried no evidence at all -- no transport, no duration,
+     * no abort reason. A report could say the extraction did not finish and
+     * nothing more, which is the difference between "it hung" and knowing where.
+     *
+     * Populated as the attempt proceeds and read by the visible-deadline return
+     * below, which fires while the request is still in flight.
+     */
+    const preciseAttemptStartedAt = Date.now();
+    const preciseTrace: CaptureAttemptTrace = {
+      attempt_number: 1,
+      transport: 'image_extract',
+      started_at: new Date(preciseAttemptStartedAt).toISOString(),
+      // Seeded, then overwritten by closePreciseTrace. The contract requires
+      // both, and the visible-deadline snapshot can be read before the attempt
+      // ends -- a zero duration there reads correctly as "still running".
+      ended_at: new Date(preciseAttemptStartedAt).toISOString(),
+      duration_ms: 0,
+      status_code: null,
+      error_message: null,
+      retry_delay_ms: null,
+      attempt_timeout_ms: PRECISE_HARD_DEADLINE_MS,
+      timed_out: 0,
+      transport_error: 0,
+      ms_since_warmup: lastPreciseWarmupCompletedAt == null ? null : preciseAttemptStartedAt - lastPreciseWarmupCompletedAt,
+      app_state: AppState.currentState,
+      abort_reason: null,
+    };
+    const closePreciseTrace = (patch: Partial<CaptureAttemptTrace>) => {
+      preciseTrace.ended_at = new Date().toISOString();
+      preciseTrace.duration_ms = Date.now() - preciseAttemptStartedAt;
+      Object.assign(preciseTrace, patch);
+    };
+
     const completion = (async (): Promise<ExtractCompletedAck> => {
       if (forceB5OfflineTransport) throw new Error('The internet connection appears to be offline');
-      const response = await FileSystem.uploadAsync(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
+      // createUploadTask rather than uploadAsync: the latter takes no abort
+      // signal, so there was no way to stop a stalled upload. This one exposes
+      // cancelAsync(), which is what makes the deadline below enforceable.
+      const uploadTask = FileSystem.createUploadTask(`${env.supabaseUrl}/functions/v1/extract`, imageUri, {
         uploadType: FileSystem.FileSystemUploadType.MULTIPART,
         httpMethod: 'POST',
         fieldName: 'image',
@@ -808,6 +865,44 @@ export const supabaseExtractClient: ExtractClient = {
           ...(forceB5ProviderFailure ? { 'x-rf-force-provider-failure': '1' } : {}),
         },
       });
+
+      let hardDeadlineHit = false;
+      const hardDeadline = setTimeout(() => {
+        hardDeadlineHit = true;
+        void uploadTask.cancelAsync().catch(() => {
+          // monitoring-ignore: cancelling an upload that has already finished is
+          // not a failure, and there is nothing to do about one that will not.
+        });
+      }, PRECISE_HARD_DEADLINE_MS);
+
+      let response;
+      try {
+        response = await uploadTask.uploadAsync();
+      } catch (error) {
+        closePreciseTrace({
+          transport_error: 1,
+          error_message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      } finally {
+        clearTimeout(hardDeadline);
+      }
+      // Cancelling resolves with no result rather than throwing, so an absent
+      // response is the deadline firing -- and it has to become an error, or the
+      // caller would read it as a successful empty extraction.
+      if (!response) {
+        closePreciseTrace({
+          timed_out: hardDeadlineHit ? 1 : 0,
+          abort_reason: hardDeadlineHit ? 'hard_timeout' : 'winner_cancelled',
+          error_message: hardDeadlineHit ? 'precise_hard_deadline' : 'precise_cancelled',
+        });
+        throw new Error(
+          hardDeadlineHit
+            ? `Precise extraction exceeded ${PRECISE_HARD_DEADLINE_MS}ms`
+            : 'Precise extraction was cancelled',
+        );
+      }
+      closePreciseTrace({ status_code: response.status });
 
       assertNotAborted(signal);
       let data: ExtractFunctionPayload | null = null;
@@ -895,7 +990,9 @@ export const supabaseExtractClient: ExtractClient = {
           visibleDeadlineMs: PRECISE_VISIBLE_DEADLINE_MS,
         });
       }
-      return { state: 'visible_deadline', attempts: [], deferred: completion };
+      // A snapshot, not the finished trace: the request is still running. It
+      // records how far it had got when the UI stopped waiting.
+      return { state: 'visible_deadline', attempts: [{ ...preciseTrace }], deferred: completion };
     }
     return result;
   },
@@ -1018,7 +1115,7 @@ export const supabaseConfirmReceiptClient: ConfirmReceiptClient = {
     try {
       data = (await response.json()) as ConfirmReceiptErrorPayload;
     } catch {
-      // A non-JSON edge/gateway response should still leave the local row queued.
+      // monitoring-ignore: A non-JSON edge/gateway response should still leave the local row queued.
     }
     if (!response.ok) {
       const error = new Error(data?.message ?? data?.error ?? data?.code ?? `confirm failed (${response.status})`);

@@ -39,6 +39,7 @@ function orderBeforeLast(source, before, after, label) {
 
 const fn = read('supabase/functions/extract/index.ts');
 const balancedFn = read('supabase/functions/extract-balanced/index.ts');
+const sharedExtraction = read('supabase/functions/_shared/extraction-jobs.ts');
 const sharedCategories = read('supabase/functions/_shared/categories.ts');
 const quotaModule = read('supabase/functions/_shared/quota.ts');
 const contractsQuota = read('packages/contracts/src/quota.ts');
@@ -70,9 +71,8 @@ includes(fn, "Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')", 'service role server e
 if (/EXPO_PUBLIC_.*XAI|EXPO_PUBLIC_.*GROK|sk-[A-Za-z0-9]/.test(fn)) fail('provider secret must not be exposed or hardcoded');
 
 includes(fn, 'XAI_CHAT_COMPLETIONS_URL', 'Grok provider endpoint');
-includes(fn, 'buildPrompt(categories, defaultCurrency)', 'prompt uses selected categories');
-includes(fn, 'Analyze this photo of a receipt', 'terse user-provided prompt');
-includes(fn, 'No text outside the JSON', 'JSON-only prompt guard');
+includes(fn, "buildExtractionPrompt(categories, defaultCurrency, 'image')", 'precise uses the shared extraction prompt');
+excludesPattern(fn, /function buildPrompt\(/, 'precise must not re-declare the extraction prompt');
 includes(fn, "response_format: { type: 'json_object' }", 'JSON object mode');
 includes(fn, 'max_tokens: 320', 'Grok output token cap');
 includes(fn, 'grok_ms', 'Grok latency metric');
@@ -307,7 +307,17 @@ includes(sharedCategories, ".from('user_categories')", 'shared module queries us
 includes(sharedCategories, 'idByName.get(name) ?? categories.fallbackId', 'shared name->id rule falls back to Miscellaneous');
 includes(balancedFn, "from '../_shared/categories.ts'", 'balanced uses the shared category module');
 excludesPattern(balancedFn, /async function getUserCategories/, 'balanced must not re-declare the category read');
-includes(balancedFn, 'buildPrompt(ocrText, defaultCurrency, categories.names)', 'prompt uses the user categories');
+includes(balancedFn, "buildExtractionPrompt(categories.names, defaultCurrency, 'ocr_text')", 'balanced uses the shared extraction prompt');
+excludesPattern(balancedFn, /function buildPrompt\(/, 'balanced must not re-declare the extraction prompt');
+
+/**
+ * One prompt, one merchant rule. These three assertions are the guard against
+ * the drift this consolidation removed: three near-copies that had come to ask
+ * the model for different field names than the schemas enforced.
+ */
+includes(sharedExtraction, 'Return only valid JSON. No markdown. No prose.', 'shared prompt keeps the JSON-only guard');
+includes(sharedExtraction, 'Never a bank, card network, payment gateway or processor', 'shared prompt carries the merchant rule');
+includes(sharedExtraction, 'inspect the whole image for handwriting', 'shared prompt keeps the handwriting guidance');
 includes(balancedFn, 'enum: categoryNames', 'model schema is constrained to the user categories');
 includes(balancedFn, 'categoryNames.includes(category) ? category : MISCELLANEOUS', 'off-list category fallback');
 includes(balancedFn, 'category_id: categoryId', 'balanced persists the resolved category id');

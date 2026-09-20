@@ -31,9 +31,14 @@
  */
 import type { Category } from '@/../packages/contracts/src/types';
 import { supabase } from '@/lib/auth/supabase';
-import { clearLocalReceiptsForAccountSwitch, deleteLocalReceipt } from '@/lib/receipts/capture';
+import {
+  clearForeignLocalReceipts,
+  clearLocalReceiptsForAccountSwitch,
+  deleteLocalReceipt,
+} from '@/lib/receipts/capture';
 import * as store from '@/lib/receipts/store';
 import { CATEGORIES, isCategory, type ReceiptFields, type ReceiptLineItem, type ReceiptStatus } from '@/lib/receipts/types';
+import { trackAnonymousBreadcrumb } from '@/lib/monitoring';
 
 const PAGE_SIZE = 200;
 /** Guard against an unbounded loop if the server keeps handing back full pages. */
@@ -152,12 +157,36 @@ async function runSyncFromServer(userId: string, categories: Category[]): Promis
   const result: SyncResult = { added: 0, updated: 0, deleted: 0, skipped: 0 };
   await store.markSyncAttempt(userId);
 
-  // A different account on this device owns nothing here. Local rows carry no
-  // user id, so the only safe reading of "someone else's receipts are already
-  // in the table" is to drop them and start this account clean.
+  // Decide who this device's local store belongs to before reading a row of it.
+  //
+  // Three cases, and the middle one used to be wrong. It read
+  //
+  //   if (owner && owner !== userId) await clearLocalReceiptsForAccountSwitch();
+  //
+  // which treats "nobody is recorded as the owner" as "nothing to protect" and
+  // then claims the store for the incoming user — handing them whatever rows
+  // were already sitting there. An absent owner is not evidence of an empty
+  // store; it is the absence of evidence either way, and the only safe reading
+  // of rows whose provenance cannot be established is that they are not ours.
   const owner = await store.getLocalOwner();
-  if (owner && owner !== userId) await clearLocalReceiptsForAccountSwitch();
-  if (owner !== userId) await store.setLocalOwner(userId);
+  if (owner === userId) {
+    // Ours already. Rows left NULL by an upgrade are ours too — local_owner is
+    // exactly the assurance that this device is this account's.
+    const adopted = await store.adoptUnownedReceipts(userId);
+    if (adopted > 0) trackAnonymousBreadcrumb(`sync.adoptedUnowned ${adopted}`);
+  } else if (owner !== null) {
+    // A genuine account switch: a different user is recorded as the owner, so
+    // everything here — rows, images, queued metrics — belongs to them.
+    await clearLocalReceiptsForAccountSwitch();
+    await store.setLocalOwner(userId);
+  } else {
+    // No owner recorded. Anything already stamped for this user is theirs (a
+    // capture can beat this claim); anything else cannot be accounted for and
+    // goes. This is the case that previously fell through and handed the whole
+    // store to whoever signed in next.
+    await clearForeignLocalReceipts(userId);
+    await store.setLocalOwner(userId);
+  }
 
   const state = await store.getSyncState(userId);
   const cursor = owner === userId ? state?.pullCursor ?? null : null;

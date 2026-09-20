@@ -18,6 +18,8 @@ import { setCategoriesVersion } from '@/lib/receipts/categories-version';
 import { syncFromServer } from '@/lib/receipts/server-sync';
 import { clearReferralCache } from '@/lib/referrals/client';
 import { ensureSignupIntegrity } from '@/lib/referrals/integrity';
+import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
+import { beginFlow, type Flow } from '@/lib/monitoring/flows';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -108,6 +110,8 @@ function getCallbackParam(url: string, param: string) {
     const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ''));
     return hashParams.get(param);
   } catch {
+    // monitoring-ignore: A callback URL that will not parse carries no code or
+    // token either, and the caller treats null as "not present".
     return null;
   }
 }
@@ -129,6 +133,8 @@ async function readStoredSession(): Promise<{ session: Session | null; unreachab
     if (data.session) return { session: data.session, unreachable: false };
     return { session: null, unreachable: Boolean(error) };
   } catch {
+    // monitoring-ignore: The verdict is the returned value: unreachable=true keeps
+    // "we could not ask" distinct from "there is no session".
     return { session: null, unreachable: true };
   }
 }
@@ -160,6 +166,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<number[]>([]);
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('checking');
+  /**
+   * When the deep-link handler last saw an auth callback. `openAuthSessionAsync`
+   * reports `cancel` both when the user backs out and when the OS routes the
+   * redirect to the app's own scheme handler instead — this is what separates
+   * the two, and the second case is a bug while the first is not.
+   */
+  const oauthCallbackAtRef = useRef(0);
+  /**
+   * The sign-in attempt currently expected to reach a signed-in, profiled user.
+   * Held here rather than inside `signInWithGoogle` because the attempt can be
+   * completed by the deep-link handler instead — the two race for the same
+   * callback — so whichever path finishes it resolves the same watchdog.
+   *
+   * Generous deadline: the provider's consent screen is presented inside the
+   * app, so the user reading it counts as foreground time.
+   */
+  const signInFlowRef = useRef<Flow | null>(null);
+
+  const settleSignInFlow = useCallback((outcome: 'succeed' | string) => {
+    const flow = signInFlowRef.current;
+    if (!flow) return;
+    signInFlowRef.current = null;
+    if (outcome === 'succeed') flow.succeed();
+    else flow.fail(outcome);
+  }, []);
   const bootstrapLocale = useMemo(() => getBootstrapLocale(), []);
 
   /**
@@ -211,7 +242,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await clearCachedAuth();
     } catch (error) {
-      if (__DEV__) console.warn('Clearing the auth snapshot failed', error);
+      logSafeError(error, 'auth.clearSnapshot');
     }
   }, [applyStatus]);
 
@@ -290,7 +321,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // A failure retries on the next refresh, because enrollment re-runs
     // whenever no key identifier is stored.
     void ensureSignupIntegrity(currentSession.user.id).catch((error: unknown) => {
-      if (__DEV__) console.warn('[auth] device attestation enrollment failed', error);
+      logSafeError(error, 'auth.attestEnroll');
     });
 
     applySignedIn(currentSession);
@@ -298,8 +329,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCategories(nextState.categoryRows);
     setProfile(nextState.profileRow);
     profileRef.current = nextState.profileRow;
+
+    if (!nextState.profileRow) {
+      // `.maybeSingle()` returns null rather than throwing, so this is silent
+      // today. Every routing guard reads `auth.profile`, so a null here renders
+      // the landing screen — the sign-in screen — behind a perfectly valid
+      // session: "I signed in and came back to the login page", with nothing
+      // raised anywhere.
+      logSafeError(
+        new Error('Authenticated session has no profiles row; routing will stall on the landing screen'),
+        'auth.missingProfile',
+      );
+    }
+
     setSelectedCategoryIds(nextSelectedCategoryIds);
     lastRefreshedAtRef.current = Date.now();
+
+    // The expected ending, whichever path got here.
+    if (nextState.profileRow) settleSignInFlow('succeed');
 
     // The snapshot is what the next cold start reads. A failed write costs the
     // next offline launch, so it must never cost this sign-in.
@@ -312,7 +359,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         selectedCategoryIds: nextSelectedCategoryIds,
       });
     } catch (error) {
-      if (__DEV__) console.warn('Writing the auth snapshot failed', error);
+      logSafeError(error, 'auth.writeSnapshot');
     }
 
     // Bring the device's receipts back in step with the server. It needs the
@@ -323,14 +370,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void syncFromServer(currentSession.user.id, nextState.categoryRows)
       .then((counts) => {
         const changed = counts.added + counts.updated + counts.deleted;
-        if (changed > 0 && __DEV__) console.log('[sync] receipts', counts);
+        if (changed > 0) trackAnonymousBreadcrumb(`sync.receipts +${counts.added} ~${counts.updated} -${counts.deleted}`);
       })
       .catch((error: unknown) => {
-        if (__DEV__) console.warn('[sync] failed; the cursor is unchanged', error);
+        logSafeError(error, 'auth.syncFromServer');
       });
 
     return nextState.profileRow;
-  }, [applySignedIn, applySignedOut]);
+  }, [applySignedIn, applySignedOut, settleSignInFlow]);
 
   const takeOverDevice = useCallback(async () => {
     const deviceId = await getDeviceId();
@@ -377,7 +424,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (revalidateRef.current) return revalidateRef.current;
     const run = refreshProfile()
       .catch((error: unknown) => {
-        if (__DEV__) console.warn('Background profile refresh failed', error);
+        logSafeError(error, 'auth.revalidate');
         // A connectivity or device-claim failure must not leave the app behind
         // an indefinite spinner. No write reaches the server without a later
         // active-device assertion, so this is an honest retry state.
@@ -407,19 +454,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let alive = true;
 
     async function restore() {
-      if (__DEV__) console.log('[auth] restore:start');
+      trackAnonymousBreadcrumb('auth.restore.start');
       if (!isSupabaseConfigured) {
         applyStatus('signed_out');
         return;
       }
 
       const cached = await withTimeout(getCachedAuth(), 'Cached auth restore').catch((error: unknown) => {
-        if (__DEV__) console.warn('Reading the auth snapshot failed', error);
+        logSafeError(error, 'auth.readSnapshot');
         return null;
       });
-      if (__DEV__) console.log('[auth] restore:cache', Boolean(cached));
+      trackAnonymousBreadcrumb(`auth.restore.cache hit=${Boolean(cached)}`);
       const stored = await readStoredSession();
-      if (__DEV__) console.log('[auth] restore:session', Boolean(stored.session), stored.unreachable);
+      trackAnonymousBreadcrumb(`auth.restore.session present=${Boolean(stored.session)} unreachable=${stored.unreachable}`);
       if (!alive) return;
 
       // A snapshot belonging to a different account is worse than none.
@@ -443,12 +490,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // what the capture queue exists for — but the user is not signed out.
         applyStatus('authenticated');
       } else {
-        if (__DEV__) console.log('[auth] restore:signed-out');
+        trackAnonymousBreadcrumb('auth.restore.signedOut');
         await applySignedOut();
         return;
       }
 
-      if (__DEV__) console.log('[auth] restore:revalidate');
+      trackAnonymousBreadcrumb('auth.restore.revalidate');
       void revalidate();
     }
 
@@ -512,7 +559,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let timer: ReturnType<typeof setInterval> | null = null;
     const check = () => {
       void checkDeviceOwnership().catch((error: unknown) => {
-        if (__DEV__) console.warn('Foreground device ownership check failed', error);
+        logSafeError(error, 'auth.deviceOwnership');
       });
     };
     const start = () => {
@@ -559,10 +606,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const handleUrl = ({ url }: { url: string }) => {
       if (!url.includes('auth/callback')) return;
 
+      oauthCallbackAtRef.current = Date.now();
+      // Shape only — never the URL, which carries the authorisation code and,
+      // on the implicit path, the tokens themselves.
+      trackAnonymousBreadcrumb(
+        `auth.callback.received code=${url.includes('code=')} token=${url.includes('access_token=')} error=${url.includes('error=')}`,
+      );
+
       void exchangeOAuthResult(url)
         .then(refreshProfile)
         .catch((error: unknown) => {
-          console.warn('OAuth callback failed', error);
+          logSafeError(error, 'auth.oauthCallback');
         });
     };
 
@@ -601,20 +655,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const verifyOtp = useCallback(
     async (email: string, token: string) => {
-      await withNetworkRetry(
-        async () => {
-          const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
-          if (error) throw error;
-        },
-        { attempts: 2, label: 'auth.verifyOtp' },
-      );
+      trackAnonymousBreadcrumb('auth.otp.verify');
+      signInFlowRef.current = beginFlow('auth.signIn.otp', { timeoutMs: 90_000 });
+      try {
+        await withNetworkRetry(
+          async () => {
+            const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
+            if (error) throw error;
+          },
+          { attempts: 2, label: 'auth.verifyOtp' },
+        );
+      } catch (error) {
+        // A wrong or expired code surfaces its own message to the user.
+        settleSignInFlow('verify_failed');
+        throw error;
+      }
       return refreshProfile();
     },
-    [refreshProfile],
+    [refreshProfile, settleSignInFlow],
   );
 
   const signInWithGoogle = useCallback(async () => {
     const redirectTo = getRedirectUrl();
+    trackAnonymousBreadcrumb('auth.google.start');
+    signInFlowRef.current = beginFlow('auth.signIn.google', { timeoutMs: 180_000 });
     setBusy(true);
     try {
       const { data, error } = await supabase.auth.signInWithOAuth({
@@ -628,18 +692,57 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!data.url) throw new Error('Google sign-in did not return an OAuth URL.');
 
       const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      // The single most useful fact about a failed Google sign-in. `cancel` is
+      // returned both when the user backs out AND when the OS hands the redirect
+      // to the app's own URL handler instead of the auth session — and that
+      // branch below returns silently, with no alert and no record. A user who
+      // "went through the Google flow and landed back on the login page" is
+      // indistinguishable from one who tapped Cancel without this line.
+      trackAnonymousBreadcrumb(`auth.google.result ${result.type}`);
       if (result.type === 'success') {
         await exchangeOAuthResult(result.url);
         await refreshProfile();
       } else if (result.type !== 'cancel') {
         throw new Error('Google sign-in did not complete.');
+      } else {
+        // The branch that produced two unreportable incidents. It returns with
+        // no alert and no record, so the user lands back on the sign-in screen
+        // and we learn nothing. Recording a non-fatal here is also what flushes
+        // the breadcrumb trail above it — Crashlytics logs only upload attached
+        // to a report, so without this the instrumentation is written to a
+        // buffer that is discarded at exit.
+        const callbackSeen = Date.now() - oauthCallbackAtRef.current < 30_000;
+
+        // The other handler may still be exchanging the code at this instant, so
+        // a missing session is re-checked before it is believed. Reporting a
+        // successful sign-in as a failure would make this signal worthless.
+        let session = (await supabase.auth.getSession()).data.session;
+        if (!session) {
+          await new Promise((resolve) => setTimeout(resolve, 1_500));
+          session = (await supabase.auth.getSession()).data.session;
+        }
+
+        if (!session) {
+          logSafeError(
+            new Error(`Google sign-in ended without a session (browser=${result.type}, callbackSeen=${callbackSeen})`),
+            callbackSeen ? 'auth.google.redirectIntercepted' : 'auth.google.abandoned',
+          );
+          // Already reported above; the watchdog must not say it twice.
+          settleSignInFlow(callbackSeen ? 'redirect_intercepted' : 'abandoned');
+        }
       }
+    } catch (error) {
+      // A thrown sign-in surfaces an alert, so it is a handled ending.
+      settleSignInFlow('threw');
+      throw error;
     } finally {
       setBusy(false);
     }
-  }, [refreshProfile]);
+  }, [refreshProfile, settleSignInFlow]);
 
   const signInWithApple = useCallback(async () => {
+    trackAnonymousBreadcrumb('auth.apple.start');
+    signInFlowRef.current = beginFlow('auth.signIn.apple', { timeoutMs: 180_000 });
     setBusy(true);
     try {
       const credential = await AppleAuthentication.signInAsync({
@@ -670,30 +773,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         void supabase.functions
           .invoke('apple-link', { body: { authorization_code: credential.authorizationCode } })
           .catch((cause) => {
-            if (__DEV__) console.warn('[auth] apple-link failed', cause);
+            logSafeError(cause, 'auth.appleLink');
           });
       }
 
       await refreshProfile();
+    } catch (error) {
+      // Includes the user dismissing Apple's own sheet, which is a real ending.
+      settleSignInFlow('threw');
+      throw error;
     } finally {
       setBusy(false);
     }
-  }, [refreshProfile]);
+  }, [refreshProfile, settleSignInFlow]);
 
   const completeOnboarding = useCallback(
     async (categoryIds: number[], country: string, defaultCurrency: string) => {
-      await withNetworkRetry(
-        async () => {
-          const { error } = await supabase.rpc('complete_onboarding', {
-            selected_category_ids: categoryIds,
-            selected_country: country,
-            selected_default_currency: defaultCurrency,
-          });
-          if (error) throw error;
-        },
-        { attempts: 3, label: 'auth.completeOnboarding' },
-      );
-      await refreshProfile();
+      const flow = beginFlow('onboarding.complete', { timeoutMs: 60_000 });
+      try {
+        await withNetworkRetry(
+          async () => {
+            const { error } = await supabase.rpc('complete_onboarding', {
+              selected_category_ids: categoryIds,
+              selected_country: country,
+              selected_default_currency: defaultCurrency,
+            });
+            if (error) throw error;
+          },
+          { attempts: 3, label: 'auth.completeOnboarding' },
+        );
+        await refreshProfile();
+        flow.succeed();
+      } catch (error) {
+        flow.fail('threw');
+        throw error;
+      }
     },
     [refreshProfile],
   );
@@ -761,7 +875,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const cached = await getCachedAuth();
       if (cached?.userId === userId) await setCachedAuth({ ...cached, profile: updated });
     } catch (error) {
-      if (__DEV__) console.warn('Writing the auth snapshot failed', error);
+      logSafeError(error, 'auth.writeSnapshot');
     }
   }, []);
 
@@ -772,7 +886,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // The local session is dropped either way. Sign-out is the user's
       // decision, not the server's, and leaving them half-signed-in because a
       // request failed is the same mistake as signing them out because one did.
-      if (error && __DEV__) console.warn('Server sign-out failed; clearing locally anyway', error);
+      logSafeError(error, 'auth.serverSignOut');
       await applySignedOut();
     } finally {
       setBusy(false);

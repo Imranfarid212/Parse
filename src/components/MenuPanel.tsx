@@ -26,12 +26,26 @@ const PAD = 5;
 const TAB_H = 46;
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
-const TABS: { label: string; icon: IconName }[] = [
-  { label: 'Export', icon: 'download-outline' },
-  { label: 'Search', icon: 'search-outline' },
-  { label: 'Plan', icon: 'sparkles-outline' },
-  { label: 'Settings', icon: 'settings-outline' },
+export type MenuTabKey = 'search' | 'export' | 'plan' | 'settings';
+
+/**
+ * Order here is the order on screen, and it is safe to change.
+ *
+ * It was not before: the content switch and every caller addressed tabs by
+ * position, so moving one silently pointed them at a different screen. A
+ * comment in camera.tsx restated this list from memory to keep its constants in
+ * step, which is the kind of coupling that survives exactly until someone
+ * reorders the array. Keys are the address now; positions are derived.
+ */
+const TABS: { key: MenuTabKey; label: string; icon: IconName }[] = [
+  { key: 'search', label: 'Search', icon: 'search-outline' },
+  { key: 'export', label: 'Export', icon: 'download-outline' },
+  { key: 'plan', label: 'Plan', icon: 'sparkles-outline' },
+  { key: 'settings', label: 'Settings', icon: 'settings-outline' },
 ];
+
+/** Position of a tab, for the callers that must open the panel on a given one. */
+export const menuTabIndex = (key: MenuTabKey): number => TABS.findIndex((tab) => tab.key === key);
 
 /** Header title shown per tab, where it differs from the nav label. */
 const HEADER_TITLE: Record<string, string> = { Plan: 'Subscription' };
@@ -125,11 +139,11 @@ export function MenuPanel({ onClose, initialTab = 0 }: { onClose: () => void; in
       </View>
 
       <View style={styles.content}>
-        {active === 0 ? (
+        {TABS[active].key === 'export' ? (
           <ExportScreen />
-        ) : active === 1 ? (
-          <SearchView onOpenPlan={() => changeTab(2)} />
-        ) : active === 2 ? (
+        ) : TABS[active].key === 'search' ? (
+          <SearchView onOpenPlan={() => changeTab(menuTabIndex('plan'))} />
+        ) : TABS[active].key === 'plan' ? (
           <PlanScreen />
         ) : (
           <SettingsScreen onSubScreen={handleSubScreen} />

@@ -39,6 +39,8 @@ function readLocale(): Localization.Locale | null {
   try {
     return Localization.getLocales()[0] ?? null;
   } catch {
+    // monitoring-ignore: Locale detection is a hint. Absent, the server default
+    // applies.
     return null;
   }
 }
@@ -47,6 +49,7 @@ function readTimeZone(): string | null {
   try {
     return Localization.getCalendars()[0]?.timeZone ?? null;
   } catch {
+    // monitoring-ignore: Timezone detection is a hint, as above.
     return null;
   }
 }

@@ -48,6 +48,8 @@ function money(n: number, currency: string) {
   try {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency: code }).format(n);
   } catch {
+    // monitoring-ignore: Intl throws on a currency code it does not know; the
+    // symbol table is the fallback.
     return `${FALLBACK_SYMBOLS[code] ?? `${code} `}${n.toFixed(2)}`;
   }
 }
