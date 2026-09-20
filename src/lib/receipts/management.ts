@@ -127,7 +127,13 @@ async function searchServer(query: SearchQuery): Promise<ManagedReceipt[]> {
     p_offset: 0,
   });
   if (error) throw error;
-  return ((data ?? []) as RpcReceipt[]).map(fromRpc);
+  // Re-sorted newest-scanned first to match searchLocal, which is the path the
+  // app is normally on. The RPC still orders by rank then txn_date, so without
+  // this the first-install fallback would list receipts in a different order
+  // than the same account sees a moment later, once the mirror is hydrated.
+  return ((data ?? []) as RpcReceipt[])
+    .map(fromRpc)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function searchManagedReceipts(query: SearchQuery, userId?: string | null): Promise<ManagedReceipt[]> {
