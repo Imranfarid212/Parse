@@ -41,8 +41,12 @@ import {
 
 import { getBoxedDocumentTracker } from '@/lib/vision/documentTracker';
 
-/** Drop detections below this confidence — phantom rectangles score low. */
-const MIN_CONFIDENCE = 0.25;
+/**
+ * Drop detections below this confidence — phantom rectangles score low.
+ * Raised from 0.25: segmentation scores a real page well above this, and the
+ * marginal frames it used to let through contributed most of the jitter.
+ */
+const MIN_CONFIDENCE = 0.5;
 /** Reject implausible pages: a big rectangle is a monitor/wall, tiny is noise. */
 const MAX_AREA = 0.5;
 const MIN_AREA = 0.04;
@@ -65,6 +69,30 @@ const CENTER_Y_TOL = 0.42;
  * ones are drawn.
  */
 const TRACK_MS = 140;
+/**
+ * The ACTUAL low-pass. `withTiming` above is a re-target tween, not a filter:
+ * a fresh raw target arrives every DETECT_INTERVAL_S (90ms) and the 140ms ease
+ * never converges before being retargeted, so the quad faithfully chased every
+ * detection's noise — that was the wobble.
+ *
+ * Smoothing the five FITTED scalars (centre, size, angle) rather than the eight
+ * corner coordinates is both cheaper and steadier: the rigid-rect fit below
+ * already collapses the trapezoid, so these five fully describe the overlay,
+ * and a segmentation mask that breathes at its edges can no longer pulse width
+ * and height independently of one another.
+ */
+const EMA_ALPHA = 0.3;
+/**
+ * Dead-band, measured against what was last DRAWN rather than the last
+ * smoothed value — otherwise suppressed movement accumulates invisibly and
+ * then catches up in one jump. Below these the quad is not redrawn at all,
+ * which is what makes a steady hand read as locked rather than merely slow.
+ */
+const DEADBAND_CENTER = 0.004; // fraction of view width
+const DEADBAND_SIZE = 0.01; // fraction of view width
+const DEADBAND_ANG = 0.0087; // ~0.5 degrees
+/** A near-straight card stays perfectly upright. ~5.2 degrees. */
+const ANG_DEADZONE = 0.09;
 /**
  * Continuity gate. Vision returns SOME rectangle every frame — often the wrong
  * one (screen, keyboard) as the receipt wavers. A detection whose centre jumps
@@ -130,7 +158,13 @@ export function useDocumentTracking(): DocumentTracking {
   const lastDetectTs = useSharedValue(0);
   // Lock state carried between detections: the locked centre, the consecutive
   // outlier count, and whether we currently hold a lock.
-  const track = useSharedValue({ cx: 0, cy: 0, rejects: 0, active: false });
+  // Lock state carried between detections. cx/cy/w/h/ang are the SMOOTHED fit;
+  // the d* pair is what was last drawn, which the dead-band compares against.
+  const track = useSharedValue({
+    cx: 0, cy: 0, w: 0, h: 0, ang: 0,
+    dcx: 0, dcy: 0, dw: 0, dh: 0, dang: 0,
+    rejects: 0, active: false,
+  });
   // Where re-acquisition is allowed to look (normalised view coords). Centre by
   // default; a tap moves it.
   const anchor = useSharedValue({ x: 0.5, y: 0.5 });
@@ -235,13 +269,10 @@ export function useDocumentTracking(): DocumentTracking {
         // frames, at which point re-lock to it.
         const jump = Math.hypot(cx - st.cx, cy - st.cy);
         if (jump > L.w * REJECT_FRAC && st.rejects < REJECT_MAX) {
-          track.value = { cx: st.cx, cy: st.cy, rejects: st.rejects + 1, active: true };
+          track.value = { ...st, rejects: st.rejects + 1 };
           return;
         }
       }
-      track.value = { cx, cy, rejects: 0, active: true };
-      center.value = { x: cx, y: cy };
-
       // Fit a RIGID rotated rectangle to the detected corners. Average the two
       // horizontal edges (TL→TR, BL→BR) into one direction + width, the two
       // vertical edges into one height. The perspective trapezoid collapses to
@@ -249,26 +280,65 @@ export function useDocumentTracking(): DocumentTracking {
       // never skews, so it never reads as a 3D tilt.
       const topx = vx[1] - vx[0], topy = vy[1] - vy[0];
       const botx = vx[2] - vx[3], boty = vy[2] - vy[3];
-      let ang = Math.atan2(topy + boty, topx + botx);
-      // Deadzone: a near-straight card stays perfectly upright. Widened from
-      // 0.05 (~2.9°) to 0.09 (~5.2°) — the residual few-degree tilt left over
-      // once the mirror/offset bug was fixed is small detection noise, not a
-      // genuine hold angle. A real deliberate tilt is well clear of this.
-      if (Math.abs(ang) < 0.09) ang = 0;
-      const w = (Math.hypot(topx, topy) + Math.hypot(botx, boty)) / 2;
-      const h =
+      const rawAng = Math.atan2(topy + boty, topx + botx);
+      const rawW = (Math.hypot(topx, topy) + Math.hypot(botx, boty)) / 2;
+      const rawH =
         (Math.hypot(vx[3] - vx[0], vy[3] - vy[0]) + Math.hypot(vx[2] - vx[1], vy[2] - vy[1])) / 2;
-      const hw = w / 2, hh = h / 2;
-      const c = Math.cos(ang), s = Math.sin(ang);
-      const rx = [-hw, hw, hw, -hw]; // TL,TR,BR,BL in the rect's own frame
-      const ry = [-hh, -hh, hh, hh];
 
-      // withTiming toward the rectangle corners is the whole smoother; first
-      // lock snaps into place.
-      const cfg = { duration: st.active ? TRACK_MS : 0 };
-      for (let i = 0; i < 4; i++) {
-        corners[i * 2].value = withTiming(cx + rx[i] * c - ry[i] * s, cfg);
-        corners[i * 2 + 1].value = withTiming(cy + rx[i] * s + ry[i] * c, cfg);
+      // Low-pass the fit. The first lock takes the raw values outright so the
+      // quad snaps on rather than easing in from wherever it last sat.
+      const first = !st.active;
+      let sAng = rawAng;
+      if (!first) {
+        // Shortest-arc difference: a page held near half a turn must not smooth
+        // the long way round.
+        let d = rawAng - st.ang;
+        while (d > Math.PI) d -= 2 * Math.PI;
+        while (d < -Math.PI) d += 2 * Math.PI;
+        sAng = st.ang + EMA_ALPHA * d;
+      }
+      const sCx = first ? cx : st.cx + EMA_ALPHA * (cx - st.cx);
+      const sCy = first ? cy : st.cy + EMA_ALPHA * (cy - st.cy);
+      const sW = first ? rawW : st.w + EMA_ALPHA * (rawW - st.w);
+      const sH = first ? rawH : st.h + EMA_ALPHA * (rawH - st.h);
+
+      // The deadzone applies to the SMOOTHED angle, not the raw one. On a raw
+      // value hovering at the threshold it would otherwise flip between 0 and
+      // ~5 degrees every detection, and the filter would average that flicker
+      // into a permanent phantom tilt.
+      const angD = Math.abs(sAng) < ANG_DEADZONE ? 0 : sAng;
+
+      const still =
+        !first &&
+        Math.hypot(sCx - st.dcx, sCy - st.dcy) < L.w * DEADBAND_CENTER &&
+        Math.abs(sW - st.dw) < L.w * DEADBAND_SIZE &&
+        Math.abs(sH - st.dh) < L.w * DEADBAND_SIZE &&
+        Math.abs(angD - st.dang) < DEADBAND_ANG;
+
+      track.value = {
+        cx: sCx, cy: sCy, w: sW, h: sH, ang: sAng,
+        dcx: still ? st.dcx : sCx,
+        dcy: still ? st.dcy : sCy,
+        dw: still ? st.dw : sW,
+        dh: still ? st.dh : sH,
+        dang: still ? st.dang : angD,
+        rejects: 0,
+        active: true,
+      };
+      center.value = { x: sCx, y: sCy };
+
+      if (!still) {
+        const hw = sW / 2, hh = sH / 2;
+        const c = Math.cos(angD), s = Math.sin(angD);
+        const rx = [-hw, hw, hw, -hw]; // TL,TR,BR,BL in the rect's own frame
+        const ry = [-hh, -hh, hh, hh];
+        // The tween now only carries the quad between already-filtered targets;
+        // first lock snaps into place.
+        const cfg = { duration: first ? 0 : TRACK_MS };
+        for (let i = 0; i < 4; i++) {
+          corners[i * 2].value = withTiming(sCx + rx[i] * c - ry[i] * s, cfg);
+          corners[i * 2 + 1].value = withTiming(sCy + rx[i] * s + ry[i] * c, cfg);
+        }
       }
 
       // Show → hold → fade; every accepted detection restarts the clock.
@@ -285,7 +355,7 @@ export function useDocumentTracking(): DocumentTracking {
     (x: number, y: number) => {
       const L = layout.value;
       if (L.w > 0 && L.h > 0) anchor.value = { x: x / L.w, y: y / L.h };
-      track.value = { cx: track.value.cx, cy: track.value.cy, rejects: 0, active: false };
+      track.value = { ...track.value, rejects: 0, active: false };
     },
     [layout, anchor, track],
   );
