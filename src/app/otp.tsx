@@ -21,10 +21,23 @@ function normalizeCode(value: string) {
   return value.replace(/\D/g, '').slice(0, OTP_LENGTH);
 }
 
+/**
+ * Supabase answers 500 for everything the mailer refuses, so one status covers
+ * both a transient blip and a permanent misconfiguration — an SES recipient
+ * that is not verified, expired SMTP credentials, an unverified sender domain.
+ * The client cannot tell those apart, so this no longer calls the failure
+ * temporary or asks for a retry: retrying a permanent refusal just spends the
+ * user's time arriving at the same place.
+ *
+ * The server's own text is the one thing that separates the two cases, so dev
+ * builds show it. `logSafeError` records a sanitised copy on every build.
+ */
 function getOtpErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   if (message.toLowerCase().includes('internal server error') || message.includes('"status":500')) {
-    return 'The sign-in service had a temporary issue. Please try again.';
+    return __DEV__
+      ? `The sign-in service could not send the email.\n\n${message}`
+      : 'We could not send a code to that address. Check it is correct, or continue with Apple or Google instead.';
   }
   return error instanceof Error ? error.message : 'Please try again.';
 }
