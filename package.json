@@ -15,6 +15,7 @@
     "@react-native-firebase/analytics": "^26.4.0",
     "@react-native-firebase/app": "^26.4.0",
     "@react-native-firebase/crashlytics": "^26.4.0",
+    "@react-native-google-signin/google-signin": "^16.1.5",
     "@shopify/react-native-skia": "2.6.2",
     "@supabase/supabase-js": "^2.110.7",
     "document-tracker": "file:modules/document-tracker",
