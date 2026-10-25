@@ -53,6 +53,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { EditSheet } from '@/components/receipt/EditSheet';
+import { logSafeError } from '@/lib/monitoring';
 import { SHEETS, SPREAD, VIEW_W } from '@/components/receipt/folder/geometry';
 import { RecentsFolder } from '@/components/receipt/RecentsFolder';
 import { ScannedFace, scannedFaceHeight } from '@/components/receipt/ScannedFace';
@@ -151,6 +152,14 @@ const SPREAD_MS = 485;
 const DRAG_FADE_P = 0.25; // drag progress at which the dimming bottoms out
 const DRAG_FADE_MIN = 0.45; // how far down the drag alone takes it
 const CLEAR_MS = 220; // committed → gone
+/**
+ * Everything between the commit and the folder leaving: the flight, the beat
+ * before the flap shuts, the flap shutting, then the folder sliding out. The
+ * watchdog waits this out plus a grace margin before tearing the overlay down
+ * itself, so a dropped frame or a slow device is never mistaken for a stall.
+ */
+const FLIGHT_TOTAL_MS = FLIGHT_MS + FLAP_HOLD_MS + FLAP_CLOSE_MS + FOLDER_OUT_MS;
+const WATCHDOG_GRACE_MS = 600;
 /** How far the flap drops, in folder viewbox units. */
 const FLAP_DROP = 5;
 
@@ -216,6 +225,11 @@ export function ReceiptReview({
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [editing, setEditing] = useState(false);
+  /** Flipped when teardown has happened. State, not a ref: the gesture is built
+   *  during render, so anything it reaches cannot touch `.current`. */
+  const [done, setDone] = useState(false);
+
+
   // The face's height is content-driven (item count, notes), so it's measured
   // rather than assumed — the landing size is derived from it.
   const [cardH, setCardH] = useState(0);
@@ -252,6 +266,9 @@ export function ReceiptReview({
   const folderIn = useSharedValue(0);
   /** 0 → flap shut, 1 → dropped open to receive the card. */
   const flap = useSharedValue(0);
+  /** Latched on the UI thread the instant a swipe is confirmed, so the flight
+   *  chain cannot be interrupted by the reactions that drive the drag. */
+  const committed = useSharedValue(false);
   /** 0 → frozen frame still standing, 1 → cleared away after the commit. */
   const cleared = useSharedValue(0);
   /** Camera is live again; the overlay stops taking touches. */
@@ -308,6 +325,12 @@ export function ReceiptReview({
     () => p.value >= MAGNET_FROM,
     (open, prev) => {
       if (prev === null || open === prev) return;
+      // Once the swipe is committed the flight owns `flap` — it opens it on
+      // approach and shuts it on landing. Leaving this reaction live meant a
+      // re-render mid-flight (an edit changes `fields`, which re-renders the
+      // card) could fire it and overwrite that animation, whose callback then
+      // saw `shut === false` and abandoned the teardown chain.
+      if (committed.value) return;
       flap.value = withTiming(open ? 1 : 0, {
         duration: open ? FLAP_OPEN_MS : FLAP_CLOSE_MS,
         easing: EMPHASIZED,
@@ -326,15 +349,44 @@ export function ReceiptReview({
    * finger could cross the threshold and come back down without ever letting
    * go, which would have persisted a receipt the user then pulled back.
    */
+  /** The flight chain, the accessibility action and the watchdog can all reach
+   *  this. `onDone` is safe to run twice — camera.tsx guards its phase
+   *  transition on `prev.k === 'review'` — and flipping `done` cancels the
+   *  watchdog through its effect's cleanup. */
+  const finish = useCallback(() => {
+    setDone(true);
+    onDone();
+  }, [onDone]);
+
   const release = useCallback(() => {
     setReleased(true);
     onRelease?.();
     if (fields) onConfirmed(fields);
+    // Teardown must not depend on three nested animation callbacks all
+    // completing. Each of them bails early when its animation is interrupted,
+    // and the whole chain then stops silently: `finish` never runs, so `phase`
+    // stays 'review' AND `wakeEarly` stays true — the overlay keeps its
+    // animated nodes mounted while the camera, frame processor and Vision
+    // segmentation run underneath it. That is unrecoverable without killing
+    // the app, and it is what made the screen unusable after an edit.
+    //
+    // The chain still drives the VISUAL, because tearing down at commit would
+    // unmount the card mid-air. This only guarantees the teardown happens.
   }, [fields, onConfirmed, onRelease]);
 
-  const finish = useCallback(() => {
-    onDone();
-  }, [onDone]);
+  // The watchdog is armed by the commit, not by the animation, and lives in an
+  // effect so it is cleared on unmount as well as on a normal finish.
+  useEffect(() => {
+    if (!released || done) return undefined;
+    const id = setTimeout(() => {
+      logSafeError(
+        new Error('receipt flight did not reach finish(); tore down on the watchdog'),
+        'review.flightWatchdog',
+      );
+      finish();
+    }, FLIGHT_TOTAL_MS + WATCHDOG_GRACE_MS);
+    return () => clearTimeout(id);
+  }, [released, done, finish]);
 
   const openEdit = useCallback(() => {
     setEditing(true);
@@ -383,6 +435,7 @@ export function ReceiptReview({
       const down = e.translationY > CONFIRM_DY || e.velocityY > CONFIRM_VY;
 
       if (up) {
+        committed.value = true;
         runOnJS(buzz)();
         // Hand over and clear the frozen frame at the same beat, both on their
         // own clock rather than the flight's — the card carries on flying to
