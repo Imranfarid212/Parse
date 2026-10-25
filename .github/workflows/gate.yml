@@ -122,6 +122,53 @@ jobs:
           version: 2.109.1
           github-token: ${{ github.token }}
 
+      # `supabase gen types --local`, which the b1 gate runs for its db.types.ts
+      # drift check, starts its OWN postgres-meta container — one that
+      # `supabase start` never pulls. Pulls from public.ecr.aws are anonymous
+      # and rate limited per IP, and shared runners exhaust that quota, so the
+      # gate has failed on every branch INCLUDING main since 24 Oct with
+      # "toomanyrequests: Data limit exceeded". Every migration applies first;
+      # only the type generation dies, which is why the failure reads as a
+      # schema problem when it is a registry one.
+      #
+      # Caching the image means the registry is touched once, not on every run;
+      # the retry is what gets through a window where the quota is already
+      # spent. The tag is pinned by the CLI version above and moves when that
+      # does — `supabase gen types` names it in its error when it changes.
+      #
+      # A durable alternative, if this keeps biting: authenticate the pull.
+      # public.ecr.aws allows 1 GB/hour anonymously against 10 GB/hour signed,
+      # which needs AWS credentials in repository secrets — a call for whoever
+      # owns the pipeline, not something to add silently here.
+      - name: Cache postgres-meta image
+        id: pgmeta
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/supabase-images
+          key: postgres-meta-v0.96.6
+
+      - name: Load or pull postgres-meta
+        run: |
+          image=public.ecr.aws/supabase/postgres-meta:v0.96.6
+          archive=~/.cache/supabase-images/postgres-meta.tar
+          if [ -f "$archive" ]; then
+            docker load -i "$archive"
+            exit 0
+          fi
+          for attempt in 1 2 3 4 5; do
+            if docker pull "$image"; then
+              mkdir -p ~/.cache/supabase-images
+              docker save "$image" -o "$archive"
+              exit 0
+            fi
+            echo "pull failed (attempt $attempt/5); backing off"
+            sleep $((attempt * 20))
+          done
+          # Deliberately not a failure. The gate is about to try the same pull
+          # and will report the real error against the step that needs it,
+          # rather than this one failing with a less useful message.
+          echo "could not pre-pull $image; leaving it to the gate"
+
       # Every gate from b5 onwards asserts against a live database. b1's own
       # first test is the reset, so starting the stack here costs it a duplicate
       # reset and buys every later phase a stack to run against.
