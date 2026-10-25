@@ -1,11 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Feather } from '@expo/vector-icons';
 
+import { CodePickerSheet } from '@/components/onboarding/CodePickerSheet';
 import { useAuth } from '@/lib/auth/auth-context';
-import { isKnownCurrency } from '@/lib/currencies';
+import { countryName, searchCountries } from '@/lib/countries';
+import { currencyName, isKnownCurrency, searchCurrencies } from '@/lib/currencies';
+import { currencyForCountry } from '@/lib/locale-regions';
 import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
 import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 import { logSafeError } from '@/lib/monitoring';
@@ -33,6 +36,25 @@ export default function CategoryOnboardingScreen() {
   const [country, setCountry] = useState(auth.profile?.country ?? auth.bootstrapLocale.country ?? '');
   const [currency, setCurrency] = useState(auth.profile?.default_currency ?? auth.bootstrapLocale.defaultCurrency);
   const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState<'country' | 'currency' | null>(null);
+
+  /**
+   * Country drives currency, not the other way round. The reverse is ambiguous
+   * — EUR is used by 34 of the countries in `locale-regions`, USD by 17 — so
+   * back-inferring a country from a currency would guess wrong more often than
+   * it guessed right. Currency stays separately selectable for the real case
+   * this misses: someone whose receipts are priced somewhere they do not live.
+   */
+  const chooseCountry = useCallback((code: string) => {
+    setCountry(code);
+    const derived = currencyForCountry(code);
+    if (derived) setCurrency(derived);
+  }, []);
+
+  // A detected region outside the shortlist still shows and still resolves to a
+  // currency through the full 243-row map; it simply has no friendly name.
+  const countryLabel = countryName(country) ?? country ?? 'Select';
+  const currencyLabel = currencyName(currency) ?? currency;
 
   useEffect(() => {
     if (!auth.loading && !auth.authenticated) router.replace('/');
@@ -114,11 +136,27 @@ export default function CategoryOnboardingScreen() {
       <View style={styles.localeRow}>
         <View style={styles.localeField}>
           <Text style={styles.label}>Country</Text>
-          <TextInput value={country} onChangeText={setCountry} autoCapitalize="characters" maxLength={2} style={styles.input} />
+          <Pressable
+            onPress={() => setPicking('country')}
+            accessibilityRole="button"
+            accessibilityLabel={`Country, ${countryLabel}. Opens a list.`}
+            style={({ pressed }) => [styles.input, styles.field, pressed && { opacity: 0.7 }]}
+          >
+            <Text numberOfLines={1} style={styles.fieldValue}>{countryLabel}</Text>
+            <Feather name="chevron-down" size={17} color={colors.textFaint} />
+          </Pressable>
         </View>
         <View style={styles.localeField}>
           <Text style={styles.label}>Currency</Text>
-          <TextInput value={currency} onChangeText={setCurrency} autoCapitalize="characters" maxLength={3} style={styles.input} />
+          <Pressable
+            onPress={() => setPicking('currency')}
+            accessibilityRole="button"
+            accessibilityLabel={`Currency, ${currencyLabel}. Opens a list.`}
+            style={({ pressed }) => [styles.input, styles.field, pressed && { opacity: 0.7 }]}
+          >
+            <Text numberOfLines={1} style={styles.fieldValue}>{currency}</Text>
+            <Feather name="chevron-down" size={17} color={colors.textFaint} />
+          </Pressable>
         </View>
       </View>
 
@@ -162,6 +200,25 @@ export default function CategoryOnboardingScreen() {
       <Pressable onPress={finish} disabled={busy} style={({ pressed }) => [styles.cta, (pressed || busy) && styles.pressed]}>
         {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.ctaText}>Continue to camera</Text>}
       </Pressable>
+
+      <CodePickerSheet
+        visible={picking === 'country'}
+        title="Country"
+        placeholder="Search countries"
+        items={searchCountries}
+        selected={country || null}
+        onSelect={chooseCountry}
+        onClose={() => setPicking(null)}
+      />
+      <CodePickerSheet
+        visible={picking === 'currency'}
+        title="Currency"
+        placeholder="Search currencies"
+        items={searchCurrencies}
+        selected={currency || null}
+        onSelect={setCurrency}
+        onClose={() => setPicking(null)}
+      />
     </ScrollView>
   );
 }
@@ -186,6 +243,8 @@ const useStyles = makeStyles((colors) => ({
     fontSize: 15,
     color: colors.textPrimary,
   },
+  field: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  fieldValue: { flex: 1, fontFamily: fontFamily.semibold, fontSize: 15, color: colors.textPrimary },
   list: { borderRadius: radius.lg, backgroundColor: '#fff', borderWidth: 1, borderColor: colors.border, overflow: 'hidden' },
   row: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
   locked: { backgroundColor: '#F7FAF8', borderBottomWidth: 0 },
