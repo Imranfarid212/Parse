@@ -4,11 +4,17 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Linking from 'expo-linking';
 import * as Network from 'expo-network';
 import * as WebBrowser from 'expo-web-browser';
+import {
+  GoogleSignin,
+  isSuccessResponse,
+  isCancelledResponse,
+} from '@react-native-google-signin/google-signin';
 import type { Session, User } from '@supabase/supabase-js';
 
 import { TOAST_REFERRAL_PROMPT } from '@/../packages/contracts/src/copy';
 import type { Category } from '@/../packages/contracts/src/types';
 import { getBootstrapLocale, type BootstrapLocale } from '@/lib/auth/bootstrap';
+import { getFoundationEnv } from '@/lib/foundations/env';
 import { getDeviceId } from '@/lib/auth/device';
 import { clearCachedAuth, getCachedAuth, setCachedAuth } from '@/lib/auth/session-cache';
 import { isSupabaseConfigured, supabase } from '@/lib/auth/supabase';
@@ -22,6 +28,31 @@ import { logSafeError, trackAnonymousBreadcrumb } from '@/lib/monitoring';
 import { beginFlow, type Flow } from '@/lib/monitoring/flows';
 
 WebBrowser.maybeCompleteAuthSession();
+
+/**
+ * Native Google sign-in replaces a browser round trip with the system account
+ * sheet -- the same shape as Apple's, which is why Apple sign-in never shows
+ * the "wants to use <project>.supabase.co to sign in" consent dialog and the
+ * browser flow always did. iOS names the first host in the OAuth chain, and
+ * for the browser flow that host is Supabase's `/auth/v1/authorize`.
+ *
+ * It needs a WEB client id: the native sheet returns an id token whose `aud`
+ * is that client, and Supabase rejects a token issued to any other audience.
+ * The iOS client id is not passed here -- the SDK reads it from
+ * `GoogleService-Info.plist`, which is also where the config plugin takes the
+ * URL scheme from at prebuild.
+ *
+ * Until that client exists the id is unset, and sign-in falls back to the
+ * browser flow below rather than failing. One condition, checked once: a
+ * half-configured native path that throws at the moment a user taps the button
+ * would be worse than the dialog it replaces.
+ */
+const googleWebClientId = getFoundationEnv().googleWebClientId;
+export const nativeGoogleSignInConfigured = googleWebClientId !== null;
+
+if (googleWebClientId !== null) {
+  GoogleSignin.configure({ webClientId: googleWebClientId });
+}
 
 export type { Profile };
 
@@ -675,7 +706,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [refreshProfile, settleSignInFlow],
   );
 
-  const signInWithGoogle = useCallback(async () => {
+  /**
+   * The pre-native flow, kept only as the fallback for a build whose Google
+   * OAuth client is not configured yet. Everything below the
+   * `openAuthSessionAsync` call exists because the redirect can be swallowed
+   * by the app's own URL handler instead of the auth session; the native path
+   * has no redirect, so none of it applies there.
+   */
+  const signInWithGoogleViaBrowser = useCallback(async () => {
     const redirectTo = getRedirectUrl();
     trackAnonymousBreadcrumb('auth.google.start');
     signInFlowRef.current = beginFlow('auth.signIn.google', { timeoutMs: 180_000 });
@@ -739,6 +777,69 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setBusy(false);
     }
   }, [refreshProfile, settleSignInFlow]);
+
+  /**
+   * The same two steps as `signInWithApple`: a native sheet hands back an id
+   * token, and the token is traded for a Supabase session. No browser, so no
+   * redirect, no deep-link callback, and no OS consent dialog.
+   */
+  const signInWithGoogleNatively = useCallback(async () => {
+    trackAnonymousBreadcrumb('auth.google.start');
+    signInFlowRef.current = beginFlow('auth.signIn.google', { timeoutMs: 180_000 });
+    setBusy(true);
+    try {
+      // Resolves to true on iOS unconditionally; on Android it is what turns a
+      // missing or stale Play Services into a dialog the user can act on
+      // instead of an opaque sign-in failure.
+      await GoogleSignin.hasPlayServices();
+
+      // Without this a second tap reuses the previous account silently, which
+      // makes "sign in as someone else" impossible after the first sign-in.
+      await GoogleSignin.signOut();
+
+      const response = await GoogleSignin.signIn();
+      trackAnonymousBreadcrumb(`auth.google.result ${response.type}`);
+
+      if (isCancelledResponse(response)) {
+        // A real ending, and an unambiguous one: the sheet is in-process, so
+        // unlike the browser flow's `cancel` this cannot also mean "the
+        // redirect went somewhere else". Nothing to report.
+        settleSignInFlow('cancelled');
+        return;
+      }
+      if (!isSuccessResponse(response)) {
+        throw new Error('Google sign-in did not complete.');
+      }
+
+      const idToken = response.data.idToken;
+      // Only ever null when `webClientId` is wrong or missing, which is a
+      // configuration fault rather than a user-facing one -- worth saying so
+      // plainly in the report rather than letting Supabase reject an empty
+      // token with a generic message.
+      if (!idToken) {
+        throw new Error('Google sign-in returned no id token; check EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID.');
+      }
+
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: 'google',
+        token: idToken,
+      });
+      if (error) throw error;
+
+      await refreshProfile();
+    } catch (error) {
+      settleSignInFlow('threw');
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshProfile, settleSignInFlow]);
+
+  const signInWithGoogle = useCallback(async () => {
+    return nativeGoogleSignInConfigured
+      ? signInWithGoogleNatively()
+      : signInWithGoogleViaBrowser();
+  }, [signInWithGoogleNatively, signInWithGoogleViaBrowser]);
 
   const signInWithApple = useCallback(async () => {
     trackAnonymousBreadcrumb('auth.apple.start');

@@ -164,12 +164,16 @@ export function Toggle({
  * The one primary action button — the dark pill from onboarding's "Continue to
  * camera". Export's Generate, Plan's Subscribe and the filter sheet's Apply are
  * all the same control, so they are all this.
+ *
+ * `busy` means work is in flight: spinner, and untappable while it runs.
+ * `disabled` means the action is unavailable: dimmed and untappable, no spinner.
  */
 export function PrimaryButton({
   label,
   icon,
   busy = false,
   busyLabel,
+  disabled = false,
   onPress,
   style,
 }: {
@@ -177,19 +181,29 @@ export function PrimaryButton({
   icon?: FeatherName;
   busy?: boolean;
   busyLabel?: string;
+  disabled?: boolean;
   onPress?: () => void;
   style?: ViewStyle;
 }) {
   const styles = useStyles();
   const colors = useColors();
+  // `busy` and `disabled` are deliberately separate. A spinner is a promise that
+  // something is happening and will finish; a button that is merely unavailable
+  // has nothing in flight, so spinning there is a lie that never resolves.
+  const inert = busy || disabled;
   return (
     <Pressable
       onPress={onPress}
-      disabled={busy}
+      disabled={inert}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled: busy }}
-      style={({ pressed }) => [styles.primaryBtn, (pressed || busy) && styles.primaryBtnPressed, style]}
+      accessibilityState={{ disabled: inert, busy }}
+      style={({ pressed }) => [
+        styles.primaryBtn,
+        (pressed || busy) && styles.primaryBtnPressed,
+        disabled && !busy && styles.primaryBtnDisabled,
+        style,
+      ]}
     >
       <View style={styles.primaryInner}>
         {busy ? (
@@ -332,6 +346,7 @@ const useStyles = makeStyles((colors, elevation) => ({
     justifyContent: 'center',
   },
   primaryBtnPressed: { opacity: 0.82, transform: [{ scale: 0.99 }] },
+  primaryBtnDisabled: { opacity: 0.45 },
   primaryInner: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   primaryText: { ...typography.button, color: colors.ctaText },
 

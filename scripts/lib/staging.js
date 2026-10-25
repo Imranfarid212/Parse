@@ -42,10 +42,17 @@ function projectRef(url) {
 /**
  * Resolves credentials from the environment, then the chosen env file.
  *
- * @param {{ needDbUrl?: boolean, needAnonKey?: boolean }} requirements
+ * `allowProduction` exists for the one caller that legitimately targets the
+ * production project: the B5 scheduler, which writes two Vault secrets and
+ * registers two cron jobs. It creates no users and seeds no rows, so the guard
+ * below -- written for the verification harnesses that do -- does not apply to
+ * it. It is opt-in per call rather than a weaker guard, so every other caller
+ * keeps refusing production exactly as before.
+ *
+ * @param {{ needDbUrl?: boolean, needAnonKey?: boolean, allowProduction?: boolean, envFile?: string }} requirements
  */
-function resolveConfig({ needDbUrl = false, needAnonKey = false } = {}) {
-  const envFile = process.env.B4_DB_ENV_FILE ?? '.env.staging';
+function resolveConfig({ needDbUrl = false, needAnonKey = false, allowProduction = false, envFile: envFileOverride } = {}) {
+  const envFile = envFileOverride ?? process.env.B4_DB_ENV_FILE ?? '.env.staging';
   const fromFile = { ...readEnvFile('.env'), ...readEnvFile(envFile) };
   const pick = (...keys) => {
     for (const key of keys) {
@@ -79,7 +86,7 @@ function resolveConfig({ needDbUrl = false, needAnonKey = false } = {}) {
   // named in .env.production rather than trusting the operator to have exported
   // the right file — throwaway users and seeded ledger rows do not belong there.
   const production = readEnvFile('.env.production').EXPO_PUBLIC_SUPABASE_URL;
-  if (production && projectRef(production) === projectRef(config.url)) {
+  if (!allowProduction && production && projectRef(production) === projectRef(config.url)) {
     throw new Error(
       `refusing to run against the project in .env.production (${projectRef(config.url)}).\n` +
         `  This creates and deletes a real user; point it at staging.`,

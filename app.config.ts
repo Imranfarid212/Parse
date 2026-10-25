@@ -23,6 +23,24 @@ const GOOGLE_SERVICES_IOS = './GoogleService-Info.plist';
 const exists = (relative: string) => fs.existsSync(path.resolve(__dirname, relative));
 const firebaseReady = exists(GOOGLE_SERVICES_ANDROID) && exists(GOOGLE_SERVICES_IOS);
 
+/**
+ * Native Google sign-in needs more than the credential files being present: it
+ * needs an OAuth client of its own.
+ *
+ * The google-signin config plugin, in its Firebase mode, takes the iOS URL
+ * scheme straight out of `REVERSED_CLIENT_ID` in the plist. That key appears
+ * only once Google is enabled as a sign-in provider in the Firebase console --
+ * a plist downloaded for Crashlytics alone does not carry it. Without the
+ * scheme the native sheet has nowhere to hand its result back to, so the
+ * plugin is gated on the key rather than on the file, and `signInWithGoogle`
+ * reads the same condition at runtime to decide which flow to run.
+ */
+const googleSignInReady =
+  firebaseReady &&
+  /<key>REVERSED_CLIENT_ID<\/key>/.test(
+    fs.readFileSync(path.resolve(__dirname, GOOGLE_SERVICES_IOS), 'utf8'),
+  );
+
 export default ({ config }: ConfigContext): ExpoConfig => {
   const firebasePlugins: NonNullable<ExpoConfig['plugins']> = firebaseReady
     ? [
@@ -45,6 +63,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       ]
     : [];
 
+  const googlePlugins: NonNullable<ExpoConfig['plugins']> = googleSignInReady
+    ? ['@react-native-google-signin/google-signin']
+    : [];
+
   if (!firebaseReady && process.env.EXPO_PUBLIC_ENV === 'production') {
     // Loud in the one case where shipping without crash reporting is a mistake
     // rather than a local convenience.
@@ -58,6 +80,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     plugins: [
       ...(config.plugins ?? []),
       ...firebasePlugins,
+      ...googlePlugins,
       './plugins/with-react-native-app-delegate-fix',
       './plugins/with-ios-automatic-signing',
     ],

@@ -33,5 +33,23 @@ verify_jwt = true
 [functions.app-integrity-verify]
 verify_jwt = false
 
+# Invoked by pg_cron over net.http_post with the service-role key as the bearer
+# token. That is a real JWT, so the gateway check stays on -- stated here rather
+# than left to the default, because these two are the only functions no client
+# ever calls and "nothing signs in to it" reads like a reason to turn it off.
+[functions.provider-probe]
+verify_jwt = true
+
+# Called by RevenueCat, which signs nothing: it presents the fixed value set on
+# the webhook in their dashboard, and rc-webhook compares it in constant time.
+# The gateway check must be off or every delivery is rejected before that
+# comparison runs -- which looks like RevenueCat being quiet, not like a
+# misconfiguration.
+[functions.rc-webhook]
+verify_jwt = false
+
 [functions.referral-redeem]
+verify_jwt = true
+
+[functions.sweeper]
 verify_jwt = true

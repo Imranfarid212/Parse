@@ -434,11 +434,14 @@ export function PlanScreen() {
       </View>
 
       {/* Disabled unless there is a real product behind it, so the button can
-          never charge a price the screen did not show. */}
+          never charge a price the screen did not show. Unavailable is `disabled`,
+          not `busy`: with no product there is nothing in flight, and a spinner
+          that can never stop reads as a hung app rather than a missing price. */}
       <PrimaryButton
         label={subscribeLabel}
-        busy={busy || !purchasable}
-        busyLabel={busy ? 'Working…' : subscribeLabel}
+        busy={busy}
+        busyLabel="Working…"
+        disabled={!purchasable}
         onPress={() => void subscribe()}
         style={styles.subscribe}
       />

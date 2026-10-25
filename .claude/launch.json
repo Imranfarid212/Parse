@@ -4,8 +4,25 @@
     {
       "name": "metro",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["expo", "start", "--dev-client"],
+      "runtimeArgs": [
+        "expo",
+        "start",
+        "--dev-client"
+      ],
       "port": 8081
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "--yes",
+        "http-server",
+        "site",
+        "-p",
+        "4178",
+        "-c-1"
+      ],
+      "port": 4178
     }
   ]
 }
