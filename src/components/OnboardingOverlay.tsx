@@ -18,7 +18,10 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
+import { useIsFocused } from 'expo-router';
 
+import { ExportCard } from '@/components/onboarding/ExportCard';
+import { SwipeToFileCard } from '@/components/onboarding/SwipeToFileCard';
 import { CategoryChecklist } from '@/components/ui/CategoryChecklist';
 import { ReceiptCard } from '@/components/ui/ReceiptCard';
 import { makeStyles, useColors } from '@/theme/appearance';
@@ -114,6 +117,7 @@ export function OnboardingOverlay({
     cardW = (cardH * DESIGN_W) / DESIGN_H;
   }
 
+  const isFocused = useIsFocused();
   const [index, setIndex] = useState(0); // which receipt is on top
   const isLast = index === NUM - 1;
 
@@ -134,10 +138,21 @@ export function OnboardingOverlay({
             .filter((i) => i >= index)
             .map((i) => {
               const depth = i - index;
-              // All three receipts share the same header + footer chrome. The
-              // first carries the categories checklist; 2 and 3 keep an empty
-              // white body pending their content.
-              const content = (s: number) => <CategoryChecklist s={s} empty={i !== 0} />;
+              // Each receipt owns its own printed face now; all three share the
+              // paper, the footer and the torn edge. They had all been the same
+              // checklist with `empty` blanking the body, which meant cards 2
+              // and 3 repeated card 1's header over white.
+              //
+              // `animating` is the leash on the two looping cards: only the one
+              // on top, and only while the screen is focused. Unbounded
+              // withRepeat has been stripped from this project twice for
+              // thermal reasons, so these die the moment you swipe past.
+              const animating = i === index && isFocused;
+              const content = (s: number) => {
+                if (i === 1) return <SwipeToFileCard s={s} active={animating} />;
+                if (i === 2) return <ExportCard s={s} active={animating} />;
+                return <CategoryChecklist s={s} />;
+              };
 
               if (i === index && !isLast) {
                 return (
