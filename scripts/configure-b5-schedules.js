@@ -1,8 +1,13 @@
 /**
- * Installs the B5 recurring jobs in a non-production Supabase project.
+ * Installs the B5 recurring jobs in a Supabase project.
  * Credentials enter Vault over the TLS database connection and are never logged.
  *
- * Run: node scripts/configure-b5-schedules.js
+ * Production is opt-in and must be asked for out loud, because the shared
+ * resolver refuses it by default. Doing this in the SQL editor instead would
+ * leave the service-role key in the dashboard's query history; here it only
+ * ever travels over the database connection.
+ *
+ * Run: node scripts/configure-b5-schedules.js [--production]
  */
 const { resolveConfig, connectPg, projectRef } = require('./lib/staging');
 
@@ -18,8 +23,16 @@ async function upsertVaultSecret(pg, name, value, description) {
 }
 
 async function main() {
-  const config = resolveConfig({ needDbUrl: true });
+  const production = process.argv.includes('--production');
+  const config = resolveConfig({
+    needDbUrl: true,
+    allowProduction: production,
+    envFile: production ? '.env.production' : undefined,
+  });
   if (!config.serviceRoleKey) throw new Error('missing SUPABASE_SERVICE_ROLE_KEY');
+  // Say which project this is about to change. The whole failure mode worth
+  // guarding against here is an operator who thinks they are on staging.
+  console.log(`${TAG} target ${production ? 'PRODUCTION' : 'staging'} (${projectRef(config.url)})`);
   const pg = await connectPg(config);
   try {
     await upsertVaultSecret(pg, 'receiptflow_b5_project_url', config.url, 'ReceiptFlow B5 scheduler Edge Function URL');
