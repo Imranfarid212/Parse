@@ -5,7 +5,7 @@
  * third (last) receipt. The fancier tear/crush exit is a later polish — this is
  * the plain toss motion + the gating behaviour.
  */
-import React, { useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -119,6 +119,19 @@ export function OnboardingOverlay({
 
   const isFocused = useIsFocused();
   const [index, setIndex] = useState(0); // which receipt is on top
+
+  /**
+   * Finishing is now reachable two ways — the CTA, and swiping the last receipt
+   * away — and both are live at the same time, since the button stays on screen
+   * while the card flies off. Latched so a tap during that 340ms toss cannot
+   * complete onboarding twice.
+   */
+  const completed = useRef(false);
+  const complete = useCallback(() => {
+    if (completed.current) return;
+    completed.current = true;
+    onComplete();
+  }, [onComplete]);
   const isLast = index === NUM - 1;
 
   return (
@@ -154,9 +167,18 @@ export function OnboardingOverlay({
                 return <CategoryChecklist s={s} />;
               };
 
-              if (i === index && !isLast) {
+              // The last receipt is swipeable too, and swiping it away finishes
+              // onboarding — the same outcome as the CTA beneath it. Leaving it
+              // inert made the final card the one place the gesture the whole
+              // stack just taught you stopped working.
+              if (i === index) {
                 return (
-                  <SwipeCard key={i} width={cardW} height={cardH} onSwiped={() => setIndex((n) => n + 1)}>
+                  <SwipeCard
+                    key={i}
+                    width={cardW}
+                    height={cardH}
+                    onSwiped={isLast ? complete : () => setIndex((n) => n + 1)}
+                  >
                     {content}
                   </SwipeCard>
                 );
@@ -181,7 +203,7 @@ export function OnboardingOverlay({
 
       {/* "Let's go" appears only on the third receipt. */}
       {isLast && (
-        <Pressable onPress={onComplete} style={[styles.cta, { bottom: insets.bottom + spacing.xl + 15 }]}>
+        <Pressable onPress={complete} style={[styles.cta, { bottom: insets.bottom + spacing.xl + 15 }]}>
           <Text style={styles.ctaLabel}>Let&apos;s go</Text>
         </Pressable>
       )}
