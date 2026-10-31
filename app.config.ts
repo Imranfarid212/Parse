@@ -42,6 +42,8 @@ const googleSignInReady =
   );
 
 export default ({ config }: ConfigContext): ExpoConfig => {
+  const isProduction = process.env.EXPO_PUBLIC_ENV === 'production';
+
   const firebasePlugins: NonNullable<ExpoConfig['plugins']> = firebaseReady
     ? [
         '@react-native-firebase/app',
@@ -67,7 +69,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ? ['@react-native-google-signin/google-signin']
     : [];
 
-  if (!firebaseReady && process.env.EXPO_PUBLIC_ENV === 'production') {
+  if (!firebaseReady && isProduction) {
     // Loud in the one case where shipping without crash reporting is a mistake
     // rather than a local convenience.
     console.warn(
@@ -92,10 +94,31 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       ...config.ios,
       ...(firebaseReady ? { googleServicesFile: GOOGLE_SERVICES_IOS } : {}),
       appleTeamId: config.ios?.appleTeamId ?? 'BN87W82CH8',
+      infoPlist: {
+        ...config.ios?.infoPlist,
+        /**
+         * The local-network ATS exception exists only so a debug build can
+         * reach Metro on a `.local` or unqualified hostname. Nothing in a
+         * shipped build opens a local connection, and expo-dev-launcher's
+         * "Strip Local Network Keys for Release" build phase already removes
+         * the `_expo._tcp` Bonjour service and its own usage description from
+         * every non-Debug configuration -- but not this, because it is an ATS
+         * key rather than a dev-launcher one. Closing it keeps the release
+         * binary from declaring a cleartext relaxation it never uses.
+         *
+         * Declared here rather than left to the prebuild template so the value
+         * is deterministic and lives in the repository: `/ios` is generated and
+         * untracked, so whatever is in the checked-out plist proves nothing
+         * about the next build.
+         */
+        NSAppTransportSecurity: {
+          NSAllowsArbitraryLoads: false,
+          NSAllowsLocalNetworking: !isProduction,
+        },
+      },
       entitlements: {
         ...config.ios?.entitlements,
-        'com.apple.developer.devicecheck.appattest-environment':
-          process.env.EXPO_PUBLIC_ENV === 'production' ? 'production' : 'development',
+        'com.apple.developer.devicecheck.appattest-environment': isProduction ? 'production' : 'development',
       },
     },
   };
