@@ -175,7 +175,7 @@ export function SettingsScreen({ onSubScreen }: { onSubScreen?: (s: SettingsSubS
   useEffect(() => () => onSubScreen?.(null), [onSubScreen]);
 
   if (deleting) return <DeleteAccountScreen onCancel={closeSubScreen} />;
-  if (about) return <AboutScreen onBack={closeSubScreen} />;
+  if (about) return <AboutScreen />;
   if (billing) return <BillingScreen />;
   if (categories) return <CategoriesScreen />;
   if (currency) return <CurrencyScreen />;

@@ -2,8 +2,9 @@
  * AboutScreen — the "About Us" interstitial, reached from Settings › Support.
  *
  * Follows DeleteAccountScreen's pattern: SettingsScreen early-returns this in
- * place of its own content and passes `onBack`, so MenuPanel keeps owning the
- * title and close affordance.
+ * place of its own content. MenuPanel owns the title and the back affordance —
+ * SettingsScreen hands it both through `onSubScreen` — so this screen carries
+ * no navigation of its own.
  *
  * What this screen is actually for: a receipt scanner holds people's financial
  * records, so the unspoken question behind "About Us" is not "who are you" but
@@ -28,7 +29,7 @@ import { Card, Divider, Eyebrow } from '@/components/menu/primitives';
 import { isMonitoringAvailable, logSafeError, trackAnonymousBreadcrumb, useAnonymousSupportCode } from '@/lib/monitoring';
 import { SUPPORT_EMAIL } from '@/lib/support';
 import { makeStyles, useColors } from '@/theme/appearance';
-import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
+import { fontFamily, spacing, typography } from '@/theme/tokens';
 
 const ABOUT = {
   /** One line, no mission statement. Says who, immediately. */
@@ -71,7 +72,7 @@ function Person({ name, title }: { name: string; title: string }) {
   );
 }
 
-export function AboutScreen({ onBack }: { onBack: () => void }) {
+export function AboutScreen() {
   const styles = useStyles();
   const colors = useColors();
   // The native values, not the ones in the Expo config: an OTA update leaves
@@ -167,10 +168,6 @@ export function AboutScreen({ onBack }: { onBack: () => void }) {
           Support code · {supportCode ?? '——————'}
         </Text>
       </View>
-
-      <Pressable onPress={onBack} style={styles.backBtn} accessibilityRole="button">
-        <Text style={styles.backText}>Back</Text>
-      </Pressable>
     </ScrollView>
   );
 }
@@ -224,15 +221,4 @@ const useStyles = makeStyles((colors) => ({
     textAlign: 'center',
     letterSpacing: 1,
   },
-
-  backBtn: {
-    height: 52,
-    borderRadius: radius.md,
-    borderCurve: 'continuous',
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  backText: { ...typography.button, color: colors.textPrimary },
 }));
