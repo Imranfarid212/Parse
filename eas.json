@@ -20,7 +20,8 @@
         "EXPO_PUBLIC_RC_TEST_KEY": "test_OjoQGCbzuBcddVqnwmxTwbFPzLJ",
         "EXPO_PUBLIC_ENV": "staging",
         "EXPO_PUBLIC_MOCK_BACKEND": "0",
-        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://wfboznibkhsfxteejxco.supabase.co/functions/v1/app-attest-enroll"
+        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://wfboznibkhsfxteejxco.supabase.co/functions/v1/app-attest-enroll",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "611511433234-te4uepld8olodnmg0qokfsasmf237v5d.apps.googleusercontent.com"
       }
     },
     "preview": {
@@ -35,7 +36,8 @@
         "EXPO_PUBLIC_RC_TEST_KEY": "test_OjoQGCbzuBcddVqnwmxTwbFPzLJ",
         "EXPO_PUBLIC_ENV": "staging",
         "EXPO_PUBLIC_MOCK_BACKEND": "0",
-        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://wfboznibkhsfxteejxco.supabase.co/functions/v1/app-attest-enroll"
+        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://wfboznibkhsfxteejxco.supabase.co/functions/v1/app-attest-enroll",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "611511433234-te4uepld8olodnmg0qokfsasmf237v5d.apps.googleusercontent.com"
       }
     },
     "production": {
@@ -47,7 +49,8 @@
         "EXPO_PUBLIC_ENV": "production",
         "EXPO_PUBLIC_MOCK_BACKEND": "0",
         "EXPO_PUBLIC_RC_APPLE_KEY": "appl_hngsuoxhNmJjsiEJlKmecMQlsEn",
-        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://uhiqjbxqhhxjxnbznocc.supabase.co/functions/v1/app-attest-enroll"
+        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://uhiqjbxqhhxjxnbznocc.supabase.co/functions/v1/app-attest-enroll",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "611511433234-te4uepld8olodnmg0qokfsasmf237v5d.apps.googleusercontent.com"
       }
     },
     "testflight": {
@@ -59,7 +62,8 @@
         "EXPO_PUBLIC_ENV": "staging",
         "EXPO_PUBLIC_MOCK_BACKEND": "0",
         "EXPO_PUBLIC_RC_APPLE_KEY": "appl_hngsuoxhNmJjsiEJlKmecMQlsEn",
-        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://wfboznibkhsfxteejxco.supabase.co/functions/v1/app-attest-enroll"
+        "EXPO_PUBLIC_APP_ATTEST_ENROLL_URL": "https://wfboznibkhsfxteejxco.supabase.co/functions/v1/app-attest-enroll",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "611511433234-te4uepld8olodnmg0qokfsasmf237v5d.apps.googleusercontent.com"
       }
     }
   },
