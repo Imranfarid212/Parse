@@ -5,8 +5,6 @@
  * Single source so the Settings row and the About screen never drift onto
  * different addresses; replies fragmenting across two inboxes on a two-person
  * team is exactly the failure this prevents.
- *
- * ⚠️ SUPPORT_EMAIL IS A PLACEHOLDER. Replace it before shipping.
  */
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
@@ -14,7 +12,7 @@ import * as Device from 'expo-device';
 
 import { getFoundationEnv } from '@/lib/foundations/env';
 
-export const SUPPORT_EMAIL = 'support@example.com';
+export const SUPPORT_EMAIL = 'support@parseai.app';
 
 const SUPPORT_SUBJECT = 'Parse support';
 

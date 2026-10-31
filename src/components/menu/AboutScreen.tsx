@@ -15,10 +15,9 @@
  * The address comes from `lib/support` so this screen and the Settings row can
  * never drift apart.
  *
- * ⚠️ EVERY VALUE IN `ABOUT` BELOW IS A PLACEHOLDER. Fill them in before this
- * ships. Do not invent an origin story: the trust this page is built to earn is
- * exactly what a fabricated detail costs. `dataPromise` in particular must match
- * the privacy policy and the App Store privacy labels — Apple checks that.
+ * `ABOUT` is the founders' own copy, not a rewrite of it. `dataPromise` has to
+ * keep matching the privacy policy and the App Store privacy labels — Apple
+ * checks that — so it is the one value here that cannot be edited alone.
  */
 import React from 'react';
 import { Alert, Linking, Pressable, ScrollView, Text, View } from 'react-native';
@@ -33,17 +32,21 @@ import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const ABOUT = {
   /** One line, no mission statement. Says who, immediately. */
-  intro: 'Parse is made by two people — a brother and sister.',
+  intro: 'Parse is made by two people — a brother and sister — and tested by two more.',
+  // The testers share a row: one avatar for the pair reads as one job, where a
+  // row each repeated "Testing" under two separate chips.
   people: [
-    { name: '[Your name]', title: 'Co-founder, product & design' },
-    { name: "[Sister's name]", title: 'Co-founder, engineering' },
+    { name: 'Imran Malick', title: 'Co-founder, Product & Design' },
+    { name: 'Afrin Malick', title: 'Co-founder, Engineering' },
+    { name: 'Vimohitha, Naresh', title: 'Testing' },
   ],
   /** The real reason. Concrete beats inspirational: a shoebox of receipts at
    *  tax time reads true, "we're passionate about fintech" does not. */
   why:
-    '[The honest reason you started it — the shoebox of receipts at tax time, ' +
-    'the small business, the expenses that never got claimed. Two or three ' +
-    'sentences, plain language, no mission statement.]',
+    'Every year it was the same evening. A shoebox on the table, a laptop, and ' +
+    'a pile of receipts that had already started to fade. Most of them got ' +
+    'entered. Some didn’t, and the ones that didn’t were money we never ' +
+    'claimed.\n\nParse is that evening, done in a few seconds a day instead.',
   dataPromise:
     'Your receipts stay yours. We do not sell your data, and we have no ' +
     'interest in a business model that would need us to.',
