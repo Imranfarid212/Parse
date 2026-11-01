@@ -89,14 +89,56 @@ function fromRpc(row: RpcReceipt): ManagedReceipt {
   };
 }
 
+/**
+ * Still being extracted, from the user's point of view.
+ *
+ * Four of these are local and usually brief; `provider_delayed` is the server
+ * taking its time and can run for minutes. They are one state on screen because
+ * the distinction is ours, not the user's -- all of them mean "we have your
+ * receipt and we do not have the numbers yet".
+ */
+const QUEUED_STATUSES = [
+  'pending_extract',
+  'local_captured',
+  'local_ocr_processing',
+  'llm_failed_retryable',
+  'provider_delayed',
+];
+
+/**
+ * What a queued row carries until the extraction lands.
+ *
+ * `store` is deliberately left empty rather than filled with a guess: the row
+ * renders its own placeholder, and writing a merchant here would put an
+ * invented one into anything that later reads these fields. Currency comes from
+ * the capture so the row is not briefly wrong about it either.
+ */
+const queuedFields = (defaultCurrency: string | null): ReceiptFields => ({
+  store: '',
+  date: '',
+  currency: /^[A-Z]{3}$/.test(defaultCurrency ?? '') ? (defaultCurrency as string) : 'USD',
+  total: 0,
+  category: defaultCategory,
+  handwritten_notes: '',
+  items: [],
+});
+
 async function searchLocal(query: SearchQuery): Promise<ManagedReceipt[]> {
   const results = await store.searchReceipts({ ...query, limit: 200 });
   return results
     .map(({ row, rank }) => ({
-      id: row.receiptId as string,
+      // A queued row has no server id yet, so it is keyed by its capture id.
+      // Nothing reads `id` for one of these -- processing rows are not
+      // openable or deletable -- and the key changing when the real id arrives
+      // is correct: by then it is a different row.
+      id: row.receiptId ?? row.id,
       localId: row.id,
-      status: row.status === 'llm_failed_final' ? 'failed' : row.status === 'provider_delayed' ? 'processing' : 'confirmed',
-      fields: row.fields as ReceiptFields,
+      status: row.status === 'llm_failed_final'
+        ? 'failed'
+        : QUEUED_STATUSES.includes(row.status)
+          ? 'processing'
+          : 'confirmed',
+      fields: row.fields ?? queuedFields(row.defaultCurrency),
       categoryId: row.categoryId,
       imagePath: row.remoteImagePath,
       createdAt: new Date(row.createdAt).toISOString(),
