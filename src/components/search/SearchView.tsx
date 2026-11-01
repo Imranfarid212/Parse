@@ -37,7 +37,10 @@ const VIEW_OPTIONS: SegmentOption<ReceiptView>[] = [
   { key: 'list', label: 'List', icon: 'list' },
 ];
 
-const formatTotal = (receipt: ManagedReceipt) => `${receipt.fields.currency} ${receipt.fields.total.toFixed(2)}`;
+// A queued row has no total yet. "USD 0.00" is a number the user could act on
+// and would be wrong; the dash says the same thing honestly.
+const formatTotal = (receipt: ManagedReceipt) =>
+  receipt.status === 'processing' ? '—' : `${receipt.fields.currency} ${receipt.fields.total.toFixed(2)}`;
 
 export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => void } = {}) {
   const styles = useStyles();
@@ -71,16 +74,25 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
   );
   const { receipts, setReceipts, loading, error, reload } = useRealtimeReceipts(query);
 
-  // Only while something is actually uploading, and stopped the moment nothing
-  // is: an unconditional interval would re-query the local mirror forever.
-  const backupInFlight = receipts.some(
-    (receipt) => receipt.imageSyncStatus !== null && IMAGE_BACKUP_IN_FLIGHT.includes(receipt.imageSyncStatus),
+  // Only while something is actually moving, and stopped the moment nothing is:
+  // an unconditional interval would re-query the local mirror forever.
+  //
+  // Two kinds of movement, for the same reason. A backup finishing is local
+  // work that no realtime event announces. So is an extraction landing: the
+  // result is written to the local row by markDispatched, and while the server
+  // row changing does raise a postgres_changes event, a capture that has not
+  // reached the server yet has no server row to change. Without the poll a
+  // processing row can sit there until the user leaves Recents and comes back.
+  const inFlight = receipts.some(
+    (receipt) =>
+      receipt.status === 'processing' ||
+      (receipt.imageSyncStatus !== null && IMAGE_BACKUP_IN_FLIGHT.includes(receipt.imageSyncStatus)),
   );
   useEffect(() => {
-    if (!backupInFlight) return undefined;
+    if (!inFlight) return undefined;
     const timer = setInterval(() => void reload(), IMAGE_BACKUP_POLL_MS);
     return () => clearInterval(timer);
-  }, [backupInFlight, reload]);
+  }, [inFlight, reload]);
   const fanItems = useMemo<FanItem[]>(
     // No reshaping: the card renders ReceiptFields directly, so a field added
     // to a receipt reaches the card without a mapping step to forget to update.
@@ -222,11 +234,13 @@ export function SearchView({ onOpenPlan: _onOpenPlan }: { onOpenPlan?: () => voi
               items={fanItems}
               onOpenItem={(id) => {
                 const receipt = receipts.find((candidate) => candidate.id === id);
-                if (receipt) setEditing(receipt);
+                // Same guard as the list row: there is nothing to edit until
+                // the extraction lands.
+                if (receipt && receipt.status !== 'processing') setEditing(receipt);
               }}
               onDeleteItem={(id) => {
                 const receipt = receipts.find((candidate) => candidate.id === id);
-                if (receipt) deleteReceipt(receipt);
+                if (receipt && receipt.status !== 'processing') deleteReceipt(receipt);
               }}
             />
           </View>
@@ -330,13 +344,30 @@ function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
   const colors = useColors();
   const badge = duplicateBadgeLabel(receipt);
   const status = statusBadgeLabel(receipt);
+  // Opening a processing row showed placeholder totals in the editor, and any
+  // edit made there would be overwritten the moment the extraction landed.
+  // Deleting one is worse: the server is still working on a receipt whose local
+  // row has gone.
+  const processing = receipt.status === 'processing';
+  // Never the empty string. A server row that is still extracting has a null
+  // merchant, which toFields() stores as '', and an empty <Text> is still a
+  // flex child -- so titleRow's gap rendered BEFORE the badge and pushed
+  // "Processing" 4pt right of the meta line beneath it. A real title also means
+  // the row is not a bare badge floating next to an icon.
+  const title = receipt.fields.store.trim() || 'Receipt';
+  const meta = [receipt.fields.date, receipt.fields.category].filter(Boolean).join(' • ');
   return (
-    <Pressable style={styles.listRow} onPress={() => onEdit(receipt)}>
+    <Pressable
+      style={styles.listRow}
+      disabled={processing}
+      accessibilityState={{ disabled: processing }}
+      onPress={processing ? undefined : () => onEdit(receipt)}
+    >
       <View style={styles.listIcon}><Ionicons name="receipt-outline" size={18} color={colors.textSecondary} /></View>
       <View style={styles.listText}>
         <View style={styles.titleRow}>
           {/* shrinks so the badge is never pushed off the row */}
-          <Text selectable numberOfLines={1} style={[styles.listLabel, { flexShrink: 1 }]}>{receipt.fields.store}</Text>
+          <Text selectable numberOfLines={1} style={[styles.listLabel, { flexShrink: 1 }]}>{title}</Text>
           {badge ? (
             <View style={styles.duplicateBadge}>
               <Text style={styles.duplicateText}>{badge}</Text>
@@ -348,12 +379,16 @@ function ManagedReceiptRow({ receipt, onEdit, onDelete }: ReceiptItemProps) {
             </View>
           ) : null}
         </View>
-        <Text selectable numberOfLines={1} style={styles.listMeta}>{[receipt.fields.date, receipt.fields.category].filter(Boolean).join(' • ')}</Text>
+        {/* Omitted rather than rendered empty: a queued row has no date or
+            category yet, and a blank line still takes its marginTop. */}
+        {meta ? <Text selectable numberOfLines={1} style={styles.listMeta}>{meta}</Text> : null}
       </View>
       <Text selectable style={styles.listTotal}>{formatTotal(receipt)}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${receipt.fields.store}`} onPress={() => onDelete(receipt)} hitSlop={10}>
-        <Ionicons name="trash-outline" size={18} color={colors.danger} />
-      </Pressable>
+      {processing ? null : (
+        <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${title}`} onPress={() => onDelete(receipt)} hitSlop={10}>
+          <Ionicons name="trash-outline" size={18} color={colors.danger} />
+        </Pressable>
+      )}
     </Pressable>
   );
 }

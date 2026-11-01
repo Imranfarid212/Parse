@@ -143,18 +143,19 @@ const ICON_PT = {
 } as const;
 
 /** Single tap toggles Default ↔ One click. Bottom-right of the controls row,
- *  mirroring the gallery button on the left: bare icon over label, no card.
- *  The card styling it used to borrow from the Menu button made it read as a
- *  different class of control than the gallery button facing it across the row.
- *  Menu keeps its card because it sits over the live preview and needs the
- *  scrim; down here the row has the shutter and the toggle to anchor it. */
+ *  mirroring the gallery button on the left -- same card, same geometry, so the
+ *  two ends of the row read as one class of control. An earlier version gave
+ *  this button a card and left Gallery bare, which is what made them look like
+ *  different things; the fix was to match them, not to strip both. */
 function ModeButton({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
   const next = mode === 'default' ? 'oneclick' : 'default';
   const icon = mode === 'default' ? 'albums-outline' : 'flash-outline';
   return (
     <Pressable style={[styles.sideBtn, styles.modeBtnRaise]} onPress={() => onChange(next)} hitSlop={12}>
-      <Ionicons name={icon} size={ICON_PT[icon]} color="#fff" style={styles.sideIcon} />
-      <Text numberOfLines={1} style={styles.sideLabel}>{mode === 'default' ? 'Default' : 'One click'}</Text>
+      <View style={styles.sideBtnInner}>
+        <Ionicons name={icon} size={ICON_PT[icon]} color="#fff" style={styles.sideIcon} />
+        <Text numberOfLines={1} style={styles.sideLabel}>{mode === 'default' ? 'Default' : 'One click'}</Text>
+      </View>
     </Pressable>
   );
 }
@@ -1110,8 +1111,10 @@ export default function CameraScreen() {
 
             <View style={styles.controlsRow}>
               <Pressable style={styles.sideBtn} onPress={onPickFromGallery} hitSlop={12}>
-                <Ionicons name="images-outline" size={ICON_PT['images-outline']} color="#fff" style={styles.sideIcon} />
-                <Text numberOfLines={1} style={styles.sideLabel}>Gallery</Text>
+                <View style={styles.sideBtnInner}>
+                  <Ionicons name="images-outline" size={ICON_PT['images-outline']} color="#fff" style={styles.sideIcon} />
+                  <Text numberOfLines={1} style={styles.sideLabel}>Gallery</Text>
+                </View>
               </Pressable>
 
               <ExtractionModeToggle mode={extractionMode} onChange={setExtractionMode} />
@@ -1196,12 +1199,27 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing.xl,
   },
+  // Same card as the Menu button top-right: white at 0.14, radius.md, 8pt of
+  // vertical padding. Without it both end buttons were bare white-on-preview,
+  // and the preview down here is whatever the shutter is pointed at -- usually
+  // a receipt, i.e. the brightest thing in frame. The Balanced/Precise pill
+  // between them already carried a fill for this reason; these two did not.
+  //
+  // The padding goes on the card and the 56pt alignment box stays untouched
+  // inside it (sideBtnInner), so the card centres on the row's centre line and
+  // the box centres within the card -- the icon lands exactly where it did
+  // before. Putting the padding on the box itself would move the icon.
+  sideBtn: {
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+  },
   // The icon is centred in the 56pt box and the label is taken out of flow
   // beneath it, so the icon's centre -- not the centre of the icon-plus-label
   // stack -- lands on the row's centre line, level with the Balanced/Precise
   // text. In normal flow the label pushes the icon up by half its own height
   // (8pt), which left the two end buttons visibly riding above the pill.
-  sideBtn: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
+  sideBtnInner: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
   // left/right 0 with centred text so a label wider than the icon ("One click")
   // grows evenly either side instead of shifting off centre.
   sideLabel: {

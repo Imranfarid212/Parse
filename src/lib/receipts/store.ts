@@ -1032,11 +1032,27 @@ function receiptPredicates(query: ReceiptQuery): {
   params: Record<string, SQLite.SQLiteBindValue>;
   fts: string | null;
 } {
+  // Settled rows, plus the ones still being extracted.
+  //
+  // The in-flight statuses used to be excluded outright, and `fields IS NOT
+  // NULL` kept them out a second time: markProviderDelayed writes neither
+  // fields nor receipt_id, and a precise capture has no local OCR draft to have
+  // filled them. So a receipt the user had just handed us was invisible in
+  // Recents for the whole extraction, then appeared fully populated when the
+  // result landed -- after a message promising it would show up there.
+  //
+  // They stay out of filtered results for free rather than by a rule: a queued
+  // row is not in the FTS index, so the text JOIN drops it, and every date and
+  // amount predicate is a json_extract over a NULL `fields`, which is NULL and
+  // never true. A processing row therefore appears in the plain list, where it
+  // belongs, and never as a match for a search it cannot satisfy.
   const clauses = [
     owned('r'),
-    "r.fields IS NOT NULL",
-    "r.receipt_id IS NOT NULL",
-    "r.status NOT IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'delete_pending', 'deleted')",
+    "r.status NOT IN ('delete_pending', 'deleted')",
+    `(
+       (r.fields IS NOT NULL AND r.receipt_id IS NOT NULL)
+       OR r.status IN ('pending_extract', 'local_captured', 'local_ocr_processing', 'llm_failed_retryable', 'provider_delayed')
+     )`,
   ];
   const params: Record<string, SQLite.SQLiteBindValue> = {};
   const fts = query.text ? toFtsQuery(query.text) : null;

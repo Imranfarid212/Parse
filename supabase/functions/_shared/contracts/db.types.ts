@@ -240,6 +240,7 @@ export type Database = {
         Row: {
           code_id: string
           commission_amount: number
+          currency: string | null
           id: string
           paid_at: string | null
           payment_event_id: string
@@ -248,6 +249,7 @@ export type Database = {
         Insert: {
           code_id: string
           commission_amount: number
+          currency?: string | null
           id?: string
           paid_at?: string | null
           payment_event_id: string
@@ -256,6 +258,7 @@ export type Database = {
         Update: {
           code_id?: string
           commission_amount?: number
+          currency?: string | null
           id?: string
           paid_at?: string | null
           payment_event_id?: string
@@ -585,8 +588,11 @@ export type Database = {
           occurred_at: string | null
           raw: Json
           rc_event_id: string
+          reporting_amount: number | null
+          reporting_currency: string | null
           store: string | null
           subject_ref: string | null
+          tax_percentage: number | null
           type: string
           user_id: string | null
         }
@@ -598,8 +604,11 @@ export type Database = {
           occurred_at?: string | null
           raw?: Json
           rc_event_id: string
+          reporting_amount?: number | null
+          reporting_currency?: string | null
           store?: string | null
           subject_ref?: string | null
+          tax_percentage?: number | null
           type: string
           user_id?: string | null
         }
@@ -611,8 +620,11 @@ export type Database = {
           occurred_at?: string | null
           raw?: Json
           rc_event_id?: string
+          reporting_amount?: number | null
+          reporting_currency?: string | null
           store?: string | null
           subject_ref?: string | null
+          tax_percentage?: number | null
           type?: string
           user_id?: string | null
         }
@@ -1606,7 +1618,10 @@ export type Database = {
           p_period_start: string
           p_product_id: string
           p_raw: Json
+          p_reporting_amount?: number
+          p_reporting_currency?: string
           p_store: string
+          p_tax_percentage?: number
           p_type: string
           p_user_id: string
         }

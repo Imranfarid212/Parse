@@ -58,7 +58,19 @@ Deno.serve(async (req) => {
     return json(400, { status: 400, code: 'VALIDATION_FAILED', message: 'body is not JSON' });
   }
 
-  const normalized = normalizeEvent(payload);
+  // The delivery names the PURCHASE currency only; RevenueCat's reporting
+  // currency lives in its dashboard, so it has to come from config. Left unset,
+  // the reporting amount is still recorded but its currency stays null and the
+  // commission basis falls back to the purchased pair — correct, and summable
+  // for a single-currency project, but it will not aggregate once a second
+  // storefront appears. Logged rather than refused: a missing label must not
+  // bounce a money event into RevenueCat's retry queue.
+  const reportingCurrency = Deno.env.get('RC_REPORTING_CURRENCY') ?? null;
+  if (!reportingCurrency) {
+    console.warn('[rc-webhook] RC_REPORTING_CURRENCY is unset; reporting amounts will be stored unlabelled');
+  }
+
+  const normalized = normalizeEvent(payload, reportingCurrency);
   if (!normalized.ok) {
     // 400 rather than 500: redelivering the same malformed body cannot succeed,
     // so asking RevenueCat to retry it forever helps nobody.
@@ -103,6 +115,9 @@ Deno.serve(async (req) => {
       // ever disputed this row is the evidence.
       p_raw: payload,
       p_environment: event.environment,
+      p_reporting_amount: event.reportingAmount,
+      p_reporting_currency: event.reportingCurrency,
+      p_tax_percentage: event.taxPercentage,
     });
     if (error) throw error;
 
@@ -116,6 +131,8 @@ Deno.serve(async (req) => {
       store: event.store,
       environment: event.environment,
       product_id: event.productId,
+      currency: event.currency,
+      reporting_currency: event.reportingCurrency,
       applied,
       reason: row?.out_reason ?? null,
     });

@@ -89,17 +89,71 @@ export function periodStartFor(event: { type?: string; purchased_at_ms?: number 
 }
 
 /**
- * Gross amount for the ledger and for influencer commission.
+ * A three-letter ISO code, upper-cased, or null.
  *
- * `price` is in the store's reporting currency and `price_in_purchased_currency`
- * is what the customer actually paid. Commission is 15% of gross revenue, so the
- * reporting figure is the right basis; the purchased-currency figure is kept in
- * `raw` for reconciliation. A refund arrives with a negative price, which flows
- * through to a negative commission — the reversal.
+ * Shared by the purchase currency and the reporting currency so neither can be
+ * stored in a different shape than the other — a `usd` in one column and a
+ * `USD` in the next makes every group-by lie.
  */
-export function grossFor(event: { price?: number | null; type?: string }): number | null {
+export function normalizeCurrencyCode(code: string | null | undefined): string | null {
+  return typeof code === 'string' && code.length === 3 ? code.toUpperCase() : null;
+}
+
+/**
+ * What the customer was actually charged — the payment record's gross.
+ *
+ * RevenueCat sends two amounts. `price_in_purchased_currency` is what the
+ * customer paid; `price` is that same sale converted into the project's
+ * reporting currency. `currency` labels the FIRST of those and nothing else.
+ *
+ * This used to return `price`, which paired a reporting-currency figure with a
+ * purchase-currency label. It read as obviously correct — `price` looks like THE
+ * price and `currency` looks like THE currency — and it was invisible for as
+ * long as every sale was American. The first Canadian purchase recorded 6.99 CAD
+ * as `5.00 CAD`: the right number for the wrong currency, a price nobody was
+ * ever charged.
+ *
+ * `price` is still the better basis for commission, which is why reportingFor()
+ * exists; it just has to be stored next to the currency it is denominated in.
+ *
+ * Falls back to `price` when the purchased figure is absent — with one amount
+ * there is nothing to choose between, and `currency` describes it. A refund
+ * arrives with a negative price, which flows through to a negative commission:
+ * the reversal.
+ */
+export function grossFor(event: {
+  price?: number | null;
+  price_in_purchased_currency?: number | null;
+  type?: string;
+}): number | null {
+  const amount = [event?.price_in_purchased_currency, event?.price].find(
+    (value) => typeof value === 'number' && Number.isFinite(value),
+  );
+  if (typeof amount !== 'number') return null;
+  if (event?.type === 'REFUND') return -Math.abs(amount);
+  return amount;
+}
+
+/**
+ * The same sale in the project's reporting currency — the basis for revenue
+ * roll-ups and for influencer commission.
+ *
+ * Two subscribers on the same product in different storefronts owe the same
+ * percentage of the same revenue, so the ledger accrues against this figure
+ * rather than the purchased one. Denominating one debt in CAD and the next in
+ * JPY would leave `sum(commission_amount)` unable to say what anyone is owed.
+ *
+ * RevenueCat converted this at event time and the dashboard reports the same
+ * number, so it is carried across verbatim rather than re-derived from a rate
+ * table later — a second conversion would disagree with the first.
+ *
+ * The payload does not name this currency: `currency` describes the purchase,
+ * and the reporting currency is a RevenueCat project setting. The caller
+ * supplies it — see normalizeEvent's second argument.
+ */
+export function reportingFor(event: { price?: number | null; type?: string }): number | null {
   if (typeof event?.price !== 'number' || !Number.isFinite(event.price)) return null;
-  if (event.type === 'REFUND') return -Math.abs(event.price);
+  if (event?.type === 'REFUND') return -Math.abs(event.price);
   return event.price;
 }
 
@@ -113,8 +167,14 @@ export type NormalizedRcEvent = {
   occurredAt: string | null;
   periodStart: string | null;
   periodEnd: string | null;
+  /** What the customer was charged, denominated in `currency`. */
   gross: number | null;
   currency: string | null;
+  /** The same sale denominated in `reportingCurrency`. */
+  reportingAmount: number | null;
+  reportingCurrency: string | null;
+  /** Fraction, not percent: 0.2 for a 20% VAT-inclusive storefront. */
+  taxPercentage: number | null;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -126,8 +186,19 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
  * ids ($RCAnonymousID:...) for users who never logged in; those cannot be
  * attributed to an account, so they are rejected here rather than being written
  * against a null user and quietly lost.
+ *
+ * `reportingCurrency` is the one thing this cannot read off the delivery — the
+ * payload names the purchase currency only. It is passed in rather than read
+ * from env here so this file stays pure and exhaustively testable; the webhook
+ * supplies it from RC_REPORTING_CURRENCY. Passing nothing leaves
+ * `reportingCurrency` null, which is honest: the amount is known, the currency
+ * it is denominated in is not, and storing a guess is how this went wrong the
+ * first time.
  */
-export function normalizeEvent(payload: unknown): { ok: true; event: NormalizedRcEvent } | { ok: false; reason: string } {
+export function normalizeEvent(
+  payload: unknown,
+  reportingCurrency: string | null = null,
+): { ok: true; event: NormalizedRcEvent } | { ok: false; reason: string } {
   const event = (payload as { event?: Record<string, unknown> })?.event;
   if (!event || typeof event !== 'object') return { ok: false, reason: 'missing event object' };
 
@@ -140,9 +211,7 @@ export function normalizeEvent(payload: unknown): { ok: true; event: NormalizedR
   const appUserId = typeof event.app_user_id === 'string' ? event.app_user_id.trim() : '';
   if (!UUID.test(appUserId)) return { ok: false, reason: 'app_user_id is not an account uuid' };
 
-  const currency = typeof event.currency === 'string' && event.currency.length === 3
-    ? event.currency.toUpperCase()
-    : null;
+  const currency = normalizeCurrencyCode(event.currency as string | null);
 
   return {
     ok: true,
@@ -156,8 +225,18 @@ export function normalizeEvent(payload: unknown): { ok: true; event: NormalizedR
       occurredAt: msToIso(event.event_timestamp_ms as number | null) ?? new Date().toISOString(),
       periodStart: periodStartFor({ type, purchased_at_ms: event.purchased_at_ms as number | null }),
       periodEnd: msToIso(event.expiration_at_ms as number | null),
-      gross: grossFor({ price: event.price as number | null, type }),
+      gross: grossFor({
+        price: event.price as number | null,
+        price_in_purchased_currency: event.price_in_purchased_currency as number | null,
+        type,
+      }),
       currency,
+      reportingAmount: reportingFor({ price: event.price as number | null, type }),
+      reportingCurrency: normalizeCurrencyCode(reportingCurrency),
+      taxPercentage:
+        typeof event.tax_percentage === 'number' && Number.isFinite(event.tax_percentage)
+          ? event.tax_percentage
+          : null,
     },
   };
 }

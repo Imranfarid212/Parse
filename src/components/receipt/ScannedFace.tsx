@@ -103,8 +103,16 @@ export function ScannedFace({ width, fields, loading = false }: { width: number;
             <View style={[styles.headerContent, { left: 30 * s, right: 30 * s, bottom: 30 * s }]}>
               {fields ? (
                 <>
+                  {/* Same fallback and same trim as the Recents list row: one
+                      receipt must not be "Receipt" in the list and "Unknown
+                      store" on its card. A queued receipt has no merchant yet
+                      -- the server has not answered -- and "Unknown store"
+                      reads as a finished extraction that failed to find one,
+                      which is a different and more alarming thing. The trim
+                      matters because a whitespace-only merchant is not a name
+                      but passes a bare `||`. */}
                   <Text numberOfLines={1} style={[styles.store, { fontSize: 22 * s }]}>
-                    {fields.store || 'Unknown store'}
+                    {fields.store.trim() || 'Receipt'}
                   </Text>
                   <Text style={[styles.date, { fontSize: 14 * s, marginTop: 3 * s }]}>{prettyDate(fields.date)}</Text>
                 </>

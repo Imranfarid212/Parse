@@ -237,6 +237,36 @@ async function main() {
     const refundedStatus = (await db.query(`select status from public.subscriptions where user_id = $1`, [referred])).rows[0].status;
     check('a refund expires the subscription', refundedStatus, 'expired');
 
+    // --- PRODUCT_CHANGE must never move the product -------------------------
+    //
+    // An immediate upgrade dispatches PRODUCT_CHANGE and RENEWAL together, and
+    // webhook deliveries are concurrent POSTs with no ordering guarantee. The
+    // first ordering below is the one production happened to get on 2026-11-01,
+    // 5ms apart; the second is the coin landing the other way. Both have to end
+    // on the product the customer is actually paying for, or can_scan() holds a
+    // Max subscriber at Pro's 200 for a month.
+    const upgrader = await makeUser(0);
+    await applyEvent({ id: `evt-${randomUUID()}`, type: 'INITIAL_PURCHASE', userId: upgrader, productId: 'parse_pro_m', periodStart: new Date().toISOString(), gross: 6.99 });
+    await applyEvent({ id: `evt-${randomUUID()}`, type: 'PRODUCT_CHANGE', userId: upgrader, productId: 'parse_pro_m', periodStart: new Date().toISOString(), gross: 0 });
+    await applyEvent({ id: `evt-${randomUUID()}`, type: 'RENEWAL', userId: upgrader, productId: 'parse_max_m', periodStart: new Date().toISOString(), gross: 15.99 });
+    const inOrder = (await db.query(`select product_id from public.subscriptions where user_id = $1`, [upgrader])).rows[0].product_id;
+    check('change then renewal lands on the new product', inOrder, 'parse_max_m');
+
+    const raced = await makeUser(0);
+    await applyEvent({ id: `evt-${randomUUID()}`, type: 'INITIAL_PURCHASE', userId: raced, productId: 'parse_pro_m', periodStart: new Date().toISOString(), gross: 6.99 });
+    await applyEvent({ id: `evt-${randomUUID()}`, type: 'RENEWAL', userId: raced, productId: 'parse_max_m', periodStart: new Date().toISOString(), gross: 15.99 });
+    await applyEvent({ id: `evt-${randomUUID()}`, type: 'PRODUCT_CHANGE', userId: raced, productId: 'parse_pro_m', periodStart: new Date().toISOString(), gross: 0 });
+    // The regression: this used to write parse_pro_m back over the upgrade.
+    check('a late PRODUCT_CHANGE does not undo the upgrade', (await db.query(`select product_id from public.subscriptions where user_id = $1`, [raced])).rows[0].product_id, 'parse_max_m');
+
+    // A deferred crossgrade arrives alone and applies at period end, so the
+    // customer must keep what they are on until the RENEWAL says otherwise.
+    const deferred = await makeUser(0);
+    await applyEvent({ id: `evt-${randomUUID()}`, type: 'INITIAL_PURCHASE', userId: deferred, productId: 'parse_max_m', periodStart: new Date().toISOString(), gross: 15.99 });
+    await applyEvent({ id: `evt-${randomUUID()}`, type: 'PRODUCT_CHANGE', userId: deferred, productId: 'parse_max_m', periodStart: new Date().toISOString(), gross: 0 });
+    const deferredRow = (await db.query(`select product_id, status from public.subscriptions where user_id = $1`, [deferred])).rows[0];
+    check('a deferred change leaves the current plan alone', [deferredRow.product_id, deferredRow.status], ['parse_max_m', 'active']);
+
     // --- Test Store: the path that works with no Apple/Google account -------
     const tester = await makeUser(0);
     const testPurchase = await applyEvent({
