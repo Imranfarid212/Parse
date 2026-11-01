@@ -200,6 +200,7 @@ the dashboard's Edge Functions → Secrets:
 ```
 RC_WEBHOOK_AUTH=
 RC_SECRET_API_KEY=
+RC_REPORTING_CURRENCY=USD
 APPLE_SIWA_TEAM_ID=
 APPLE_SIWA_CLIENT_ID=
 APPLE_SIWA_KEY_ID=
@@ -216,6 +217,20 @@ supabase functions deploy rc-webhook --no-verify-jwt --project-ref <ref> && supa
 `rc-webhook` uses `--no-verify-jwt` because RevenueCat is not a signed-in user;
 it authenticates with the shared `RC_WEBHOOK_AUTH` header instead. The other two
 are called by the app and **must** keep JWT verification on.
+
+`RC_REPORTING_CURRENCY` must match **Project settings → General → Reporting
+currency** in RevenueCat. It is the one field the webhook cannot read off a
+delivery: the payload's `currency` names the currency the *customer* paid in, and
+the reporting currency exists only as that dashboard setting. Set it wrong and
+every revenue roll-up is mislabelled; leave it unset and reporting amounts are
+stored without a currency, which makes influencer commission accrue in each
+buyer's own currency instead of one summable one.
+
+This is not hypothetical — the webhook originally paired RevenueCat's
+reporting-currency `price` with the purchase-currency `currency`, and the first
+non-US sale recorded 6.99 CAD as `5.00 CAD`. `payment_events` now keeps the two
+apart: `gross_amount`/`currency` is what the customer was charged,
+`reporting_amount`/`reporting_currency` is the converted figure.
 
 ---
 

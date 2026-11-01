@@ -13,12 +13,16 @@ import {
   grossFor,
   mapStore,
   msToIso,
+  normalizeCurrencyCode,
   normalizeEvent,
   normalizeEnvironment,
   normalizeProductId,
   periodStartFor,
+  reportingFor,
   secureEquals,
 } from '../../_shared/revenuecat.ts';
+
+import { rcForeignCurrencyPurchaseFixture } from '../../_shared/contracts/fixtures.ts';
 
 Deno.test('mapStore translates both stores and refuses the rest', () => {
   assertEquals(mapStore('APP_STORE'), 'apple');
@@ -166,4 +170,67 @@ Deno.test('a Test Store purchase normalizes into a usable event', () => {
   assertEquals(result.event.store, 'test');
   assertEquals(result.event.environment, 'SANDBOX');
   assertEquals(result.event.periodStart, '2026-08-08T00:00:00.000Z');
+});
+
+Deno.test('gross is what the customer paid, reporting is the converted figure', () => {
+  const event = { price: 5.001, price_in_purchased_currency: 6.99, type: 'INITIAL_PURCHASE' };
+
+  // The regression this pins. These two numbers describe the same sale in
+  // different currencies, and the payload labels only the second one. Returning
+  // `price` here recorded 5.001 against `currency: 'CAD'` — a figure in a
+  // currency nobody was charged.
+  assertEquals(grossFor(event), 6.99);
+  assertEquals(reportingFor(event), 5.001);
+
+  // With no purchased figure there is nothing to choose between, and `currency`
+  // describes `price`. This is the shape every pre-existing fixture has, which
+  // is why the bug survived three months of a green gate.
+  assertEquals(grossFor({ price: 6.99, type: 'INITIAL_PURCHASE' }), 6.99);
+
+  // A refund reverses both, so a reversal can never be written as an accrual.
+  const refund = { price: 5.001, price_in_purchased_currency: 6.99, type: 'REFUND' };
+  assertEquals(grossFor(refund), -6.99);
+  assertEquals(reportingFor(refund), -5.001);
+});
+
+Deno.test('normalizeCurrencyCode upper-cases, and refuses anything that is not ISO-4217', () => {
+  assertEquals(normalizeCurrencyCode('cad'), 'CAD');
+  assertEquals(normalizeCurrencyCode('USD'), 'USD');
+  // A mixed-case column makes every group-by lie, so the shape is forced here
+  // rather than trusted from two different call sites.
+  assertEquals(normalizeCurrencyCode('Usd'), 'USD');
+  assertEquals(normalizeCurrencyCode('DOLLARS'), null);
+  assertEquals(normalizeCurrencyCode(''), null);
+  assertEquals(normalizeCurrencyCode(null), null);
+  assertEquals(normalizeCurrencyCode(undefined), null);
+});
+
+Deno.test('a foreign-currency sale keeps each amount with its own currency', () => {
+  const result = normalizeEvent(rcForeignCurrencyPurchaseFixture, 'USD');
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+
+  // 6.99 CAD is what the store charged and what his receipt says.
+  assertEquals(result.event.gross, 6.99);
+  assertEquals(result.event.currency, 'CAD');
+  // 5.001 USD is the same sale in the reporting currency — the commission basis.
+  assertEquals(result.event.reportingAmount, 5.001);
+  assertEquals(result.event.reportingCurrency, 'USD');
+  assertEquals(result.event.taxPercentage, 0);
+  assertEquals(result.event.environment, 'PRODUCTION');
+});
+
+Deno.test('the reporting currency is never guessed from the payload', () => {
+  // `currency` describes the purchase. Inferring the reporting currency from it
+  // is the original defect, so with nothing supplied the label stays null: the
+  // amount is known, its denomination is not, and apply_rc_event then accrues
+  // against the purchased pair rather than mixing the two.
+  const result = normalizeEvent(rcForeignCurrencyPurchaseFixture);
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.event.reportingAmount, 5.001);
+  assertEquals(result.event.reportingCurrency, null);
+  assertEquals(result.event.currency, 'CAD');
 });

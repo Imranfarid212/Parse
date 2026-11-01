@@ -197,10 +197,48 @@ export const rcUnknownTypeFixture = {
   },
 } as const;
 
+/**
+ * A real sale outside the reporting currency — the shape that broke.
+ *
+ * Every other fixture here has `price == price_in_purchased_currency` and
+ * `currency: 'USD'`, which is the one configuration where confusing the two
+ * amounts is undetectable. The webhook shipped doing exactly that and the gate
+ * stayed green for three months; the first Canadian purchase recorded 6.99 CAD
+ * as `5.00 CAD`.
+ *
+ * So the three fields are deliberately all different, and taken from the real
+ * delivery (RevenueCat event BF5A752B, 2026-11-01): 6.99 CAD charged, 5.001 USD
+ * reported. Any future change that pairs an amount with the wrong label fails
+ * here instead of in production.
+ */
+export const rcForeignCurrencyPurchaseFixture = {
+  api_version: '1.0',
+  event: {
+    id: 'rc-evt-foreign-0008',
+    type: 'INITIAL_PURCHASE',
+    app_user_id: RC_FIXTURE_USER,
+    product_id: 'parse_pro_m_promo',
+    store: 'APP_STORE',
+    environment: 'PRODUCTION',
+    event_timestamp_ms: RC_PERIOD_START_MS,
+    purchased_at_ms: RC_PERIOD_START_MS,
+    expiration_at_ms: RC_PERIOD_START_MS + RC_MONTH_MS,
+    // Reporting currency (USD), carrying the FX precision RevenueCat sends.
+    price: 5.001,
+    // What the customer was actually charged.
+    price_in_purchased_currency: 6.99,
+    // Labels price_in_purchased_currency. Never price.
+    currency: 'CAD',
+    tax_percentage: 0,
+    is_trial_period: false,
+  },
+} as const;
+
 export const rcWebhookFixtures = {
   initialPurchase: rcInitialPurchaseFixture,
   renewal: rcRenewalFixture,
   googlePurchase: rcGooglePurchaseFixture,
+  foreignCurrencyPurchase: rcForeignCurrencyPurchaseFixture,
   refund: rcRefundFixture,
   expiration: rcExpirationFixture,
   billingIssue: rcBillingIssueFixture,
