@@ -20,11 +20,16 @@ export default function WelcomeScreen() {
   return (
     <View style={styles.screen}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
+      {/*
+        Dismissing the tour is not signing out. This used to call signOut() and
+        send the user back to `/`, so the X on a just-created account read as
+        the app rejecting it. Both controls now land in the same place "Let's
+        go" does: the X skips the three cards, not the setup behind them —
+        camera.tsx sends anyone without `onboarding_complete` straight back, so
+        there is nowhere further to skip to.
+      */}
       <OnboardingOverlay
-        onClose={() => {
-          void auth.signOut();
-          router.replace('/' as Href);
-        }}
+        onClose={() => router.replace('/onboarding' as Href)}
         onComplete={() => router.replace('/onboarding' as Href)}
       />
     </View>

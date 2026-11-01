@@ -75,6 +75,14 @@ const PLANS: Record<Tier, { name: string; features: string[] }> = {
 
 const PLAN_OPTIONS = (['pro', 'max'] as Tier[]).map((key) => ({ key, label: PLANS[key].name }));
 
+/**
+ * Tiers are ordered, not just named: Max includes everything Pro sells. That
+ * ordering is what decides whether a plan on screen is still purchasable, so a
+ * Max subscriber is never offered Pro as if it were an upgrade.
+ */
+const TIER_RANK: Record<Tier, number> = { pro: 1, max: 2 };
+const rankOf = (tier: Tier | null) => (tier ? TIER_RANK[tier] : 0);
+
 /** A billing card: bold price (with strikethrough when the promo is on) + term. */
 function BillingCard({
   term,
@@ -82,6 +90,7 @@ function BillingCard({
   listPrice,
   promoPrice,
   promo,
+  disabled = false,
   onPress,
 }: {
   term: string;
@@ -89,6 +98,7 @@ function BillingCard({
   listPrice: string | null;
   promoPrice: string | null;
   promo: boolean;
+  disabled?: boolean;
   onPress: () => void;
 }) {
   const styles = useStyles();
@@ -101,10 +111,15 @@ function BillingCard({
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole="button"
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, disabled }}
       accessibilityLabel={showing ? `${showing} per ${term}` : `Price unavailable per ${term}`}
-      style={[styles.billCard, selected ? styles.billCardOn : styles.billCardOff]}
+      style={[
+        styles.billCard,
+        selected && !disabled ? styles.billCardOn : styles.billCardOff,
+        disabled && styles.billCardDisabled,
+      ]}
     >
       <View style={styles.billPriceRow}>
         {struck && <Text style={styles.billStrike}>{struck}</Text>}
@@ -229,29 +244,63 @@ export function PlanScreen() {
 
   const current = PLANS[plan];
 
-  // A preview entry has no package, so it can never be bought. The button still
-  // shows its price, because the whole point is to see the finished screen.
-  const purchasable = selected?.pkg != null;
+  /**
+   * Whether the plan on screen is already covered by what the user pays for.
+   * True for Pro while the user is on Pro, and for both tiers on Max, because
+   * Max outranks Pro. Nothing below it may be bought: the stores would take the
+   * money, RevenueCat would record a second active subscription, and the user
+   * would be paying twice for one entitlement — a refund request, not a sale.
+   */
+  const covered = rankOf(entitlements.tier) >= rankOf(plan);
 
   /**
-   * The badge counts down the real balance, as the design does. A paid plan
-   * shows the plan instead — "Free Trial: 3 scans left" over a paid account
-   * would be nonsense — and an uncapped plan has no number to show.
+   * Open on the first plan the user does not already have, so a Pro subscriber
+   * lands on the only thing they can actually buy. Entitlements arrive after
+   * the first render, so this cannot be the initial state; it runs once, on the
+   * tier resolving, and never fights a choice made by hand afterwards.
+   */
+  const planNudged = useRef(false);
+  useEffect(() => {
+    if (planNudged.current || entitlements.loading) return;
+    planNudged.current = true;
+    if (entitlements.tier === 'pro') setPlan('max');
+  }, [entitlements.loading, entitlements.tier]);
+
+  // A preview entry has no package, so it can never be bought. The button still
+  // shows its price, because the whole point is to see the finished screen.
+  const purchasable = selected?.pkg != null && !covered;
+
+  /**
+   * The badge counts down the real balance on the free tier, as the design
+   * does. A paid plan states the plan and stops there: the remaining count is a
+   * trial pressure cue, and pointing it at someone who has already paid reads
+   * as a meter running down on a purchase they made.
+   *
+   * The feature card above still prints the Pro monthly allowance, so dropping
+   * the number here loses no information the user needs.
    */
   const planBadge = useMemo(() => {
     const { tier, remaining } = entitlements;
-    if (tier === 'max') return `${PLANS.max.name} plan active`;
-    if (tier === 'pro') {
-      return remaining == null ? `${PLANS.pro.name} plan active` : `${PLANS.pro.name}: ${remaining} scans left`;
-    }
+    if (tier) return `${PLANS[tier].name} plan active`;
     if (remaining == null) return 'Free Trial';
     return `Free Trial: ${remaining} ${remaining === 1 ? 'scan' : 'scans'} left`;
   }, [entitlements]);
 
+  /** Paid tiers are a statement of fact, not a warning to act on. */
+  const planBadgePaid = entitlements.tier != null;
+
   const subscribeLabel = useMemo(() => {
+    // What the button says when it cannot charge matters more than when it can:
+    // "Unavailable" over a plan the user already owns reads as the app being
+    // broken rather than as them being already subscribed.
+    if (covered) {
+      return entitlements.tier === plan
+        ? `${PLANS[plan].name} is your current plan`
+        : `Already included in ${PLANS[entitlements.tier!].name}`;
+    }
     if (!selected) return prices.loading ? 'Loading…' : 'Unavailable';
     return `Subscribe for ${selected.priceString} / ${billing}`;
-  }, [selected, billing, prices.loading]);
+  }, [covered, entitlements.tier, plan, selected, billing, prices.loading]);
 
   const subscribe = useCallback(async () => {
     if (!selected?.pkg || busy) return;
@@ -386,9 +435,13 @@ export function PlanScreen() {
 
       {/* Trial badge */}
       <View style={styles.trialWrap}>
-        <View style={styles.trialBadge}>
-          <Feather name="alert-circle" size={14} color={colors.warning} />
-          <Text style={styles.trialText}>{planBadge}</Text>
+        <View style={[styles.trialBadge, planBadgePaid && styles.planBadgeActive]}>
+          <Feather
+            name={planBadgePaid ? 'check-circle' : 'alert-circle'}
+            size={14}
+            color={planBadgePaid ? colors.accent : colors.warning}
+          />
+          <Text style={[styles.trialText, planBadgePaid && styles.planBadgeActiveText]}>{planBadge}</Text>
         </View>
       </View>
 
@@ -402,8 +455,10 @@ export function PlanScreen() {
         ))}
       </Card>
 
-      {/* Promo — hidden unless a real promo price list exists to switch to. */}
-      {prices.hasPromo && (
+      {/* Promo — hidden unless a real promo price list exists to switch to, and
+          hidden on a plan the user already has: "Tap now to avail" over a
+          purchase that cannot be made is an offer the screen cannot honour. */}
+      {prices.hasPromo && !covered && (
         <View style={styles.promoRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.promoTitle}>Early promotion discount</Text>
@@ -421,6 +476,7 @@ export function PlanScreen() {
           listPrice={prices.entries[priceKey('default', plan, 'month')]?.priceString ?? null}
           promoPrice={prices.entries[priceKey('promo', plan, 'month')]?.priceString ?? null}
           promo={promo}
+          disabled={covered}
           onPress={() => setBilling('month')}
         />
         <BillingCard
@@ -429,6 +485,7 @@ export function PlanScreen() {
           listPrice={prices.entries[priceKey('default', plan, 'year')]?.priceString ?? null}
           promoPrice={prices.entries[priceKey('promo', plan, 'year')]?.priceString ?? null}
           promo={promo}
+          disabled={covered}
           onPress={() => setBilling('year')}
         />
       </View>
@@ -573,6 +630,8 @@ const useStyles = makeStyles((colors, elevation) => ({
     borderColor: colors.warningBorder,
   },
   trialText: { ...typography.eyebrow, color: colors.warning },
+  planBadgeActive: { backgroundColor: colors.accentSurface, borderColor: colors.accent },
+  planBadgeActiveText: { color: colors.accent },
 
   featureCard: { padding: spacing.lg, gap: spacing.md },
   featureRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
@@ -603,6 +662,9 @@ const useStyles = makeStyles((colors, elevation) => ({
   },
   billCardOn: { borderColor: colors.accent, backgroundColor: colors.accentSurface },
   billCardOff: { borderColor: colors.border, backgroundColor: colors.surface },
+  // Greyed rather than hidden: the prices stay readable, so a Pro subscriber
+  // can still see what Pro costs without the screen offering to sell it again.
+  billCardDisabled: { backgroundColor: colors.surfaceSubtle, borderColor: colors.border, opacity: 0.55 },
   billPriceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
   billStrike: {
     ...typography.meta,
