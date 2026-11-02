@@ -73,6 +73,17 @@ import { fontFamily, radius, spacing, typography } from '@/theme/tokens';
 
 const TIER_NAMES = { pro: 'Parse Pro', max: 'Parse Max' } as const;
 
+/**
+ * Hides "Manage subscription" and the note under it, for everyone, on request.
+ *
+ * A flag rather than a deletion because nothing about the button is wrong: the
+ * handler, its cross-store routing and the note that says where it lands are all
+ * still correct and still tested by being compiled. Flip this to true to bring
+ * it back. Keep it in mind when reading onManage() -- nothing calls it while
+ * this is false, including on the store-unreachable branch.
+ */
+const SHOW_MANAGE_SUBSCRIPTION = false;
+
 /** Matches the date style used by the receipt filters, so the app reads as one app. */
 function formatDate(iso: string | null): string | null {
   if (!iso) return null;
@@ -241,7 +252,7 @@ export function BillingScreen() {
   // Family members cannot manage a subscription they did not buy: the store
   // screen would not list it. Refunds are Apple-only and pointless once the
   // subscription has already ended.
-  const canManage = hasSubscription && !summary.isFamilyShared;
+  const canManage = SHOW_MANAGE_SUBSCRIPTION && hasSubscription && !summary.isFamilyShared;
   const canRefund =
     Platform.OS === 'ios' &&
     summary.store === 'app_store' &&
@@ -304,24 +315,30 @@ export function BillingScreen() {
           >
             <Text style={styles.ctaText}>{COPY_BILLING_RETRY}</Text>
           </Pressable>
-          {/* Still offered: openManageSubscriptions falls back to the store's
-              generic subscriptions page, which needs no CustomerInfo and is
-              where this user most wants to go when we cannot tell them
-              anything. */}
-          <Pressable
-            onPress={() => void onManage()}
-            disabled={busy}
-            accessibilityRole="button"
-            accessibilityLabel={COPY_BILLING_MANAGE_CTA}
-            style={({ pressed }) => [styles.secondary, pressed && { opacity: 0.7 }]}
-          >
-            {busy ? (
-              <ActivityIndicator color={colors.textSecondary} />
-            ) : (
-              <Text style={styles.secondaryText}>{COPY_BILLING_MANAGE_CTA}</Text>
-            )}
-          </Pressable>
-          <Text style={styles.ctaNote}>{manageNote}</Text>
+          {/* Behind the same flag as the card's own button, so the screen does
+              not offer here what it has stopped offering there. When it comes
+              back this one earns its place: openManageSubscriptions falls back
+              to the store's generic subscriptions page, which needs no
+              CustomerInfo and is where this user most wants to go when we
+              cannot tell them anything. */}
+          {SHOW_MANAGE_SUBSCRIPTION && (
+            <>
+              <Pressable
+                onPress={() => void onManage()}
+                disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel={COPY_BILLING_MANAGE_CTA}
+                style={({ pressed }) => [styles.secondary, pressed && { opacity: 0.7 }]}
+              >
+                {busy ? (
+                  <ActivityIndicator color={colors.textSecondary} />
+                ) : (
+                  <Text style={styles.secondaryText}>{COPY_BILLING_MANAGE_CTA}</Text>
+                )}
+              </Pressable>
+              <Text style={styles.ctaNote}>{manageNote}</Text>
+            </>
+          )}
         </View>
       </ScrollView>
     );
