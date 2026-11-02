@@ -1126,9 +1126,9 @@ export default function CameraScreen() {
             <Animated.View
               style={[
                 styles.guideWrap,
-                // Centre the guide in what is left above the shutter, not in the
-                // whole screen, so its bottom edge keeps GUIDE_CONTROLS_GAP of
-                // clearance instead of running into the capture button.
+                // Sit the guide GUIDE_CONTROLS_GAP above the shutter: this
+                // shrinks the box it is anchored in, and guideWrap pins it to
+                // that box's floor.
                 { bottom: (controlsHeight || CONTROLS_H_ESTIMATE) + GUIDE_CONTROLS_GAP },
                 guideStyle,
               ]}
@@ -1229,7 +1229,13 @@ const styles = StyleSheet.create({
   },
   btnLabel: { color: '#fff', fontSize: 11 },
 
-  guideWrap: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
+  // flex-end, not centre. The wrapper's `bottom` is set to the controls' height
+  // plus GUIDE_CONTROLS_GAP, so anchoring the guide to the wrapper's floor puts
+  // its lower edge exactly that gap above the shutter. Centring it in the
+  // remaining box instead satisfied "at least 16pt" by leaving ~137pt, which
+  // read as the frame floating off on its own, and moved the frame ~120pt up
+  // from where it had always sat.
+  guideWrap: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'flex-end' },
   guide: { width: '70%', aspectRatio: 0.72, borderWidth: 2, borderColor: 'rgba(255,255,255,0.6)', borderRadius: radius.md },
 
   bottom: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center', gap: spacing.lg },
