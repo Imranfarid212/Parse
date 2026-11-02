@@ -124,6 +124,22 @@ const FOLDER_W = 82;
 
 const toCaptureMode = (mode: Mode): CaptureMode => (mode === 'oneclick' ? 'one_click' : 'default');
 
+/**
+ * Live document tracking: the yellow outline AND the lens nudging behind it.
+ *
+ * Off on request -- the outline read as an autofocus box that was not focusing
+ * properly, which it half was: the effect below polls the tracked box and calls
+ * focusTo() on its centre, so a jittery box drags the lens with it. Hiding the
+ * drawing alone would have left that steering focus invisibly, which is worse
+ * than the complaint. One flag takes the whole feature out: no frame processor
+ * on the Camera, no outline, no lens nudging, and the static guide stops
+ * yielding to a box that can no longer appear.
+ *
+ * Tap-to-focus is untouched and is now the only thing that aims the lens by
+ * hand; everything else is the sensor's own continuous AF.
+ */
+const DOCUMENT_TRACKING = false;
+
 /** Minimum clearance between the framing guide's bottom edge and the shutter. */
 const GUIDE_CONTROLS_GAP = spacing.md;
 
@@ -364,7 +380,9 @@ export default function CameraScreen() {
 
   // Slide the whole [camera | menu] strip left as the menu opens.
   const stripStyle = useAnimatedStyle(() => ({ transform: [{ translateX: -width * menuProgress.value }] }));
-  const guideStyle = useAnimatedStyle(() => ({ opacity: 1 - tracking.shown.value }));
+  const guideStyle = useAnimatedStyle(() => ({
+    opacity: DOCUMENT_TRACKING ? 1 - tracking.shown.value : 1,
+  }));
   const folderStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: interpolate(folderIn.value, [0, 1], [folderOffX, 0]) },
@@ -1021,6 +1039,7 @@ export default function CameraScreen() {
   const trackCenter = tracking.center;
   const trackShown = tracking.shown;
   useEffect(() => {
+    if (!DOCUMENT_TRACKING) return; // no box to follow, so leave continuous AF alone
     if (!cameraActive) return; // nothing to focus when the sensor is stopped
     let last = { x: 0, y: 0, t: 0 };
     // Poll ~every 800ms (not 350) — the lens still only refocuses at most once
@@ -1074,7 +1093,7 @@ export default function CameraScreen() {
               ref={cameraRef}
               style={StyleSheet.absoluteFill}
               device={device}
-              outputs={tracking.output ? [photoOutput, tracking.output] : [photoOutput]}
+              outputs={DOCUMENT_TRACKING && tracking.output ? [photoOutput, tracking.output] : [photoOutput]}
               // 30fps is plenty for framing a receipt; 60 just doubles the
               // detection/preview work for no scanning benefit.
               constraints={[{ fps: 30 }]}
@@ -1098,10 +1117,12 @@ export default function CameraScreen() {
           <TapToFocusLayer point={focus.point} onFocus={focusAt} enabled={!busy && Boolean(device)} />
 
           {/* Live document outline, riding the tracker's shared values. */}
-          <TrackingQuad tracking={tracking} />
+          {DOCUMENT_TRACKING && <TrackingQuad tracking={tracking} />}
           {/* Diagnostics HUD refreshes React state on a timer, so it's opt-in
               (set EXPO_PUBLIC_TRACKING_HUD=1 in .env), not always-on in dev. */}
-          {__DEV__ && process.env.EXPO_PUBLIC_TRACKING_HUD === '1' && <TrackingDebug tracking={tracking} />}
+          {DOCUMENT_TRACKING && __DEV__ && process.env.EXPO_PUBLIC_TRACKING_HUD === '1' && (
+            <TrackingDebug tracking={tracking} />
+          )}
 
           {/* One-click's folder. Always mounted — it has to stay around to
               animate out when you switch to Default; it just parks off-screen.
