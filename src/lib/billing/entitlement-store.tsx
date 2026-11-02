@@ -47,9 +47,17 @@ type EntitlementState = {
   loading: boolean;
   /** True when this build has no RevenueCat keys. */
   unavailable: boolean;
-  refresh: () => Promise<void>;
-  restore: () => Promise<PurchaseOutcome>;
+  /** Re-reads both sources and resolves with the effective tier they agree on. */
+  refresh: () => Promise<Tier | null>;
+  restore: () => Promise<RestoreResult>;
 };
+
+/**
+ * A restore's outcome plus the tier it left the account on. The tier is returned
+ * rather than read back off the context because a caller awaiting restore() is
+ * still holding the pre-restore render's value.
+ */
+export type RestoreResult = { outcome: PurchaseOutcome; tier: Tier | null };
 
 const EntitlementContext = createContext<EntitlementState | null>(null);
 
@@ -69,30 +77,40 @@ export function EntitlementProvider({ children }: { children: React.ReactNode })
   const [loading, setLoading] = useState(true);
   // Guards against a slow refresh from a previous user landing after a switch.
   const generation = useRef(0);
+  // Mirrors serverTier so a refresh can report the effective tier without
+  // waiting for the re-render its own setState schedules.
+  const serverTierRef = useRef<Tier | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<Tier | null> => {
     const request = ++generation.current;
     if (!userId) {
       setStoreTier(null);
       setServerTier(null);
+      serverTierRef.current = null;
       setRemaining(null);
       setLoading(false);
-      return;
+      return null;
     }
 
     // The two reads are independent; running them together halves the time the
     // Plan screen spends on a spinner.
     const [info, verdict] = await Promise.all([getCustomerInfo(), refreshQuota(userId)]);
-    if (request !== generation.current) return;
+    // Superseded by a newer refresh, whose result is the one that counts.
+    if (request !== generation.current) return null;
 
-    setStoreTier(tierFromCustomerInfo(info));
+    const nextStoreTier = tierFromCustomerInfo(info);
+    setStoreTier(nextStoreTier);
     // A null verdict means the refresh failed (offline). The previous value is
     // kept rather than downgrading the user to free on a dropped connection.
     if (verdict) {
-      setServerTier(verdict.reason === 'max_unlimited' ? 'max' : verdict.reason.startsWith('pro_') ? 'pro' : null);
+      const nextServerTier =
+        verdict.reason === 'max_unlimited' ? 'max' : verdict.reason.startsWith('pro_') ? 'pro' : null;
+      setServerTier(nextServerTier);
+      serverTierRef.current = nextServerTier;
       setRemaining(verdict.remaining);
     }
     setLoading(false);
+    return bestTier(serverTierRef.current, nextStoreTier);
   }, [userId]);
 
   // Identify to RevenueCat whenever the account changes. Purchases made before
@@ -119,15 +137,15 @@ export function EntitlementProvider({ children }: { children: React.ReactNode })
     return () => subscription.remove();
   }, [refresh]);
 
-  const restore = useCallback(async () => {
+  const restore = useCallback(async (): Promise<RestoreResult> => {
     const outcome = await restorePurchases();
-    if (outcome.status === 'purchased') {
-      setStoreTier(tierFromCustomerInfo(outcome.customerInfo));
-      // A restore can reveal a subscription the server already knows about, so
-      // re-read the authority rather than trusting the SDK alone.
-      await refresh();
-    }
-    return outcome;
+    if (outcome.status !== 'purchased') return { outcome, tier: null };
+    setStoreTier(tierFromCustomerInfo(outcome.customerInfo));
+    // A restore can reveal a subscription the server already knows about, so
+    // re-read the authority rather than trusting the SDK alone, and report the
+    // tier it settled on.
+    const tier = await refresh();
+    return { outcome, tier };
   }, [refresh]);
 
   const value = useMemo<EntitlementState>(
