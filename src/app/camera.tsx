@@ -929,9 +929,23 @@ export default function CameraScreen() {
         });
         handleDefaultCaptureOutcome(out, uri, startedAt);
       }
-    } finally {
-      // Same guard as onCapture: never leave the working overlay up.
+    } catch (e) {
+      // The phase reset belongs HERE, not in the finally. There it ran on the
+      // success path too, one tick after handleDefaultCaptureOutcome had just
+      // put the filled review card up -- same tick as far as React is concerned,
+      // so in Balanced + Default the card the user is meant to swipe was torn
+      // down before it ever painted, and the receipt (already saved by then)
+      // only turned up in Recents. The shutter never had this: onCapture's
+      // finally touches the shutter flags and nothing else, which is what the
+      // comment removed from here claimed to be copying.
+      //
+      // This catch is also the error handling the function did without
+      // entirely. Without it a throw became an unhandled rejection and the
+      // finally was doubling as the error path.
+      logSafeError(e, 'camera.galleryCapture');
       setPhase({ k: 'idle' });
+      flashNotice("That didn't go through — try again");
+    } finally {
       busyRef.current = false;
       setBusy(false);
       setTimeout(flushBackgroundQueues, 600);
