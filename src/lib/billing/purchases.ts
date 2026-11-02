@@ -246,15 +246,40 @@ export async function restorePurchases(): Promise<PurchaseOutcome> {
   }
 }
 
-export async function getCustomerInfo(): Promise<CustomerInfo | null> {
-  if (!(await ensureConfigured())) return null;
+/**
+ * The outcome of a store read, not just its payload.
+ *
+ * `null` from getCustomerInfo() below means three different things -- the build
+ * has no keys, the call failed, or the store genuinely answered -- and a caller
+ * that cannot tell them apart will say "no subscription" to a paying user whose
+ * device simply could not reach RevenueCat. That is exactly what BillingScreen
+ * did. Read through this where the difference is visible to someone.
+ */
+export type CustomerInfoRead =
+  | { status: 'ok'; info: CustomerInfo }
+  | { status: 'unavailable' }
+  | { status: 'failed'; message: string };
+
+export async function readCustomerInfo(): Promise<CustomerInfoRead> {
+  if (!(await ensureConfigured())) return { status: 'unavailable' };
   try {
-    return await Purchases.getCustomerInfo();
-  } catch {
-    // monitoring-ignore: The caller treats null as "entitlements unknown" and fails
-    // closed; callers that care already report.
-    return null;
+    return { status: 'ok', info: await Purchases.getCustomerInfo() };
+  } catch (error) {
+    logSafeError(error, 'billing.customerInfo');
+    const message = error instanceof Error ? error.message : String(error);
+    return { status: 'failed', message };
   }
+}
+
+/**
+ * Entitlements or nothing, for callers with another source to fall back on --
+ * EntitlementProvider has the server's verdict beside this, so a null here only
+ * costs it the store half of `bestTier`. Anything that PRESENTS the result to a
+ * user wants readCustomerInfo() instead.
+ */
+export async function getCustomerInfo(): Promise<CustomerInfo | null> {
+  const read = await readCustomerInfo();
+  return read.status === 'ok' ? read.info : null;
 }
 
 /* ------------------------------------------------------------------ *

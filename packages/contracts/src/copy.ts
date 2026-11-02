@@ -95,6 +95,24 @@ export const COPY_BILLING_ROW_LABEL = 'Billing';
 export const COPY_BILLING_NO_SUBSCRIPTION =
   'You are on the free plan. Choose a plan to unlock unlimited scans.';
 
+/**
+ * Shown when the store could not be reached, INSTEAD of the line above.
+ *
+ * These two must never be confused. "You are on the free plan" is a statement
+ * about the user's money, and a store read that fails returns exactly the same
+ * empty answer as a user who has never subscribed -- so saying it on a failure
+ * tells a paying subscriber they are not one. This says what is actually known.
+ */
+export const COPY_BILLING_STORE_UNREACHABLE =
+  'Your subscription details could not be loaded right now. Nothing has changed — this is a connection problem, not a change to your plan.';
+
+/** The same, for a user we DO know is subscribed from the server's records. */
+export const COPY_BILLING_STORE_UNREACHABLE_SUBSCRIBED =
+  'Your plan is active. The renewal date and payment details could not be loaded from the store right now.';
+
+/** Button on the unreachable state. */
+export const COPY_BILLING_RETRY = 'Try again';
+
 export const COPY_BILLING_MANAGE_CTA = 'Manage subscription';
 
 /**

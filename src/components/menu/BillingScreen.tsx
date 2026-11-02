@@ -19,6 +19,15 @@
  * Both platforms are handled, and they genuinely differ: iOS gets a modal sheet
  * over the app, Android leaves for Play and can additionally be PAUSED, a state
  * iOS has no equivalent for.
+ *
+ * The renewal date, the store and the payment state exist ONLY in RevenueCat's
+ * CustomerInfo, so this screen reads the store directly rather than the tier
+ * EntitlementProvider publishes. That is the whole screen's value and also its
+ * hazard: a failed read returns the same empty answer as a user who never
+ * subscribed. It used to render that as "You are on the free plan", which is
+ * what a Pro subscriber on a build with no RevenueCat key was told. A read that
+ * did not succeed is now reported as unknown, and the tier the SERVER knows is
+ * shown beside it -- that half does not depend on the store being reachable.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, View } from 'react-native';
@@ -39,10 +48,20 @@ import {
   COPY_BILLING_REFUND_CTA,
   COPY_BILLING_REFUND_FAILED,
   COPY_BILLING_REFUND_SUBMITTED,
+  COPY_BILLING_RETRY,
+  COPY_BILLING_STORE_UNREACHABLE,
+  COPY_BILLING_STORE_UNREACHABLE_SUBSCRIBED,
 } from '@/../packages/contracts/src/copy';
 import { MANAGE_SUBSCRIPTION_URLS } from '@/lib/billing/config';
 import { useEntitlements } from '@/lib/billing/entitlement-store';
-import { getCustomerInfo, openManageSubscriptions, requestRefund, safeManagementURL } from '@/lib/billing/purchases';
+import {
+  describeBillingDiagnosis,
+  openManageSubscriptions,
+  readCustomerInfo,
+  requestRefund,
+  safeManagementURL,
+  type CustomerInfoRead,
+} from '@/lib/billing/purchases';
 import {
   describeSubscription,
   EMPTY_SUMMARY,
@@ -130,13 +149,23 @@ export function BillingScreen() {
   const colors = useColors();
   const entitlements = useEntitlements();
   const [summary, setSummary] = useState<SubscriptionSummary>(EMPTY_SUMMARY);
+  const [storeRead, setStoreRead] = useState<CustomerInfoRead | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [refunding, setRefunding] = useState(false);
 
   const load = useCallback(async () => {
-    const info = await getCustomerInfo();
-    setSummary(describeSubscription(info, Platform.OS, safeManagementURL(info?.managementURL)));
+    setLoading(true);
+    const read = await readCustomerInfo();
+    setStoreRead(read);
+    // EMPTY_SUMMARY on a failed read is never rendered as "no subscription" --
+    // the unreachable branch below takes over first. It is set so no stale
+    // subscription from a previous successful read survives a later failure.
+    setSummary(
+      read.status === 'ok'
+        ? describeSubscription(read.info, Platform.OS, safeManagementURL(read.info.managementURL))
+        : EMPTY_SUMMARY,
+    );
     setLoading(false);
   }, []);
 
@@ -224,6 +253,77 @@ export function BillingScreen() {
       <View style={styles.loading}>
         <ActivityIndicator color={colors.textSecondary} />
       </View>
+    );
+  }
+
+  // The store did not answer. Everything below this point describes a
+  // subscription, and we do not have one to describe -- not even the absence of
+  // one. The server's tier is still worth showing: it comes from our own
+  // database over HTTPS, so it survives exactly the failures that take the
+  // store read down, and for the user it answers the only urgent question.
+  if (storeRead && storeRead.status !== 'ok') {
+    const knownTier = entitlements.tier;
+    const diagnosis = __DEV__ ? describeBillingDiagnosis() : null;
+    return (
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {knownTier && (
+          <View style={styles.section}>
+            <Eyebrow style={{ marginLeft: spacing.sm }}>Subscription</Eyebrow>
+            <Card>
+              <View style={styles.planHead}>
+                <Text style={styles.planName}>{TIER_NAMES[knownTier]}</Text>
+              </View>
+            </Card>
+          </View>
+        )}
+
+        <Card style={styles.emptyCard}>
+          <Text style={styles.emptyText}>
+            {knownTier ? COPY_BILLING_STORE_UNREACHABLE_SUBSCRIBED : COPY_BILLING_STORE_UNREACHABLE}
+          </Text>
+        </Card>
+
+        {/* Why it failed, for whoever is holding the build. 'unavailable' is a
+            missing key or native module and says so; 'failed' carries the SDK's
+            own message. Neither is fit for a user, and neither ships. */}
+        {diagnosis && (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              {diagnosis}
+              {storeRead.status === 'failed' ? ` (${storeRead.message})` : ''}
+            </Text>
+          </View>
+        )}
+
+        <View style={styles.section}>
+          <Pressable
+            onPress={() => void load()}
+            accessibilityRole="button"
+            accessibilityLabel={COPY_BILLING_RETRY}
+            style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }]}
+          >
+            <Text style={styles.ctaText}>{COPY_BILLING_RETRY}</Text>
+          </Pressable>
+          {/* Still offered: openManageSubscriptions falls back to the store's
+              generic subscriptions page, which needs no CustomerInfo and is
+              where this user most wants to go when we cannot tell them
+              anything. */}
+          <Pressable
+            onPress={() => void onManage()}
+            disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel={COPY_BILLING_MANAGE_CTA}
+            style={({ pressed }) => [styles.secondary, pressed && { opacity: 0.7 }]}
+          >
+            {busy ? (
+              <ActivityIndicator color={colors.textSecondary} />
+            ) : (
+              <Text style={styles.secondaryText}>{COPY_BILLING_MANAGE_CTA}</Text>
+            )}
+          </Pressable>
+          <Text style={styles.ctaNote}>{manageNote}</Text>
+        </View>
+      </ScrollView>
     );
   }
 
