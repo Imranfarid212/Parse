@@ -125,6 +125,30 @@ const FOLDER_W = 82;
 const toCaptureMode = (mode: Mode): CaptureMode => (mode === 'oneclick' ? 'one_click' : 'default');
 
 /**
+ * Live document tracking: the yellow outline AND the lens nudging behind it.
+ *
+ * Off on request -- the outline read as an autofocus box that was not focusing
+ * properly, which it half was: the effect below polls the tracked box and calls
+ * focusTo() on its centre, so a jittery box drags the lens with it. Hiding the
+ * drawing alone would have left that steering focus invisibly, which is worse
+ * than the complaint. One flag takes the whole feature out: no frame processor
+ * on the Camera, no outline, no lens nudging, and the static guide stops
+ * yielding to a box that can no longer appear.
+ *
+ * Tap-to-focus is untouched and is now the only thing that aims the lens by
+ * hand; everything else is the sensor's own continuous AF.
+ */
+const DOCUMENT_TRACKING = false;
+
+/** Minimum clearance between the framing guide's bottom edge and the shutter. */
+const GUIDE_CONTROLS_GAP = spacing.md;
+
+/** The bottom block's height before onLayout reports the real one: shutter (78)
+ *  + the row's gap (24) + a card (~61) + the safe-area padding this screen adds.
+ *  One frame's worth of guesswork, and never used again once measured. */
+const CONTROLS_H_ESTIMATE = 78 + spacing.lg + 61 + spacing.lg;
+
+/**
  * Optically matched icon sizes for the bottom controls row.
  *
  * A shared `size` does NOT render as a shared size: Ionicons glyphs fill their
@@ -132,9 +156,10 @@ const toCaptureMode = (mode: Mode): CaptureMode => (mode === 'oneclick' ? 'one_c
  * for images-outline but only 19.50pt for albums-outline -- the Default icon
  * came out 14% shorter and 19% narrower than Gallery facing it across the row.
  * These sizes normalise each glyph's *ink* height to Gallery's 22.70pt, which
- * also equalises the gap down to the label (2.65 / 2.75 / 2.66pt) because the
- * label is pinned to the button's bottom edge. Measured from Ionicons.ttf; if
- * an icon here is swapped, re-measure rather than reusing a number.
+ * also equalises the gap down to the label: the icons are centred in a fixed
+ * 30pt box (sideIconBox) with the label directly beneath it, so equal ink
+ * heights mean equal gaps. Measured from Ionicons.ttf; if an icon here is
+ * swapped, re-measure rather than reusing a number.
  */
 const ICON_PT = {
   'images-outline': 26,
@@ -152,10 +177,10 @@ function ModeButton({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => voi
   const icon = mode === 'default' ? 'albums-outline' : 'flash-outline';
   return (
     <Pressable style={[styles.sideBtn, styles.modeBtnRaise]} onPress={() => onChange(next)} hitSlop={12}>
-      <View style={styles.sideBtnInner}>
+      <View style={styles.sideIconBox}>
         <Ionicons name={icon} size={ICON_PT[icon]} color="#fff" style={styles.sideIcon} />
-        <Text numberOfLines={1} style={styles.sideLabel}>{mode === 'default' ? 'Default' : 'One click'}</Text>
       </View>
+      <Text numberOfLines={1} style={styles.sideLabel}>{mode === 'default' ? 'Default' : 'One click'}</Text>
     </Pressable>
   );
 }
@@ -203,6 +228,11 @@ export default function CameraScreen() {
   const entitlements = useEntitlements();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  // Measured, not computed: the framing guide has to clear the shutter, and the
+  // height of the bottom block depends on the safe-area inset and on whatever
+  // the controls row currently is. CONTROLS_H_ESTIMATE only covers the frame
+  // before the first onLayout lands.
+  const [controlsHeight, setControlsHeight] = useState(0);
   const { hasPermission, requestPermission, canRequestPermission } = useCameraPermission();
   const cameraRef = useRef<CameraRef>(null);
   const device = useCameraDevice('back');
@@ -350,7 +380,9 @@ export default function CameraScreen() {
 
   // Slide the whole [camera | menu] strip left as the menu opens.
   const stripStyle = useAnimatedStyle(() => ({ transform: [{ translateX: -width * menuProgress.value }] }));
-  const guideStyle = useAnimatedStyle(() => ({ opacity: 1 - tracking.shown.value }));
+  const guideStyle = useAnimatedStyle(() => ({
+    opacity: DOCUMENT_TRACKING ? 1 - tracking.shown.value : 1,
+  }));
   const folderStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: interpolate(folderIn.value, [0, 1], [folderOffX, 0]) },
@@ -915,9 +947,23 @@ export default function CameraScreen() {
         });
         handleDefaultCaptureOutcome(out, uri, startedAt);
       }
-    } finally {
-      // Same guard as onCapture: never leave the working overlay up.
+    } catch (e) {
+      // The phase reset belongs HERE, not in the finally. There it ran on the
+      // success path too, one tick after handleDefaultCaptureOutcome had just
+      // put the filled review card up -- same tick as far as React is concerned,
+      // so in Balanced + Default the card the user is meant to swipe was torn
+      // down before it ever painted, and the receipt (already saved by then)
+      // only turned up in Recents. The shutter never had this: onCapture's
+      // finally touches the shutter flags and nothing else, which is what the
+      // comment removed from here claimed to be copying.
+      //
+      // This catch is also the error handling the function did without
+      // entirely. Without it a throw became an unhandled rejection and the
+      // finally was doubling as the error path.
+      logSafeError(e, 'camera.galleryCapture');
       setPhase({ k: 'idle' });
+      flashNotice("That didn't go through — try again");
+    } finally {
       busyRef.current = false;
       setBusy(false);
       setTimeout(flushBackgroundQueues, 600);
@@ -993,6 +1039,7 @@ export default function CameraScreen() {
   const trackCenter = tracking.center;
   const trackShown = tracking.shown;
   useEffect(() => {
+    if (!DOCUMENT_TRACKING) return; // no box to follow, so leave continuous AF alone
     if (!cameraActive) return; // nothing to focus when the sensor is stopped
     let last = { x: 0, y: 0, t: 0 };
     // Poll ~every 800ms (not 350) — the lens still only refocuses at most once
@@ -1046,7 +1093,7 @@ export default function CameraScreen() {
               ref={cameraRef}
               style={StyleSheet.absoluteFill}
               device={device}
-              outputs={tracking.output ? [photoOutput, tracking.output] : [photoOutput]}
+              outputs={DOCUMENT_TRACKING && tracking.output ? [photoOutput, tracking.output] : [photoOutput]}
               // 30fps is plenty for framing a receipt; 60 just doubles the
               // detection/preview work for no scanning benefit.
               constraints={[{ fps: 30 }]}
@@ -1070,10 +1117,12 @@ export default function CameraScreen() {
           <TapToFocusLayer point={focus.point} onFocus={focusAt} enabled={!busy && Boolean(device)} />
 
           {/* Live document outline, riding the tracker's shared values. */}
-          <TrackingQuad tracking={tracking} />
+          {DOCUMENT_TRACKING && <TrackingQuad tracking={tracking} />}
           {/* Diagnostics HUD refreshes React state on a timer, so it's opt-in
               (set EXPO_PUBLIC_TRACKING_HUD=1 in .env), not always-on in dev. */}
-          {__DEV__ && process.env.EXPO_PUBLIC_TRACKING_HUD === '1' && <TrackingDebug tracking={tracking} />}
+          {DOCUMENT_TRACKING && __DEV__ && process.env.EXPO_PUBLIC_TRACKING_HUD === '1' && (
+            <TrackingDebug tracking={tracking} />
+          )}
 
           {/* One-click's folder. Always mounted — it has to stay around to
               animate out when you switch to Default; it just parks off-screen.
@@ -1095,12 +1144,25 @@ export default function CameraScreen() {
               document — two rectangles at once reads as a bug. Where tracking
               isn't available, `shown` never leaves 0 and the guide just stays. */}
           {device && (
-            <Animated.View style={[styles.guideWrap, guideStyle]} pointerEvents="none">
+            <Animated.View
+              style={[
+                styles.guideWrap,
+                // Sit the guide GUIDE_CONTROLS_GAP above the shutter: this
+                // shrinks the box it is anchored in, and guideWrap pins it to
+                // that box's floor.
+                { bottom: (controlsHeight || CONTROLS_H_ESTIMATE) + GUIDE_CONTROLS_GAP },
+                guideStyle,
+              ]}
+              pointerEvents="none"
+            >
               <View style={styles.guide} />
             </Animated.View>
           )}
 
-          <View style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}>
+          <View
+            style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}
+            onLayout={(e) => setControlsHeight(e.nativeEvent.layout.height)}
+          >
             <Pressable
               style={[styles.capture, (busy || !device) && styles.captureBusy]}
               onPress={onCapture}
@@ -1111,10 +1173,10 @@ export default function CameraScreen() {
 
             <View style={styles.controlsRow}>
               <Pressable style={styles.sideBtn} onPress={onPickFromGallery} hitSlop={12}>
-                <View style={styles.sideBtnInner}>
+                <View style={styles.sideIconBox}>
                   <Ionicons name="images-outline" size={ICON_PT['images-outline']} color="#fff" style={styles.sideIcon} />
-                  <Text numberOfLines={1} style={styles.sideLabel}>Gallery</Text>
                 </View>
+                <Text numberOfLines={1} style={styles.sideLabel}>Gallery</Text>
               </Pressable>
 
               <ExtractionModeToggle mode={extractionMode} onChange={setExtractionMode} />
@@ -1188,7 +1250,13 @@ const styles = StyleSheet.create({
   },
   btnLabel: { color: '#fff', fontSize: 11 },
 
-  guideWrap: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
+  // flex-end, not centre. The wrapper's `bottom` is set to the controls' height
+  // plus GUIDE_CONTROLS_GAP, so anchoring the guide to the wrapper's floor puts
+  // its lower edge exactly that gap above the shutter. Centring it in the
+  // remaining box instead satisfied "at least 16pt" by leaving ~137pt, which
+  // read as the frame floating off on its own, and moved the frame ~120pt up
+  // from where it had always sat.
+  guideWrap: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'flex-end' },
   guide: { width: '70%', aspectRatio: 0.72, borderWidth: 2, borderColor: 'rgba(255,255,255,0.6)', borderRadius: radius.md },
 
   bottom: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center', gap: spacing.lg },
@@ -1199,34 +1267,38 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing.xl,
   },
-  // Same card as the Menu button top-right: white at 0.14, radius.md, 8pt of
-  // vertical padding. Without it both end buttons were bare white-on-preview,
-  // and the preview down here is whatever the shutter is pointed at -- usually
-  // a receipt, i.e. the brightest thing in frame. The Balanced/Precise pill
-  // between them already carried a fill for this reason; these two did not.
+  // The Menu button's card, down to the token: white at 0.14, radius.md, 8pt
+  // of padding. Both end buttons need a fill for the same reason Menu does --
+  // the preview under them is whatever the shutter is pointed at, usually a
+  // receipt, i.e. the brightest thing in frame -- and the Balanced/Precise pill
+  // between them already carried one.
   //
-  // The padding goes on the card and the 56pt alignment box stays untouched
-  // inside it (sideBtnInner), so the card centres on the row's centre line and
-  // the box centres within the card -- the icon lands exactly where it did
-  // before. Putting the padding on the box itself would move the icon.
+  // It wraps the icon and label directly, so the card is as tall as what is
+  // inside it plus the padding. An earlier version wrapped a 56pt alignment box
+  // instead, which made the card 72pt tall with the label pinned to its floor:
+  // a slab next to Menu rather than a background sitting behind a control.
+  // minWidth keeps the two ends matched at Menu's 56 while still letting the
+  // wider "One click" label have its 8pt either side.
   sideBtn: {
+    minWidth: 56,
     paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
     borderRadius: radius.md,
     backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    gap: 2,
+    // The icon's centre -- not the centre of the icon-plus-label stack -- is
+    // what belongs on the row's centre line, level with the Balanced/Precise
+    // text; centring the card alone leaves the icon riding about 8pt above it,
+    // which is exactly how these buttons used to look wrong. The card is
+    // centred by the row and then dropped by that half-stack here. A transform,
+    // so the row's space-between gaps are untouched.
+    transform: [{ translateY: 8 }],
   },
-  // The icon is centred in the 56pt box and the label is taken out of flow
-  // beneath it, so the icon's centre -- not the centre of the icon-plus-label
-  // stack -- lands on the row's centre line, level with the Balanced/Precise
-  // text. In normal flow the label pushes the icon up by half its own height
-  // (8pt), which left the two end buttons visibly riding above the pill.
-  sideBtnInner: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
-  // left/right 0 with centred text so a label wider than the icon ("One click")
-  // grows evenly either side instead of shifting off centre.
+  // Fixed height across both ends so a 26pt and a 30pt glyph still give the two
+  // cards the same height and put both icons at the same level.
+  sideIconBox: { height: 30, alignItems: 'center', justifyContent: 'center' },
   sideLabel: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
     textAlign: 'center',
     color: '#fff',
     fontSize: 11,
@@ -1239,12 +1311,15 @@ const styles = StyleSheet.create({
   // sit on one line.
   sideIcon: { includeFontPadding: false },
   // A deliberate 2pt lift of the whole Default/One-click button -- icon and
-  // label together -- dialled in by eye on device (4pt read as too high). It is
-  // a translate, not a margin, so it shifts what you see without disturbing the
-  // row's layout or the equal space-between gaps either side of the pill. Note
-  // this pushes the button off the geometric centre line its styles otherwise
-  // put it on: if the row ever looks high on the right, this is the line to drop.
-  modeBtnRaise: { transform: [{ translateY: -2 }] },
+  // label together -- dialled in by eye on device (4pt read as too high). It
+  // shifts what you see without disturbing the row's layout or the equal
+  // space-between gaps either side of the pill. Note this pushes the button off
+  // the geometric centre line its styles otherwise put it on: if the row ever
+  // looks high on the right, this is the line to drop.
+  //
+  // `transform` replaces rather than merges, so this carries sideBtn's own
+  // half-stack drop (8) net of the 2pt lift. Change one and change both.
+  modeBtnRaise: { transform: [{ translateY: 6 }] },
   capture: {
     width: 78,
     height: 78,

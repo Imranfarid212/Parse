@@ -321,8 +321,8 @@ export function PlanScreen() {
       // The store has the money; the entitlement follows over the webhook. The
       // refresh usually closes the gap immediately, and the copy is honest about
       // it when it does not.
-      await entitlements.refresh();
-      if (!entitlements.tier) Alert.alert('Almost there', COPY_PURCHASE_PENDING_ENTITLEMENT);
+      const tier = await entitlements.refresh();
+      if (!tier) Alert.alert('Almost there', COPY_PURCHASE_PENDING_ENTITLEMENT);
     } finally {
       setBusy(false);
     }
@@ -332,11 +332,15 @@ export function PlanScreen() {
     if (busy) return;
     setBusy(true);
     try {
-      const outcome = await entitlements.restore();
+      // The tier comes back from restore() rather than off `entitlements`, which
+      // is still the pre-restore render's value in this closure.
+      const { outcome, tier } = await entitlements.restore();
       if (outcome.status === 'purchased') {
-        Alert.alert('Restore', entitlements.tier ? COPY_RESTORE_PURCHASES_DONE : COPY_RESTORE_PURCHASES_NONE);
+        Alert.alert('Restore', tier ? COPY_RESTORE_PURCHASES_DONE : COPY_RESTORE_PURCHASES_NONE);
       } else if (outcome.status === 'failed') {
         Alert.alert('Restore failed', outcome.message);
+      } else if (outcome.status === 'unavailable') {
+        Alert.alert('Restore unavailable', 'This build cannot make purchases.');
       }
     } finally {
       setBusy(false);
