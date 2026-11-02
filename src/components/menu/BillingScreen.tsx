@@ -371,16 +371,14 @@ export function BillingScreen() {
                 <InfoRow label={line.label} value={line.value} />
               </>
             )}
-            {/* Sandbox is a fact about OUR build, not about the user's money,
-                and it means nothing to them. Development only: it stays
-                genuinely useful while testing against the Test Store, where
-                every other field looks real and nothing says why. */}
-            {__DEV__ && summary.isSandbox && (
-              <>
-                <Divider inset={spacing.md} />
-                <InfoRow label="Environment" value="Sandbox" />
-              </>
-            )}
+            {/* No Environment row. Sandbox is a fact about OUR build, not
+                about the user's money, and `summary.isSandbox` is still on the
+                summary for anything that wants it -- but this card is the one
+                place a user reads what they are paying, and a row that says
+                "Sandbox" there is noise at best. It was __DEV__-only, so it
+                never shipped; it was removed because it is not wanted on the
+                screen at all, in any build. The Metro logs already say which
+                store the SDK connected to. */}
           </Card>
         </View>
       )}
