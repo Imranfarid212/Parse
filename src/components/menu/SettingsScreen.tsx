@@ -7,7 +7,7 @@
  * what retitles the bar and turns the X into a pop back to here.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 
@@ -25,6 +25,7 @@ import {
 import { useAuth } from '@/lib/auth/auth-context';
 import { resolveIdentity } from '@/lib/auth/identity';
 import { useEntitlements } from '@/lib/billing/entitlement-store';
+import { useAnonymousSupportCode } from '@/lib/monitoring';
 import { buildSupportMailto } from '@/lib/support';
 import { makeStyles, useAppAppearance, useColors } from '@/theme/appearance';
 import { fontFamily, spacing, typography } from '@/theme/tokens';
@@ -35,6 +36,53 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <View style={styles.section}>
       <Eyebrow style={{ marginLeft: spacing.sm }}>{title}</Eyebrow>
       <Card>{children}</Card>
+    </View>
+  );
+}
+
+/**
+ * The anonymous support code, masked until asked for.
+ *
+ * Anonymous by construction: six characters of a random id generated on this
+ * install, tied to no account. It is here so a support email can be matched to
+ * a crash report without either of us handling anything that identifies the
+ * person sending it.
+ *
+ * Masked by default anyway. Not because the code is a secret — it identifies no
+ * one — but because a string of characters under the version number reads as
+ * one to anyone who has not been told otherwise, and a screen shared or
+ * screenshotted should not put the reader in the position of wondering. Only
+ * the revealed code is selectable; copying a row of dots is never what anyone
+ * meant to do.
+ */
+function SupportCode() {
+  const styles = useStyles();
+  const colors = useColors();
+  const code = useAnonymousSupportCode();
+  const [shown, setShown] = useState(false);
+
+  if (!code) return null;
+
+  return (
+    <View style={styles.supportCodeRow}>
+      <Text
+        style={styles.supportCode}
+        selectable={shown}
+        // Spelled out: read as a word, six random characters are noise.
+        accessibilityLabel={shown ? `Support code ${code.split('').join(' ')}` : 'Support code, hidden'}
+      >
+        Support code · {shown ? code : '•'.repeat(code.length)}
+      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={shown ? 'Hide support code' : 'Show support code'}
+        onPress={() => setShown((v) => !v)}
+        // The icon is 14pt; the touch target has to be a finger wide.
+        hitSlop={spacing.sm}
+        style={({ pressed }) => pressed && { opacity: 0.6 }}
+      >
+        <Feather name={shown ? 'eye-off' : 'eye'} size={14} color={colors.textFaint} />
+      </Pressable>
     </View>
   );
 }
@@ -259,7 +307,10 @@ export function SettingsScreen({ onSubScreen }: { onSubScreen?: (s: SettingsSubS
         />
       </Section>
 
-      <Text style={styles.version}>Version 1.0.4 (Build 402)</Text>
+      <View style={styles.buildBlock}>
+        <Text style={styles.version}>Version 1.0.4 (Build 402)</Text>
+        <SupportCode />
+      </View>
     </ScrollView>
   );
 }
@@ -290,5 +341,18 @@ const useStyles = makeStyles((colors) => ({
   initials: { fontFamily: fontFamily.display, fontSize: 20, lineHeight: 24, color: colors.textPrimary },
   name: { fontFamily: fontFamily.display, fontSize: 17, color: colors.textPrimary },
   email: { ...typography.meta, color: colors.textSecondary, marginTop: 2 },
-  version: { ...typography.eyebrow, color: colors.textFaint, textAlign: 'center', marginTop: spacing.xs },
+  // The gap is the whole reason this block exists: the code reads as part of
+  // the version line when it sits right under it, and it is a different kind
+  // of fact. spacing.md (16) is spacing.xs plus the 12pt of air it needed,
+  // and stays on the scale.
+  buildBlock: { alignItems: 'center', gap: spacing.md, marginTop: spacing.xs },
+  version: { ...typography.eyebrow, color: colors.textFaint, textAlign: 'center' },
+  supportCodeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  supportCode: {
+    ...typography.eyebrow,
+    fontFamily: fontFamily.regular,
+    color: colors.textFaint,
+    textAlign: 'center',
+    letterSpacing: 1,
+  },
 }));
