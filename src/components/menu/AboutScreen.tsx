@@ -160,13 +160,6 @@ export function AboutScreen() {
             </Text>
           </Pressable>
         )}
-        {/* Anonymous by construction: six characters of a random id generated on
-            this install, tied to no account. It is here so a support email can
-            be matched to a crash report without either of us handling anything
-            that identifies the person sending it. */}
-        <Text style={styles.supportCode} selectable accessibilityLabel={`Support code ${(supportCode ?? '').split('').join(' ')}`}>
-          Support code · {supportCode ?? '——————'}
-        </Text>
       </View>
     </ScrollView>
   );
@@ -214,11 +207,4 @@ const useStyles = makeStyles((colors) => ({
 
   buildBlock: { alignItems: 'center', gap: 2 },
   version: { ...typography.eyebrow, fontFamily: fontFamily.regular, color: colors.textFaint, textAlign: 'center' },
-  supportCode: {
-    ...typography.eyebrow,
-    fontFamily: fontFamily.regular,
-    color: colors.textFaint,
-    textAlign: 'center',
-    letterSpacing: 1,
-  },
 }));
