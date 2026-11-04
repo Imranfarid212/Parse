@@ -69,17 +69,6 @@ export default function CategoryOnboardingScreen() {
     setSelectedIds((ids) => (ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id]));
   };
 
-  const move = (id: number, direction: -1 | 1) => {
-    setSelectedIds((ids) => {
-      const index = ids.indexOf(id);
-      const nextIndex = index + direction;
-      if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return ids;
-      const next = [...ids];
-      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
-      return next;
-    });
-  };
-
   const finish = async () => {
     if (selectedIds.length < 1) {
       Alert.alert('Pick one more', 'Choose at least one category besides Miscellaneous.');
@@ -165,23 +154,12 @@ export default function CategoryOnboardingScreen() {
           .filter((category) => !category.is_system)
           .map((category) => {
             const selected = selectedIds.includes(category.id);
-            const order = selectedIds.indexOf(category.id);
             return (
               <View key={category.id} style={styles.row}>
                 <Pressable onPress={() => toggle(category.id)} style={[styles.check, selected && styles.checkSelected]}>
                   {selected && <Feather name="check" size={16} color="#fff" />}
                 </Pressable>
                 <Text style={styles.rowLabel}>{category.name}</Text>
-                {selected && (
-                  <View style={styles.reorder}>
-                    <Pressable onPress={() => move(category.id, -1)} disabled={order <= 0} hitSlop={10}>
-                      <Feather name="arrow-up" size={18} color={order <= 0 ? colors.textFaint : colors.textPrimary} />
-                    </Pressable>
-                    <Pressable onPress={() => move(category.id, 1)} disabled={order === selectedIds.length - 1} hitSlop={10}>
-                      <Feather name="arrow-down" size={18} color={order === selectedIds.length - 1 ? colors.textFaint : colors.textPrimary} />
-                    </Pressable>
-                  </View>
-                )}
               </View>
             );
           })}
@@ -251,7 +229,6 @@ const useStyles = makeStyles((colors) => ({
   check: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
   checkSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
   rowLabel: { flex: 1, color: colors.textPrimary, fontFamily: fontFamily.semibold, fontSize: 15 },
-  reorder: { flexDirection: 'row', gap: spacing.sm },
   pinned: { color: colors.accent, fontFamily: fontFamily.semibold, fontSize: 12 },
   cta: {
     height: 54,
