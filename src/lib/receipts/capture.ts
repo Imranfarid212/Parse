@@ -228,13 +228,82 @@ function isOfflineError(error: unknown): boolean {
   );
 }
 
+/**
+ * Currencies whose receipts print a bare `$`.
+ *
+ * A `$` on its own says nothing about which of these it is, so when the user's
+ * default is one of them a bare `$` is agreement, not evidence of anything
+ * else — see `inferCurrencyFromText`.
+ */
+const DOLLAR_CURRENCIES = new Set([
+  'AUD', 'BBD', 'BMD', 'BND', 'BSD', 'BZD', 'CAD', 'CLP', 'COP', 'CUP', 'FJD',
+  'GYD', 'HKD', 'JMD', 'KYD', 'LRD', 'MXN', 'NAD', 'NZD', 'SBD', 'SGD', 'SRD',
+  'TTD', 'TWD', 'USD', 'UYU', 'XCD',
+]);
+
+/** Currencies whose receipts print `Rs` — same ambiguity as `$`. */
+const RUPEE_CURRENCIES = new Set(['INR', 'LKR', 'MUR', 'NPR', 'PKR', 'SCR']);
+
+/**
+ * The currency for the local draft, from the text the device OCR'd.
+ *
+ * This runs before the server answers and its result is what the user sees
+ * first, so it is held to a stricter standard than a guess normally would be:
+ * the user's default already encodes a decision they made in onboarding, and
+ * overriding it needs evidence that picks *one* currency. Anything weaker
+ * leaves the default alone.
+ *
+ * The first version of this read tax labels and place names as currency
+ * signals, and both misfire on the same receipt. `GST` returned INR — but
+ * Canada, Australia, New Zealand, Singapore and India all print GST, and a
+ * Canadian grocery receipt matched that branch before any other. `VAT`
+ * returned EUR though a third of the world charges VAT, `uk` as a bare word
+ * matched inside unrelated OCR noise, and a bare `$` returned a hard-coded USD
+ * over any default, which is how a Toronto receipt filed as USD for a user
+ * whose currency is CAD. None of those readings were ever evidence; they were
+ * correlations that happened to hold on the receipts in front of us at the
+ * time.
+ *
+ * What is left is the two things that do identify a currency on their own: an
+ * ISO code printed in the text, and a symbol used by exactly one currency.
+ * `$` is deliberately not among them, and neither is `¥` (JPY and CNY) or a
+ * bare `kr`.
+ */
 function inferCurrencyFromText(text: string, defaultCurrency: string): string {
+  const fallback = /^[A-Z]{3}$/.test(defaultCurrency) ? defaultCurrency : 'USD';
   const lower = text.toLowerCase();
-  if (/[₹]|(?:\brs\.?\b)|\binr\b|\bgst\b|\bbengal(?:uru|ore)\b|\bbangalore\b|\bindia\b/.test(lower)) return 'INR';
-  if (/[€]|\beur\b|\bvat\b/.test(lower)) return 'EUR';
-  if (/[£]|\bgbp\b|\buk\b|\blondon\b/.test(lower)) return 'GBP';
-  if (/\busd\b|[$]/.test(lower)) return 'USD';
-  return /^[A-Z]{3}$/.test(defaultCurrency) ? defaultCurrency : 'USD';
+
+  // A qualified dollar — `CA$`, `C$`, `US$`, `A$` — names which dollar it is,
+  // so unlike a bare `$` it outranks the default.
+  if (/\bca\$|\bc\$|\bcad\b/.test(lower)) return 'CAD';
+  if (/\bus\$|\busd\b/.test(lower)) return 'USD';
+  if (/\ba\$|\baud\b/.test(lower)) return 'AUD';
+  if (/\bnz\$|\bnzd\b/.test(lower)) return 'NZD';
+
+  // Symbols and codes that belong to one currency.
+  if (/[₹]|\binr\b/.test(lower)) return 'INR';
+  if (/[€]|\beur\b/.test(lower)) return 'EUR';
+  if (/[£]|\bgbp\b/.test(lower)) return 'GBP';
+  if (/[₩]|\bkrw\b/.test(lower)) return 'KRW';
+  if (/[₪]|\bils\b/.test(lower)) return 'ILS';
+  if (/[₽]|\brub\b/.test(lower)) return 'RUB';
+  if (/\bjpy\b/.test(lower)) return 'JPY';
+  if (/\bcny\b|\brmb\b/.test(lower)) return 'CNY';
+  if (/\bchf\b/.test(lower)) return 'CHF';
+  if (/\baed\b/.test(lower)) return 'AED';
+  if (/\bzar\b/.test(lower)) return 'ZAR';
+
+  // `Rs` is six currencies, so it reads the same way a bare `$` does below:
+  // agreement when the default is one of them, INR otherwise.
+  if (/\brs\.?\b/.test(lower) && !RUPEE_CURRENCIES.has(fallback)) return 'INR';
+
+  // A bare `$` and nothing else. It agrees with every dollar default and
+  // identifies none of them, so it only decides anything when the default is
+  // not a dollar currency at all — and even then USD is the likeliest reading
+  // of an unqualified `$`.
+  if (/[$]/.test(lower) && !DOLLAR_CURRENCIES.has(fallback)) return 'USD';
+
+  return fallback;
 }
 
 function parseDraftDate(text: string): string | null {
