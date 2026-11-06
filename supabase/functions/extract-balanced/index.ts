@@ -47,7 +47,7 @@ type ExtractionResult = {
 };
 type DuplicateCandidate = {
   matched_receipt_id: string;
-  match_rule: 'merchant_date_currency_total';
+  match_rule: 'merchant_date_currency_total' | 'merchant_currency_total';
   match_strength: 'weak';
   merchant: string | null;
   txn_date: string | null;
@@ -253,7 +253,7 @@ const buildExtractionJsonSchema = (categoryNames: string[]) => ({
   type: 'object',
   properties: {
     merchant: { type: 'string', description: MERCHANT_FIELD_DESCRIPTION },
-    txn_date: { type: 'string', description: 'Transaction date in YYYY-MM-DD format.' },
+    txn_date: { type: 'string', description: 'Transaction date printed on the receipt, in YYYY-MM-DD format. Never later than today.' },
     currency: { type: 'string', description: 'ISO 4217 currency code for the printed receipt amounts.' },
     total: { type: 'number', description: 'Final receipt total paid by the customer.' },
     line_items: {
@@ -888,25 +888,49 @@ async function findDuplicateCandidate({
   if (!extraction.is_receipt) return null;
   const total = Math.round(extraction.total * 100) / 100;
   const merchantKey = normalizeMerchantKey(extraction.merchant);
-  if (!merchantKey || !extraction.txn_date || !extraction.currency || total <= 0) return null;
-  const { data: candidates, error } = await admin
-    .from('receipts')
-    .select('id, merchant, txn_date, currency, total')
-    .eq('user_id', userId)
-    .neq('capture_id', captureId)
-    .is('deleted_at', null)
-    .in('status', ['needs_review', 'confirmed'])
-    .eq('txn_date', extraction.txn_date)
-    .eq('currency', extraction.currency)
-    .gte('total', total - 0.01)
-    .lte('total', total + 0.01)
-    .limit(10);
-  if (error) throw error;
-  const duplicate = (candidates ?? []).find((candidate) => normalizeMerchantKey(candidate.merchant) === merchantKey);
+  if (!merchantKey || !extraction.currency || total <= 0) return null;
+
+  // Two passes over the same shape. The date is the strongest signal when both
+  // sides agree on it, but it is also the field the model is least stable on --
+  // an ambiguous `24-10-26` read as DD-MM-YY on one scan and YY-MM-DD on the
+  // next turned one receipt into two with no warning. So a date mismatch, or a
+  // receipt with no printed date, falls back to merchant + currency + total
+  // rather than giving up on the comparison entirely.
+  const query = () =>
+    admin
+      .from('receipts')
+      .select('id, merchant, txn_date, currency, total')
+      .eq('user_id', userId)
+      .neq('capture_id', captureId)
+      .is('deleted_at', null)
+      .in('status', ['needs_review', 'confirmed'])
+      .eq('currency', extraction.currency)
+      .gte('total', total - 0.01)
+      .lte('total', total + 0.01);
+
+  const matching = (rows: { id: string; merchant: string | null; txn_date: string | null; currency: string | null; total: number | null }[] | null) =>
+    (rows ?? []).find((candidate) => normalizeMerchantKey(candidate.merchant) === merchantKey) ?? null;
+
+  let rule: DuplicateCandidate['match_rule'] = 'merchant_date_currency_total';
+  let duplicate = null as ReturnType<typeof matching>;
+
+  if (extraction.txn_date) {
+    const { data, error } = await query().eq('txn_date', extraction.txn_date).limit(10);
+    if (error) throw error;
+    duplicate = matching(data);
+  }
+
+  if (!duplicate) {
+    const { data, error } = await query().order('created_at', { ascending: false }).limit(20);
+    if (error) throw error;
+    duplicate = matching(data);
+    rule = 'merchant_currency_total';
+  }
+
   if (!duplicate) return null;
   return {
     matched_receipt_id: duplicate.id,
-    match_rule: 'merchant_date_currency_total',
+    match_rule: rule,
     match_strength: 'weak',
     merchant: duplicate.merchant ?? null,
     txn_date: duplicate.txn_date ?? null,

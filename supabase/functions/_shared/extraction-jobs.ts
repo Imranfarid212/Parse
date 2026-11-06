@@ -215,6 +215,7 @@ export function buildExtractionPrompt(
   source: 'image' | 'ocr_text',
 ) {
   const fromImage = source === 'image';
+  const today = new Date().toISOString().slice(0, 10);
   return [
     'Return only valid JSON. No markdown. No prose.',
     `Extract receipt data from ${fromImage ? 'this image' : 'OCR text'} into this exact schema:`,
@@ -230,6 +231,14 @@ export function buildExtractionPrompt(
     `Not evidence, on their own: a bare "$" (many countries price in dollars), "¥" (JPY and CNY), a bare "Rs" or "kr", and tax labels -- GST is charged in Canada, Australia, New Zealand, Singapore and India alike, and VAT across most of Europe, Africa and Asia. When the receipt shows only these, return ${defaultCurrency}.`,
     `A bare "$" alongside a city or address in a dollar-pricing country means that country's dollar, not USD. If the only signal is "$" and nothing places the receipt anywhere, return ${defaultCurrency}.`,
     'Do not convert amounts between currencies; only choose the correct currency code for the printed receipt.',
+    // A printed `24-10-26` is three different dates depending on the order it
+    // is read in, and nothing here used to say which to pick -- so the model
+    // chose per call, and two scans of one Indian receipt landed as 2026-10-24
+    // and 2024-10-26. Duplicate detection keys on an exact txn_date, so that
+    // instability read as two unrelated receipts and never warned.
+    `txn_date is the date printed on the receipt. Today is ${today}; txn_date can never be after today.`,
+    'A printed date is often ambiguous: 24-10-26 may be DD-MM-YY, YY-MM-DD or MM-DD-YY. Receipts are nearly always recent, so choose the reading closest to today without going past it.',
+    'Prefer day-first (DD-MM-YY) unless the receipt is clearly from the United States, where month-first is the convention.',
     'Ignore greetings and thank-you text, tax breakdowns (GST/HST/PST), subtotals, tax IDs, phone numbers, loyalty points, card/payment details, invoice numbers, and terminal numbers -- not in any field.',
     'merchant is the trading name of the business that sold the goods, usually printed at the top of the receipt. Never a bank, card network, payment gateway or processor: an acquiring bank on a card charge slip is not the seller. If that is the most prominent name, the seller is named elsewhere; use that.',
     // Precise's own wording, kept verbatim where it still applies. It is the one

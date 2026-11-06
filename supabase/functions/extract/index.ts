@@ -70,6 +70,7 @@ type ExtractTiming = {
   image_bytes?: number;
   base64_ms?: number;
   duplicate_check_ms?: number;
+  duplicate_loose_ms?: number;
   duplicate_hydrate_ms?: number;
   duplicate_cleanup_ms?: number;
   duplicate_shadow_ms?: number;
@@ -1269,6 +1270,18 @@ async function handleExtract(req: Request, charge: ChargeGuard) {
     });
   }
 
+  // Returned alongside a saved receipt when the match is good enough to warn
+  // about but not good enough to discard the capture over.
+  let duplicateCandidate: {
+    matched_receipt_id: string;
+    match_rule: string;
+    match_strength: 'weak' | 'strong';
+    merchant: string | null;
+    txn_date: string | null;
+    currency: string | null;
+    total: number | null;
+  } | null = null;
+
   if (extraction.is_receipt && !duplicateOverride) {
     const total = Math.round(extraction.total * 100) / 100;
     const duplicateStartedAt = performance.now();
@@ -1331,6 +1344,41 @@ async function handleExtract(req: Request, charge: ChargeGuard) {
           is_receipt: true,
         },
       });
+    }
+
+    // The exact-date query above is the only thing that ever matched, so any
+    // wobble in the extracted date -- or no printed date at all -- made two
+    // scans of one receipt look unrelated and warned about nothing. Same
+    // merchant, currency and total on a different day is not enough to throw
+    // the capture away, but it is exactly what the app's 'Possible duplicate'
+    // prompt exists to ask about, so return it as a weak candidate.
+    if (merchantKey) {
+      const looseStartedAt = performance.now();
+      const { data: loose } = await admin
+        .from('receipts')
+        .select('id, merchant, txn_date, currency, total')
+        .eq('user_id', userId)
+        .neq('capture_id', captureId)
+        .is('deleted_at', null)
+        .in('status', ['needs_review', 'confirmed'])
+        .eq('currency', extraction.currency)
+        .gte('total', total - 0.01)
+        .lte('total', total + 0.01)
+        .order('created_at', { ascending: false })
+        .limit(20);
+      timing.duplicate_loose_ms = Math.round(performance.now() - looseStartedAt);
+      const near = (loose ?? []).find((row) => normalizeMerchantKey(row.merchant) === merchantKey);
+      if (near) {
+        duplicateCandidate = {
+          matched_receipt_id: near.id,
+          match_rule: 'merchant_currency_total',
+          match_strength: 'weak',
+          merchant: near.merchant ?? null,
+          txn_date: near.txn_date ?? null,
+          currency: near.currency ?? null,
+          total: Number(near.total) || total,
+        };
+      }
     }
   }
 
@@ -1414,6 +1462,7 @@ async function handleExtract(req: Request, charge: ChargeGuard) {
     // Refreshes the client's cached balance off a call it already made. The
     // verdict predates this scan's debit, so account for it here.
     scans_remaining: quota.remaining == null ? null : Math.max(0, quota.remaining - 1),
+    duplicate_candidate: duplicateCandidate,
     timing,
     result: extraction,
   });
