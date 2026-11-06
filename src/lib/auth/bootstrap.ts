@@ -77,9 +77,23 @@ export function getBootstrapLocale(): BootstrapLocale {
   // currency mid-trip — a worse bug than the one it would fix.
   const country = locale?.regionCode?.toUpperCase() || countryForTimeZone(readTimeZone());
 
+  // The region we resolved decides the currency, and `locale.currencyCode` only
+  // fills the gap when there is no region at all. The other order shipped first
+  // and produced the pair the onboarding screen showed: region Canada, currency
+  // USD. The two fields do not come from one place. `regionCode` is the user's
+  // Region setting -- on iOS `Locale.current.region`, on Android the MIUI region
+  // property ahead of the locale's country -- while `currencyCode` is read off
+  // the *language* locale (`Currency.getInstance(locale)` on Android). Phone set
+  // to English (United States) in Canada, and they disagree.
+  //
+  // Whichever one is "right" in the abstract, they cannot be allowed to
+  // disagree here: the screen presents the country as the thing that explains
+  // the currency, so a contradiction reads as a broken app rather than a guess
+  // worth correcting. Deriving one from the other makes the pair consistent by
+  // construction, and the country is the half the user can see and verify.
   const currency =
-    knownCurrencyOrNull(locale?.currencyCode) ??
     knownCurrencyOrNull(currencyForCountry(country)) ??
+    knownCurrencyOrNull(locale?.currencyCode) ??
     FALLBACK_CURRENCY;
 
   return {
