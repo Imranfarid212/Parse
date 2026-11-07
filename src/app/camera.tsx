@@ -127,18 +127,23 @@ const toCaptureMode = (mode: Mode): CaptureMode => (mode === 'oneclick' ? 'one_c
 /**
  * Live document tracking: the yellow outline AND the lens nudging behind it.
  *
- * Off on request -- the outline read as an autofocus box that was not focusing
- * properly, which it half was: the effect below polls the tracked box and calls
- * focusTo() on its centre, so a jittery box drags the lens with it. Hiding the
- * drawing alone would have left that steering focus invisibly, which is worse
- * than the complaint. One flag takes the whole feature out: no frame processor
- * on the Camera, no outline, no lens nudging, and the static guide stops
- * yielding to a box that can no longer appear.
+ * Back on at the user's request, both halves together. It was switched off in
+ * c741d6a because the outline was reported as an autofocus box that would not
+ * focus properly -- half right, in that the effect below polls the tracked box
+ * and calls focusTo() on its centre, so a jittery or badly placed box really
+ * does drag the lens with it. The user has asked for the detector back knowing
+ * that, so the steering comes with it rather than being quietly left out.
  *
- * Tap-to-focus is untouched and is now the only thing that aims the lens by
- * hand; everything else is the sensor's own continuous AF.
+ * One flag still gates all four parts: the frame processor on the Camera, the
+ * outline, the lens nudging, and the static guide yielding to the box so two
+ * rectangles are never on screen at once.
+ *
+ * If "it will not focus" comes back, this is the first thing to suspect, and
+ * the fix is the steering effect below -- not the drawing. Hiding the outline
+ * alone is the one combination to avoid: it leaves the lens being aimed with
+ * nothing on screen to explain why.
  */
-const DOCUMENT_TRACKING = false;
+const DOCUMENT_TRACKING = true;
 
 /** Minimum clearance between the framing guide's bottom edge and the shutter. */
 const GUIDE_CONTROLS_GAP = spacing.md;
@@ -1154,6 +1159,14 @@ export default function CameraScreen() {
               ref={cameraRef}
               style={StyleSheet.absoluteFill}
               device={device}
+              // Without this, VisionCamera never assigns `outputOrientation` to
+              // any output, so every Frame arrives as `.up` -- "already in the
+              // desired orientation", where the desired one is the sensor's own
+              // landscape. The tracker then got 2592x1944 for a portrait frame
+              // and the aspect-fill stretched its quad to ~557pt across a 393pt
+              // screen, pushing both side edges off screen. `interface` follows
+              // the UI's orientation, which is what the preview shows.
+              orientationSource="interface"
               outputs={DOCUMENT_TRACKING && tracking.output ? [photoOutput, tracking.output] : [photoOutput]}
               // 30fps is plenty for framing a receipt; 60 just doubles the
               // detection/preview work for no scanning benefit.

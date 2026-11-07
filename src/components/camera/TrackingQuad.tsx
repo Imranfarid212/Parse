@@ -208,6 +208,23 @@ export function useDocumentTracking(): DocumentTracking {
     // (below) and pausing the whole session when idle, not from starving the
     // detector of pixels. The captured PHOTO is a separate full-res output.
     targetResolution: { width: 1280, height: 720 },
+    /**
+     * Frames sized to the PREVIEW, not the session's negotiated full res.
+     *
+     * Two things turned on this. The overlay is mapped from frame space into
+     * the preview's view space, so the two have to cover the same field of
+     * view; they did not. With full-res 4:3 buffers the detector reported a
+     * page 0.41 of the frame wide where the preview showed it occupying 0.44,
+     * a systematic ~8% horizontal shortfall (height was exact, which is what
+     * singled out the field of view rather than the detector). Preview-sized
+     * buffers remove the discrepancy at the source instead of correcting for
+     * it with a fudge factor.
+     *
+     * It is also the resolution saving targetResolution was supposed to buy
+     * and did not: the HUD measured 2592x1944 frames against a requested
+     * 1280x720, so every detection was chewing ~5MP.
+     */
+    enablePreviewSizedOutputBuffers: true,
     pixelFormat: 'yuv',
     dropFramesWhileBusy: true,
     onFrame: (frame: Frame) => {
