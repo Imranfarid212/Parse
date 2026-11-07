@@ -466,7 +466,14 @@ async function runCapture(
       draft: ReceiptFields,
     ) => Promise<LocalDuplicateDecision>;
     onPreflightWarning?: (warning: PreflightWarning) => Promise<PreflightDecision>;
-    onPrecisePreflightAccepted?: () => void;
+    onPrecisePreflightAccepted?: (captureId: string) => void;
+    /**
+     * The local row is on disk — the receipt cannot be lost from here, whatever
+     * the network does next. The capture id ties this to the notice above, so a
+     * caller can hold a "saved" cue until both have happened without guessing
+     * which of several concurrent captures it belongs to.
+     */
+    onCapturePersisted?: (captureId: string) => void;
   },
 ): Promise<CaptureOutcome> {
   const signal = options?.signal;
@@ -629,7 +636,7 @@ async function runCapture(
       const decision = await options?.onPreflightWarning?.(warning);
       if (decision !== 'continue') return { kind: 'preflight_rejected' };
     }
-    options?.onPrecisePreflightAccepted?.();
+    options?.onPrecisePreflightAccepted?.(captureId);
   }
 
   // The row exists before the network is touched, so a crash/kill mid-request
@@ -646,6 +653,9 @@ async function runCapture(
   if (duplicateOfLocalRowId) {
     await store.setDuplicateRelation(row.id, duplicateOfLocalRowId, duplicateMatchStrength);
   }
+  // Announced only once the write has returned: a throw above gets the error
+  // path, not a "saved" cue over a receipt that never landed.
+  options?.onCapturePersisted?.(row.id);
 
   /**
    * Duplicate detection for every mode, not just Balanced.
