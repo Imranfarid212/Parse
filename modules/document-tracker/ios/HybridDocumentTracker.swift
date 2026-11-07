@@ -46,6 +46,14 @@ final class HybridDocumentTracker: HybridDocumentTrackerSpec {
     // normalised in the UPRIGHT image space (bottom-left origin). Report the
     // upright pixel size for the JS-side aspect-fill mapping: a 90° rotation
     // swaps the buffer's width and height.
+    //
+    // This swap is correct but only fires when the frame actually reports a
+    // rotation. It never did: VisionCamera only sets `outputOrientation` on an
+    // output when the Camera is given an `orientationSource`, and ours had
+    // none -- so every frame arrived as `.up` ("already in the desired
+    // orientation", the desired one being the sensor's own landscape), the
+    // swap was skipped, and JS received 2592x1944 for a portrait frame. The
+    // fix is the `orientationSource` prop on <Camera>, not this arithmetic.
     let rotated = frame.orientation == .left || frame.orientation == .right
     let uprightWidth = rotated ? frame.height : frame.width
     let uprightHeight = rotated ? frame.width : frame.height
