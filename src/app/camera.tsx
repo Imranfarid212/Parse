@@ -422,15 +422,72 @@ export default function CameraScreen() {
   }, [digest]);
 
   /**
+   * The folder pop, as Precise's "it is saved" cue.
+   *
+   * Balanced pops the folder at the moment it can prove the receipt is home —
+   * the swipe in Default, the `extracted` outcome in One-click. Precise has
+   * neither: it says it will finish in the background and hands the camera
+   * straight back, so the user was left with a dialog and a folder that never
+   * moved, which reads as "maybe it took it".
+   *
+   * Two things have to be true before the pop, and they land in either order:
+   *   - the local row is on disk (`onCapturePersisted`), so the cue is not a
+   *     promise — from there the receipt survives the network, the queue and a
+   *     kill. A throw before the write takes the error path and never arrives
+   *     here, so a lost receipt gets no animation.
+   *   - the notice has been dismissed, because the pop happens behind a native
+   *     modal otherwise and the user watches a dimmed screen instead of their
+   *     receipt being filed.
+   *
+   * Keyed by capture id: One-click captures run concurrently, so a shared flag
+   * would let one shot's dialog pop the folder for another shot's write.
+   */
+  const saveCueGates = useRef(new Map<string, { dismissed: boolean; persisted: boolean; at: number }>());
+
+  const notePreciseSaveCue = useCallback(
+    (captureId: string, half: 'dismissed' | 'persisted') => {
+      const gates = saveCueGates.current;
+      const gate = gates.get(captureId) ?? { dismissed: false, persisted: false, at: Date.now() };
+      gate[half] = true;
+      if (gate.dismissed && gate.persisted) {
+        gates.delete(captureId);
+        // Default has the folder parked off-screen, so the pop there would be a
+        // haptic with nothing attached to it.
+        if (mode === 'oneclick') popFolder();
+        return;
+      }
+      gates.set(captureId, gate);
+      // A capture that fails before its other half arrives leaves its gate
+      // behind; nothing will ever complete it, so sweep the stale ones.
+      const cutoff = Date.now() - 120_000;
+      gates.forEach((g, id) => {
+        if (g.at < cutoff) gates.delete(id);
+      });
+    },
+    [mode, popFolder],
+  );
+
+  /**
    * Precise, post-preflight: say what is about to happen, once, and hand the
    * camera back. No spinner — there is nothing for the user to watch, and a
    * spinner over a live camera only invites them to wait for something that was
    * never going to arrive on screen.
    */
-  const showPreciseUpFrontNotice = useCallback(() => {
-    setPhase({ k: 'idle' });
-    Alert.alert(PRECISE_UPFRONT_TITLE, PRECISE_UPFRONT_BODY, [{ text: 'OK' }]);
-  }, []);
+  const showPreciseUpFrontNotice = useCallback(
+    (captureId: string) => {
+      setPhase({ k: 'idle' });
+      // Dismissal is half the pop's gate — see notePreciseSaveCue. onPress
+      // covers the button; onDismiss covers an Android back-press or an outside
+      // tap, which close the dialog without pressing anything.
+      Alert.alert(
+        PRECISE_UPFRONT_TITLE,
+        PRECISE_UPFRONT_BODY,
+        [{ text: 'OK', onPress: () => notePreciseSaveCue(captureId, 'dismissed') }],
+        { cancelable: true, onDismiss: () => notePreciseSaveCue(captureId, 'dismissed') },
+      );
+    },
+    [notePreciseSaveCue],
+  );
 
   const defaultCurrency = auth.profile?.default_currency ?? auth.bootstrapLocale.defaultCurrency;
 
@@ -777,6 +834,9 @@ export default function CameraScreen() {
         onLocalDuplicateCandidate: (candidate, draft) => promptLocalDuplicateCandidate(candidate, draft, uri, startedAt),
         onPreflightWarning: promptPreflightWarning,
         onPrecisePreflightAccepted: showPreciseUpFrontNotice,
+        // Only Precise ever opens a save-cue gate (the notice is its other
+        // half), so Balanced One-click still pops once, on `extracted`.
+        onCapturePersisted: (captureId) => notePreciseSaveCue(captureId, 'persisted'),
       });
       if (out.kind === 'queued' && out.offline) {
         setPhase({ k: 'idle' });
@@ -791,6 +851,7 @@ export default function CameraScreen() {
       extractionMode,
       handleDefaultCaptureOutcome,
       handleOneClickCaptureOutcome,
+      notePreciseSaveCue,
       promptLocalDuplicateCandidate,
       promptPreflightWarning,
       showPreciseUpFrontNotice,
