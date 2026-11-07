@@ -88,24 +88,36 @@ const TRACK_MS = 140;
  * never converges before being retargeted, so the quad faithfully chased every
  * detection's noise — that was the wobble.
  *
- * Smoothing the five FITTED scalars (centre, size, angle) rather than the eight
- * corner coordinates is both cheaper and steadier: the rigid-rect fit below
- * already collapses the trapezoid, so these five fully describe the overlay,
- * and a segmentation mask that breathes at its edges can no longer pulse width
- * and height independently of one another.
+ * This now filters the eight CORNER COORDINATES. It used to filter five fitted
+ * scalars (centre, size, angle) because the overlay was a rigid rotated
+ * rectangle, which is the one thing a page photographed at an angle is not: the
+ * fit threw the perspective away and hung the corners off the paper. Smoothing
+ * each corner toward its counterpart is the same first-order filter applied
+ * eight times; because every corner uses the same alpha, the quad interpolates
+ * affinely between two detected quads and so cannot shear or wobble in a way
+ * the detections themselves did not.
  */
 const EMA_ALPHA = 0.3;
 /**
  * Dead-band, measured against what was last DRAWN rather than the last
  * smoothed value — otherwise suppressed movement accumulates invisibly and
- * then catches up in one jump. Below these the quad is not redrawn at all,
+ * then catches up in one jump. Below this the quad is not redrawn at all,
  * which is what makes a steady hand read as locked rather than merely slow.
+ *
+ * One corner threshold replaces the old centre/size/angle trio: the largest
+ * per-corner displacement is what any of translation, scale, rotation or
+ * perspective change ends up producing, so it subsumes all three. Sized to sit
+ * between the centre (0.004 of view width) and the ~0.5 degree angle band the
+ * fitted version used, both of which came out at roughly 1-2px in practice.
  */
-const DEADBAND_CENTER = 0.004; // fraction of view width
-const DEADBAND_SIZE = 0.01; // fraction of view width
-const DEADBAND_ANG = 0.0087; // ~0.5 degrees
-/** A near-straight card stays perfectly upright. ~5.2 degrees. */
-const ANG_DEADZONE = 0.09;
+const DEADBAND_CORNER = 0.005; // fraction of view width
+/**
+ * How much better a relabelling of the four corners has to be before the
+ * smoother accepts it (sum of squared corner distances, as a fraction of the
+ * identity's). Low enough that a genuine quarter turn still re-pairs the
+ * corners, far too low for noise on a near-square quad to do it.
+ */
+const RELABEL_MARGIN = 0.5;
 /**
  * Continuity gate. Vision returns SOME rectangle every frame — often the wrong
  * one (screen, keyboard) as the receipt wavers. A detection whose centre jumps
@@ -184,13 +196,17 @@ export function useDocumentTracking(): DocumentTracking {
   const dbgNh = useSharedValue(0);
   // Timestamp of the last frame we actually ran detection on (seconds).
   const lastDetectTs = useSharedValue(0);
-  // Lock state carried between detections: the locked centre, the consecutive
-  // outlier count, and whether we currently hold a lock.
-  // Lock state carried between detections. cx/cy/w/h/ang are the SMOOTHED fit;
-  // the d* pair is what was last drawn, which the dead-band compares against.
-  const track = useSharedValue({
-    cx: 0, cy: 0, w: 0, h: 0, ang: 0,
-    dcx: 0, dcy: 0, dw: 0, dh: 0, dang: 0,
+  // Lock state carried between detections. sx/sy are the SMOOTHED corners in
+  // view space (TL,TR,BR,BL); dx/dy are what was last DRAWN, which the
+  // dead-band compares against. Plus the consecutive-outlier count and whether
+  // we currently hold a lock.
+  const track = useSharedValue<{
+    sx: number[]; sy: number[];
+    dx: number[]; dy: number[];
+    rejects: number; active: boolean;
+  }>({
+    sx: [0, 0, 0, 0], sy: [0, 0, 0, 0],
+    dx: [0, 0, 0, 0], dy: [0, 0, 0, 0],
     rejects: 0, active: false,
   });
   // Where re-acquisition is allowed to look (normalised view coords). Centre by
@@ -326,77 +342,94 @@ export function useDocumentTracking(): DocumentTracking {
         // Tracking: a detection whose centre jumped too far is a mis-lock —
         // ignore it OUTRIGHT, never blend, unless it has insisted REJECT_MAX
         // frames, at which point re-lock to it.
-        const jump = Math.hypot(cx - st.cx, cy - st.cy);
+        const lcx = (st.sx[0] + st.sx[1] + st.sx[2] + st.sx[3]) / 4;
+        const lcy = (st.sy[0] + st.sy[1] + st.sy[2] + st.sy[3]) / 4;
+        const jump = Math.hypot(cx - lcx, cy - lcy);
         if (jump > L.w * REJECT_FRAC && st.rejects < REJECT_MAX) {
           track.value = { ...st, rejects: st.rejects + 1 };
           return;
         }
       }
-      // Fit a RIGID rotated rectangle to the detected corners. Average the two
-      // horizontal edges (TL→TR, BL→BR) into one direction + width, the two
-      // vertical edges into one height. The perspective trapezoid collapses to
-      // a true rectangle, so the overlay only translates, rotates and scales —
-      // never skews, so it never reads as a 3D tilt.
-      const topx = vx[1] - vx[0], topy = vy[1] - vy[0];
-      const botx = vx[2] - vx[3], boty = vy[2] - vy[3];
-      const rawAng = Math.atan2(topy + boty, topx + botx);
-      const rawW = (Math.hypot(topx, topy) + Math.hypot(botx, boty)) / 2;
-      const rawH =
-        (Math.hypot(vx[3] - vx[0], vy[3] - vy[0]) + Math.hypot(vx[2] - vx[1], vy[2] - vy[1])) / 2;
-
-      // Low-pass the fit. The first lock takes the raw values outright so the
-      // quad snaps on rather than easing in from wherever it last sat.
+      // Draw the detected quad as it is — the perspective trapezoid included.
+      // There is no rigid-rectangle fit anymore: averaging the opposite edges
+      // into one width, height and angle kept the overlay from ever skewing,
+      // but a receipt on a table photographed from above IS a trapezoid on
+      // screen, so the fitted rectangle's corners sat off the paper and read as
+      // a failed detection even at 0.93 confidence.
       const first = !st.active;
-      let sAng = rawAng;
+
+      // Corner correspondence before smoothing. Vision labels TL,TR,BR,BL
+      // consistently, but a page turning through a quarter turn (or a single
+      // detection that labels it differently) would otherwise pair each
+      // smoothed corner with a target on a different physical corner, and the
+      // EMA would drag the quad through a shear to get there. Pick the cyclic
+      // rotation of the incoming corners closest to the locked ones; cyclic
+      // only, so the winding — and therefore the quad's handedness — is kept.
+      //
+      // Relabelling needs to win by a clear margin (RELABEL_MARGIN), not just
+      // by a hair: on a page that happens to look near-square the four
+      // rotations score almost alike, and picking the nominal best each time
+      // would let a pixel of noise rotate the labels back and forth every
+      // detection. The identity stays the default.
+      let rot = 0;
       if (!first) {
-        // Shortest-arc difference: a page held near half a turn must not smooth
-        // the long way round.
-        let d = rawAng - st.ang;
-        while (d > Math.PI) d -= 2 * Math.PI;
-        while (d < -Math.PI) d += 2 * Math.PI;
-        sAng = st.ang + EMA_ALPHA * d;
+        const score = [0, 0, 0, 0];
+        for (let r = 0; r < 4; r++) {
+          let d2 = 0;
+          for (let i = 0; i < 4; i++) {
+            const j = (i + r) % 4;
+            d2 += (vx[j] - st.sx[i]) ** 2 + (vy[j] - st.sy[i]) ** 2;
+          }
+          score[r] = d2;
+        }
+        let best = score[0];
+        for (let r = 1; r < 4; r++) {
+          if (score[r] < best && score[r] < score[0] * RELABEL_MARGIN) {
+            best = score[r];
+            rot = r;
+          }
+        }
       }
-      const sCx = first ? cx : st.cx + EMA_ALPHA * (cx - st.cx);
-      const sCy = first ? cy : st.cy + EMA_ALPHA * (cy - st.cy);
-      const sW = first ? rawW : st.w + EMA_ALPHA * (rawW - st.w);
-      const sH = first ? rawH : st.h + EMA_ALPHA * (rawH - st.h);
 
-      // The deadzone applies to the SMOOTHED angle, not the raw one. On a raw
-      // value hovering at the threshold it would otherwise flip between 0 and
-      // ~5 degrees every detection, and the filter would average that flicker
-      // into a permanent phantom tilt.
-      const angD = Math.abs(sAng) < ANG_DEADZONE ? 0 : sAng;
+      // Low-pass each corner toward its target. The first lock takes the raw
+      // corners outright so the quad snaps on rather than easing in from
+      // wherever it last sat.
+      const sx = [0, 0, 0, 0];
+      const sy = [0, 0, 0, 0];
+      for (let i = 0; i < 4; i++) {
+        const j = (i + rot) % 4;
+        sx[i] = first ? vx[j] : st.sx[i] + EMA_ALPHA * (vx[j] - st.sx[i]);
+        sy[i] = first ? vy[j] : st.sy[i] + EMA_ALPHA * (vy[j] - st.sy[i]);
+      }
 
-      const still =
-        !first &&
-        Math.hypot(sCx - st.dcx, sCy - st.dcy) < L.w * DEADBAND_CENTER &&
-        Math.abs(sW - st.dw) < L.w * DEADBAND_SIZE &&
-        Math.abs(sH - st.dh) < L.w * DEADBAND_SIZE &&
-        Math.abs(angD - st.dang) < DEADBAND_ANG;
+      // Still if NO corner has moved far enough from where it was drawn.
+      let moved = 0;
+      for (let i = 0; i < 4; i++) {
+        const d = Math.hypot(sx[i] - st.dx[i], sy[i] - st.dy[i]);
+        if (d > moved) moved = d;
+      }
+      const still = !first && moved < L.w * DEADBAND_CORNER;
 
       track.value = {
-        cx: sCx, cy: sCy, w: sW, h: sH, ang: sAng,
-        dcx: still ? st.dcx : sCx,
-        dcy: still ? st.dcy : sCy,
-        dw: still ? st.dw : sW,
-        dh: still ? st.dh : sH,
-        dang: still ? st.dang : angD,
+        sx, sy,
+        dx: still ? st.dx : sx,
+        dy: still ? st.dy : sy,
         rejects: 0,
         active: true,
       };
-      center.value = { x: sCx, y: sCy };
+      // Centroid of the smoothed quad — what the lens-steering effect reads.
+      center.value = {
+        x: (sx[0] + sx[1] + sx[2] + sx[3]) / 4,
+        y: (sy[0] + sy[1] + sy[2] + sy[3]) / 4,
+      };
 
       if (!still) {
-        const hw = sW / 2, hh = sH / 2;
-        const c = Math.cos(angD), s = Math.sin(angD);
-        const rx = [-hw, hw, hw, -hw]; // TL,TR,BR,BL in the rect's own frame
-        const ry = [-hh, -hh, hh, hh];
         // The tween now only carries the quad between already-filtered targets;
         // first lock snaps into place.
         const cfg = { duration: first ? 0 : TRACK_MS };
         for (let i = 0; i < 4; i++) {
-          corners[i * 2].value = withTiming(sCx + rx[i] * c - ry[i] * s, cfg);
-          corners[i * 2 + 1].value = withTiming(sCy + rx[i] * s + ry[i] * c, cfg);
+          corners[i * 2].value = withTiming(sx[i], cfg);
+          corners[i * 2 + 1].value = withTiming(sy[i], cfg);
         }
       }
 
