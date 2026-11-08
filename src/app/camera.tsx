@@ -39,6 +39,7 @@ import {
   COPY_PROVIDER_DELAY,
 } from '@/../packages/contracts/src/copy';
 import { markReferralPromptSeen, shouldShowReferralPrompt } from '@/lib/auth/referralPrompt';
+import { isPreciseNoticeSuppressed, loadPreciseNoticeSuppressed, suppressPreciseNotice } from '@/lib/receipts/preciseNotice';
 import {
   confirm,
   flushCaptureMetrics,
@@ -92,6 +93,14 @@ const isProviderDelayOutcome = (out: CaptureOutcome) => out.kind === 'queued' &&
 const PRECISE_UPFRONT_TITLE = 'This one takes a little longer';
 const PRECISE_UPFRONT_BODY =
   "Precise reads the whole receipt, so it runs in the background. You can keep scanning — it will appear in Recents when it's ready.";
+/**
+ * The opt-out, for someone scanning a stack who has read this once.
+ *
+ * Shorter than "Don't show this message again" because both platforms lay two
+ * alert buttons out side by side, and the longer string wraps to two lines on a
+ * narrow Android dialog.
+ */
+const PRECISE_UPFRONT_SUPPRESS = "Don't show again";
 
 /**
  * Post-shutter phases.
@@ -267,6 +276,14 @@ export default function CameraScreen() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => setAppActive(s === 'active'));
     return () => sub.remove();
+  }, []);
+  /**
+   * Warm the Precise notice preference into memory so the shutter path can read
+   * it synchronously. Nothing renders off it, so there is no state to set: a
+   * capture that beats this read simply shows the notice once more.
+   */
+  useEffect(() => {
+    void loadPreciseNoticeSuppressed();
   }, []);
   /**
    * Set the moment a review swipe is confirmed, so the sensor comes back while
@@ -481,13 +498,33 @@ export default function CameraScreen() {
   const showPreciseUpFrontNotice = useCallback(
     (captureId: string) => {
       setPhase({ k: 'idle' });
+      // Opted out: the dialog's dismissal is half the pop's gate, so with no
+      // dialog there is no press coming and the folder would never pop. Close
+      // that half here, or choosing "don't show again" would quietly cost the
+      // save cue as well — leaving the user with neither the explanation nor
+      // the animation that replaced it.
+      if (isPreciseNoticeSuppressed()) {
+        notePreciseSaveCue(captureId, 'dismissed');
+        return;
+      }
       // Dismissal is half the pop's gate — see notePreciseSaveCue. onPress
       // covers the button; onDismiss covers an Android back-press or an outside
       // tap, which close the dialog without pressing anything.
       Alert.alert(
         PRECISE_UPFRONT_TITLE,
         PRECISE_UPFRONT_BODY,
-        [{ text: 'OK', onPress: () => notePreciseSaveCue(captureId, 'dismissed') }],
+        [
+          {
+            // Both halves still run: the choice is persisted, and this press is
+            // a dismissal like any other.
+            text: PRECISE_UPFRONT_SUPPRESS,
+            onPress: () => {
+              void suppressPreciseNotice();
+              notePreciseSaveCue(captureId, 'dismissed');
+            },
+          },
+          { text: 'OK', onPress: () => notePreciseSaveCue(captureId, 'dismissed') },
+        ],
         { cancelable: true, onDismiss: () => notePreciseSaveCue(captureId, 'dismissed') },
       );
     },
